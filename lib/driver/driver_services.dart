@@ -143,7 +143,7 @@ class DriverService {
     // 🔔 Trigger notification
     try {
       final response = await http.post(
-        Uri.parse('https://your-server-url/sendStatusNotification'),
+        Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'rideId': rideId, 'status': newStatus}),
       );
@@ -583,6 +583,8 @@ class DriverDashboardController
     extends StateNotifier<AsyncValue<DocumentSnapshot?>> {
   final Ref ref;
   final _service = DriverService();
+  final _auth = FirebaseAuth.instance;
+  final _rtdb = FirebaseDatabase.instance.ref();
 
   DriverDashboardController(this.ref) : super(const AsyncLoading()) {
     _loadRide();
@@ -595,10 +597,23 @@ class DriverDashboardController
   }
 
   Future<void> acceptRide(String rideId) async {
+    final user = _auth.currentUser;
+    if (user == null) throw FirebaseAuthException(code: 'no-user');
+
+    await _rtdb.child('rides_pending/$rideId').remove();
+
     try {
-      await _service.acceptRide(rideId);
-    } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      final response = await http.post(
+        Uri.parse('https://fem-drive.vercel.app/api/accept/driver'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'rideId': rideId, 'driverUid': user.uid}),
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint('[ACCEPT] Backend error: ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('[ACCEPT] Exception: $e');
     }
   }
 
