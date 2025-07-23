@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,14 +12,13 @@ class PhoneNumberFormatter extends TextInputFormatter {
     TextEditingValue newValue,
   ) {
     final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
-
     String formatted = '';
     if (digitsOnly.length <= 4) {
       formatted = digitsOnly;
     } else {
       formatted = digitsOnly.substring(0, 4);
       if (digitsOnly.length > 4) {
-        formatted += '-${digitsOnly.substring(4, digitsOnly.length)}';
+        formatted += '-${digitsOnly.substring(4)}';
       }
     }
 
@@ -52,13 +50,13 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   @override
   void initState() {
     super.initState();
-    listenForCode(); // start SMS autofill listener
+    listenForCode();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    cancel(); // stop SMS autofill listener
+    cancel();
     super.dispose();
   }
 
@@ -74,11 +72,11 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     countdown = 60;
     canResend = false;
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       setState(() {
         countdown--;
         if (countdown <= 0) {
-          t.cancel();
+          timer.cancel();
           canResend = true;
         }
       });
@@ -87,33 +85,42 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
+
     final phone = phoneController.text.replaceAll('-', '');
     setState(() {
       loading = true;
       otpSent = false;
     });
 
-    await FirebaseAuth.instance.verifyPhoneNumber(
-      phoneNumber: '+92$phone',
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (cred) async {
-        await FirebaseAuth.instance.signInWithCredential(cred);
-        await _handlePostLogin();
-      },
-      verificationFailed: (e) {
-        _showError('Verification failed: ${e.message}');
-      },
-      codeSent: (id, _) {
-        setState(() {
+    try {
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: '+92$phone',
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (PhoneAuthCredential cred) async {
+          await FirebaseAuth.instance.signInWithCredential(cred);
+          await _handlePostLogin();
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          String errorMsg = 'Verification failed: ${e.message}';
+          if (e.code == 'invalid-phone-number') {
+            errorMsg = 'Invalid phone number format.';
+          }
+          _showError(errorMsg);
+        },
+        codeSent: (String id, int? token) {
+          setState(() {
+            verificationId = id;
+            otpSent = true;
+          });
+          startTimer();
+        },
+        codeAutoRetrievalTimeout: (String id) {
           verificationId = id;
-          otpSent = true;
-        });
-        startTimer();
-      },
-      codeAutoRetrievalTimeout: (id) {
-        verificationId = id;
-      },
-    );
+        },
+      );
+    } catch (e) {
+      _showError("OTP sending failed: $e");
+    }
 
     setState(() => loading = false);
   }
@@ -121,18 +128,19 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   Future<void> verifyOtp() async {
     final code = otpController.text.trim();
     if (verificationId == null || code.length < 6) {
-      return _showError("Enter valid OTP");
+      return _showError("Enter a valid 6-digit OTP.");
     }
+
     setState(() => loading = true);
     try {
-      final cred = PhoneAuthProvider.credential(
+      final credential = PhoneAuthProvider.credential(
         verificationId: verificationId!,
         smsCode: code,
       );
-      await FirebaseAuth.instance.signInWithCredential(cred);
+      await FirebaseAuth.instance.signInWithCredential(credential);
       await _handlePostLogin();
-    } catch (e) {
-      _showError("Login failed: $e");
+    } on FirebaseAuthException catch (e) {
+      _showError("Login failed: ${e.message}");
     } finally {
       setState(() => loading = false);
     }
@@ -140,32 +148,36 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   Future<void> _handlePostLogin() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return _showError("User not found");
+    if (user == null) return _showError("User not found.");
 
     final doc = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .get();
     final data = doc.data();
-    if (data == null) return _showError("Profile missing");
+    if (data == null) return _showError("User profile not found.");
 
     final isVerified = data['verified'] == true;
     final role = data['role'];
 
     if (role == 'driver' && !isVerified) {
       await FirebaseAuth.instance.signOut();
-      return _showError("Pending admin approval.");
+      return _showError("Your account is pending admin approval.");
     }
 
     String route = '/dashboard';
-    if (role == 'admin') {
-      route = '/admin';
-    } else if (role == 'driver') {
-      route = '/driver-dashboard';
-    } else if (role == 'rider') {
-      route = '/rider-dashboard';
-    } else {
-      return _showError("Invalid role: $role");
+    switch (role) {
+      case 'admin':
+        route = '/admin';
+        break;
+      case 'driver':
+        route = '/driver-dashboard';
+        break;
+      case 'rider':
+        route = '/rider-dashboard';
+        break;
+      default:
+        return _showError("Invalid role: $role");
     }
 
     if (!mounted) return;
@@ -174,12 +186,9 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   void _showError(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg), // fixed: show actual msg
-        backgroundColor: Theme.of(context).colorScheme.primary,
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
   @override
@@ -199,9 +208,11 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                 ),
                 keyboardType: TextInputType.phone,
                 inputFormatters: [PhoneNumberFormatter()],
-                validator: (v) {
+                validator: (value) {
                   final pattern = RegExp(r'^03\d{2}-\d{7}$');
-                  if (v == null || !pattern.hasMatch(v)) return 'Invalid phone';
+                  if (value == null || !pattern.hasMatch(value)) {
+                    return 'Enter a valid phone number.';
+                  }
                   return null;
                 },
                 enabled: !otpSent,
@@ -215,19 +226,18 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                     strokeColorBuilder: FixedColorBuilder(Color(0xFFC9A0DC)),
                     bgColorBuilder: FixedColorBuilder(Colors.white),
                   ),
-                  currentCode: '',
                   codeLength: 6,
                 ),
               ],
               const SizedBox(height: 20),
-              if (loading) ...[
-                const Center(child: CircularProgressIndicator()),
-              ] else if (!otpSent) ...[
+              if (loading)
+                const Center(child: CircularProgressIndicator())
+              else if (!otpSent)
                 ElevatedButton(
                   onPressed: sendOtp,
                   child: const Text('Send OTP'),
-                ),
-              ] else ...[
+                )
+              else ...[
                 ElevatedButton(
                   onPressed: verifyOtp,
                   child: const Text('Verify OTP'),

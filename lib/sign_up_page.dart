@@ -114,20 +114,30 @@ class _SignUpPageState extends State<SignUpPage> {
 
     final formatted = '+92${digitsOnly.substring(1)}';
 
-    await FirebaseAuth.instance.verifyPhoneNumber(
-      phoneNumber: formatted,
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (_) {},
-      verificationFailed: (e) => showError('OTP failed: ${e.message}'),
-      codeSent: (id, _) {
-        setState(() {
-          verificationId = id;
-          isOtpSent = true;
-        });
-        startResendTimer();
-      },
-      codeAutoRetrievalTimeout: (id) => verificationId = id,
-    );
+    try {
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: formatted,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (_) {},
+        verificationFailed: (e) {
+          if (e.code == 'captcha-check-failed') {
+            showError('reCAPTCHA verification failed. Please try again.');
+          } else {
+            showError('OTP failed: ${e.message}');
+          }
+        },
+        codeSent: (id, _) {
+          setState(() {
+            verificationId = id;
+            isOtpSent = true;
+          });
+          startResendTimer();
+        },
+        codeAutoRetrievalTimeout: (id) => verificationId = id,
+      );
+    } catch (e) {
+      showError('Unexpected error: $e');
+    }
   }
 
   Future<void> confirmOtp() async {
@@ -186,8 +196,8 @@ class _SignUpPageState extends State<SignUpPage> {
   void showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text("Message"),
-        backgroundColor: Theme.of(context).colorScheme.primary,
+        content: Text(msg),
+        backgroundColor: Theme.of(context).colorScheme.error,
       ),
     );
   }
@@ -296,6 +306,7 @@ class _SignUpPageState extends State<SignUpPage> {
                       ),
                     ),
                   ],
+
                   const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: isSubmitting
