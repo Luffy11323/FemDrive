@@ -1,4 +1,4 @@
-import 'package:femdrive/admin_driver_verification.dart';
+import 'package:femdrive/admin.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/login_page.dart';
 import 'package:femdrive/sign_up_page.dart';
