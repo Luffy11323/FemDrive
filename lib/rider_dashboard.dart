@@ -4,12 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-import 'rider/ride_service.dart';
-import 'rider/ride_form.dart';
-import 'rider/ride_status_card.dart';
-import 'rider/rating_service.dart';
-import 'rider/rating_dialog.dart';
+import 'rider/rider_services.dart';
 import 'location/location_service.dart';
 
 class RiderDashboardPage extends StatefulWidget {
