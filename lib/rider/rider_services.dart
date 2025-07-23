@@ -663,6 +663,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
                       );
 
                       if (mounted) {
+                        // ignore: use_build_context_synchronously
                         Navigator.popUntil(context, (route) => route.isFirst);
                       }
                     },
