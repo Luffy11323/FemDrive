@@ -1,11 +1,16 @@
 import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/material.dart';
+
+// Define a global navigatorKey if not already defined elsewhere
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage msg) async {
   await NotificationService.instance.initialize();
-  NotificationService.instance.showNotification(msg);
+  await NotificationService.instance._show(msg);
+  NotificationService.instance._route(msg.data['screen']);
 }
 
 class NotificationService {
@@ -14,8 +19,9 @@ class NotificationService {
 
   final _fln = FlutterLocalNotificationsPlugin();
 
-  Future initialize() async {
+  Future<void> initialize() async {
     FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundHandler);
+
     if (Platform.isIOS) {
       await FirebaseMessaging.instance.requestPermission();
     }
@@ -24,20 +30,21 @@ class NotificationService {
       '@mipmap/ic_launcher',
     );
     const iosSettings = DarwinInitializationSettings();
+
     await _fln.initialize(
       const InitializationSettings(android: androidSettings, iOS: iosSettings),
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        _handleNavigation(response.payload);
+        _route(response.payload);
       },
     );
 
-    FirebaseMessaging.onMessage.listen((msg) => showNotification(msg));
+    FirebaseMessaging.onMessage.listen((msg) => _show(msg));
     FirebaseMessaging.onMessageOpenedApp.listen(
-      (msg) => _handleNavigation(msg.data['screen']),
+      (msg) => _route(msg.data['screen']),
     );
   }
 
-  Future showNotification(RemoteMessage msg) async {
+  Future<void> _show(RemoteMessage msg) async {
     final notif = msg.notification;
     if (notif == null) return;
 
@@ -50,17 +57,22 @@ class NotificationService {
           'high_imp',
           'High Importance',
           importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
         ),
-        iOS: DarwinNotificationDetails(),
+        iOS: const DarwinNotificationDetails(),
       ),
-      payload: msg.data['screen'],
+      payload: msg.data['screen'], // used for navigation
     );
   }
 
-  void _handleNavigation(String? screen) {
+  void _route(String? screen) {
+    // TODO: Replace with navigatorKey or callback to handle navigation
     if (screen == 'ride_details') {
-      // e.g., navigate to ride details screen
+      navigatorKey.currentState?.pushNamed('/driver-ride-details');
+      print('[NotificationService] Navigate to: ride_details');
     }
+    // Add more routes as needed
   }
 
   Future<String?> getToken() => FirebaseMessaging.instance.getToken();
