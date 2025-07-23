@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
 
@@ -67,10 +68,11 @@ class NotificationService {
   }
 
   void _route(String? screen) {
-    // TODO: Replace with navigatorKey or callback to handle navigation
     if (screen == 'ride_details') {
       navigatorKey.currentState?.pushNamed('/driver-ride-details');
-      print('[NotificationService] Navigate to: ride_details');
+      if (kDebugMode) {
+        print('[NotificationService] Navigate to: ride_details');
+      }
     }
     // Add more routes as needed
   }
