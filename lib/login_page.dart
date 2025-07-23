@@ -1,9 +1,35 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:sms_autofill/sms_autofill.dart';
+
+class PhoneNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
+
+    String formatted = '';
+    if (digitsOnly.length <= 4) {
+      formatted = digitsOnly;
+    } else {
+      formatted = digitsOnly.substring(0, 4);
+      if (digitsOnly.length > 4) {
+        formatted += '-${digitsOnly.substring(4, digitsOnly.length)}';
+      }
+    }
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -150,7 +176,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text("Message"),
+        content: Text(msg), // fixed: show actual msg
         backgroundColor: Theme.of(context).colorScheme.primary,
       ),
     );
@@ -172,6 +198,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                   labelText: 'Phone (e.g. 0300-1234567)',
                 ),
                 keyboardType: TextInputType.phone,
+                inputFormatters: [PhoneNumberFormatter()],
                 validator: (v) {
                   final pattern = RegExp(r'^03\d{2}-\d{7}$');
                   if (v == null || !pattern.hasMatch(v)) return 'Invalid phone';
