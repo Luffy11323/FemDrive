@@ -1,9 +1,14 @@
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/material.dart';
+// ignore: unused_import
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+
 import 'rider/rider_services.dart';
 import 'location/location_service.dart';
 
@@ -21,28 +26,10 @@ class _RiderDashboardPageState extends State<RiderDashboardPage> {
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
 
-  Future<bool> handleLocationPermission() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return false;
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      await Geolocator.openAppSettings();
-      return false;
-    }
-
-    return true;
-  }
-
   Future<void> _callSupport() async {
     final Uri telUri = Uri(scheme: 'tel', path: '03144179082');
     if (await canLaunchUrl(telUri)) {
       await launchUrl(telUri);
-    } else {
-      throw 'Could not launch dialer';
     }
   }
 
@@ -122,7 +109,7 @@ class _RiderDashboardPageState extends State<RiderDashboardPage> {
               },
               markers: _markers,
               initialCameraPosition: const CameraPosition(
-                target: LatLng(30.1575, 71.5249), // Default to Multan or adjust
+                target: LatLng(30.1575, 71.5249),
                 zoom: 14,
               ),
               myLocationEnabled: true,
@@ -134,134 +121,152 @@ class _RiderDashboardPageState extends State<RiderDashboardPage> {
             child: StreamBuilder<DocumentSnapshot?>(
               stream: rs.listenActiveRide(),
               builder: (ctx, snap) {
-                if (snap.connectionState != ConnectionState.active) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      'Error: ${snap.error}',
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  );
-                }
-
-                final rideDoc = snap.data;
-                if (rideDoc != null) {
-                  final data = rideDoc.data() as Map<String, dynamic>;
-                  final status = data['status'];
-                  final rideId = rideDoc.id;
-                  final driverId = data['driverId'];
-
-                  // Show rating dialog if needed
-                  if (status == 'completed' &&
-                      !_ratingShown &&
-                      driverId != null) {
-                    _ratingShown = true;
-
-                    RatingService().hasAlreadyRated(rideId, rs.userId).then((
-                      exists,
-                    ) {
-                      if (!exists && mounted) {
-                        showDialog(
-                          // ignore: use_build_context_synchronously
-                          context: context,
-                          builder: (_) => RatingDialog(
-                            onSubmit: (stars, comment) async {
-                              await RatingService().submitRating(
-                                rideId: rideId,
-                                fromUid: rs.userId,
-                                toUid: driverId,
-                                rating: stars.toDouble(),
-                                comment: comment,
-                              );
-                              if (mounted) {
-                                // ignore: use_build_context_synchronously
-                                Navigator.pop(context); // Close dialog
-                                setState(() {}); // Rebuild to hide rating again
-                              }
-                            },
-                          ),
-                        );
-                      }
-                    });
-                  }
-
-                  // Listen to real-time updates of ride
-                  return StreamBuilder<DocumentSnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('rides')
-                        .doc(rideId)
-                        .snapshots(),
-                    builder: (ctx, rideSnap) {
-                      if (!rideSnap.hasData) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-
-                      final ride = rideSnap.data!;
-                      final data = ride.data() as Map<String, dynamic>;
-
-                      // Start tracking once
-                      if (data['status'] == 'accepted' && !_trackingStarted) {
-                        _trackingStarted = true;
-                        LocationService().startTracking('rider', ride.id);
-                      }
-
-                      // Update map with driver location
-                      final dLat = data['driverLat'];
-                      final dLng = data['driverLng'];
-                      if (dLat != null && dLng != null) {
-                        final driverPosition = LatLng(dLat, dLng);
-                        _mapController?.animateCamera(
-                          CameraUpdate.newLatLng(driverPosition),
-                        );
-                        _addOrUpdateMarker('driver', driverPosition);
-                      }
-
-                      return RideStatusCard(
-                        ride: ride,
-                        onCancel: () async {
+                if (!snap.hasData) {
+                  return RideForm(
+                    onSubmit:
+                        (pickup, dropoff, rate, pickupLL, dropoffLL) async {
                           try {
-                            await rs.cancelRide(ride.id);
+                            final rideRef = await FirebaseFirestore.instance
+                                .collection('rides')
+                                .add({
+                                  'riderId': rs.userId,
+                                  'pickup': pickup,
+                                  'dropoff': dropoff,
+                                  'pickupLat': pickupLL.latitude,
+                                  'pickupLng': pickupLL.longitude,
+                                  'dropoffLat': dropoffLL.latitude,
+                                  'dropoffLng': dropoffLL.longitude,
+                                  'carType': 'luxury',
+                                  'rate': rate,
+                                  'status': 'pending',
+                                  'createdAt': FieldValue.serverTimestamp(),
+                                  'driverId': null,
+                                });
+
+                            final rideId = rideRef.id;
+
+                            // Push to RTDB
+                            await FirebaseDatabase.instance
+                                .ref('rides_pending/$rideId')
+                                .set({
+                                  'pickup': pickup,
+                                  'dropoff': dropoff,
+                                  'pickupLat': pickupLL.latitude,
+                                  'pickupLng': pickupLL.longitude,
+                                  'dropoffLat': dropoffLL.latitude,
+                                  'dropoffLng': dropoffLL.longitude,
+                                  'rate': rate,
+                                  'riderId': rs.userId,
+                                  'createdAt': ServerValue.timestamp,
+                                });
+
+                            // Call backend API to notify drivers
+                            await http.post(
+                              Uri.parse(
+                                'https://fem-drive.vercel.app/api/pair/ride',
+                              ),
+                              headers: {'Content-Type': 'application/json'},
+                              body: jsonEncode({
+                                'rideId': rideId,
+                                'pickupLat': pickupLL.latitude,
+                                'pickupLng': pickupLL.longitude,
+                              }),
+                            );
                           } catch (e) {
                             if (mounted) {
                               // ignore: use_build_context_synchronously
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Cancel failed: $e')),
+                                SnackBar(content: Text('Request Failed: $e')),
                               );
                             }
                           }
                         },
-                      );
-                    },
                   );
                 }
 
-                return RideForm(
-                  onSubmit: (pickup, dropoff, rate, pickupLL, dropoffLL) async {
-                    try {
-                      await rs.requestRide({
-                        'riderId': rs.userId,
-                        'pickup': pickup,
-                        'dropoff': dropoff,
-                        'pickupLat': pickupLL.latitude,
-                        'pickupLng': pickupLL.longitude,
-                        'dropoffLat': dropoffLL.latitude,
-                        'dropoffLng': dropoffLL.longitude,
-                        'carType': 'luxury',
-                        'rate': rate,
-                        'status': 'pending',
-                        'createdAt': FieldValue.serverTimestamp(),
-                        'driverId': null,
-                      });
-                    } catch (e) {
-                      if (mounted) {
+                final rideDoc = snap.data;
+                if (rideDoc == null) return const SizedBox.shrink();
+
+                final data = rideDoc.data() as Map<String, dynamic>;
+                final status = data['status'];
+                final rideId = rideDoc.id;
+                final driverId = data['driverId'];
+
+                if (status == 'completed' &&
+                    !_ratingShown &&
+                    driverId != null) {
+                  _ratingShown = true;
+                  RatingService().hasAlreadyRated(rideId, rs.userId).then((
+                    exists,
+                  ) {
+                    if (!exists && mounted) {
+                      showDialog(
                         // ignore: use_build_context_synchronously
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Request Failed: $e')),
-                        );
-                      }
+                        context: context,
+                        builder: (_) => RatingDialog(
+                          onSubmit: (stars, comment) async {
+                            await RatingService().submitRating(
+                              rideId: rideId,
+                              fromUid: rs.userId,
+                              toUid: driverId,
+                              rating: stars.toDouble(),
+                              comment: comment,
+                            );
+                            if (mounted) {
+                              // ignore: use_build_context_synchronously
+                              Navigator.pop(context);
+                              setState(() {});
+                            }
+                          },
+                        ),
+                      );
                     }
+                  });
+                }
+
+                return StreamBuilder<DocumentSnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('rides')
+                      .doc(rideId)
+                      .snapshots(),
+                  builder: (ctx, rideSnap) {
+                    if (!rideSnap.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final ride = rideSnap.data!;
+                    final rdata = ride.data() as Map<String, dynamic>;
+
+                    if (rdata['status'] == 'accepted' && !_trackingStarted) {
+                      _trackingStarted = true;
+                      LocationService().startTracking('rider', ride.id);
+                    }
+
+                    final dLat = rdata['driverLat'];
+                    final dLng = rdata['driverLng'];
+                    if (dLat != null && dLng != null) {
+                      final driverPos = LatLng(dLat, dLng);
+                      _mapController?.animateCamera(
+                        CameraUpdate.newLatLng(driverPos),
+                      );
+                      _addOrUpdateMarker('driver', driverPos);
+                    }
+
+                    return RideStatusCard(
+                      ride: ride,
+                      onCancel: () async {
+                        try {
+                          await rs.cancelRide(ride.id);
+                        } catch (e) {
+                          if (mounted) {
+                            // ignore: use_build_context_synchronously
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Cancel failed: $e')),
+                            );
+                          }
+                        }
+                      },
+                    );
                   },
                 );
               },

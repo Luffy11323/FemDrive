@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:femdrive/location/directions_service.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 // ignore: unnecessary_import
 import 'package:flutter/foundation.dart';
@@ -104,8 +105,10 @@ class PlaceService {
 }
 
 /// RIDE SERVICE
+
 class RideService {
   final _fire = FirebaseFirestore.instance;
+  final _rtdb = FirebaseDatabase.instance;
   final String userId = FirebaseAuth.instance.currentUser!.uid;
 
   Stream<DocumentSnapshot?> listenActiveRide() {
@@ -120,7 +123,33 @@ class RideService {
   }
 
   Future<void> requestRide(Map<String, dynamic> data) async {
-    await _fire.collection('rides').add(data);
+    final doc = await _fire.collection('rides').add(data);
+    final rideId = doc.id;
+
+    // Push to RTDB for driver discovery
+    await _rtdb.ref('rides_pending/$rideId').set({
+      'pickup': data['pickup'],
+      'dropoff': data['dropoff'],
+      'pickupLat': data['pickupLat'],
+      'pickupLng': data['pickupLng'],
+      'dropoffLat': data['dropoffLat'],
+      'dropoffLng': data['dropoffLng'],
+      'rate': data['rate'],
+      'riderId': userId,
+      'rideId': rideId,
+      'createdAt': ServerValue.timestamp,
+    });
+
+    // Trigger backend notification
+    await http.post(
+      Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'riderId': userId,
+        'status': 'pending',
+        'rideId': rideId,
+      }),
+    );
   }
 
   Future<void> cancelRide(String id) async {
@@ -128,6 +157,18 @@ class RideService {
       'status': 'cancelled',
       'cancelledAt': FieldValue.serverTimestamp(),
     });
+
+    await _rtdb.ref('rides_pending/$id').remove();
+
+    await http.post(
+      Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'riderId': userId,
+        'status': 'cancelled',
+        'rideId': id,
+      }),
+    );
   }
 
   Stream<QuerySnapshot> pastRides() {
@@ -600,11 +641,30 @@ class _RideStatusCardState extends State<RideStatusCard> {
                       backgroundColor: Colors.redAccent,
                     ),
                     onPressed: () async {
+                      final currentUid = FirebaseAuth.instance.currentUser!.uid;
+                      final isDriver = data['driverId'] == currentUid;
+                      final otherUid = isDriver
+                          ? data['riderId']
+                          : data['driverId'];
+
+                      if (otherUid == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Unable to determine other user.'),
+                          ),
+                        );
+                        return;
+                      }
+
                       await EmergencyService.sendEmergency(
                         rideId: rideId,
-                        currentUid: FirebaseAuth.instance.currentUser!.uid,
-                        otherUid: data['riderId'] ?? data['driverId'],
+                        currentUid: currentUid,
+                        otherUid: otherUid,
                       );
+
+                      if (mounted) {
+                        Navigator.popUntil(context, (route) => route.isFirst);
+                      }
                     },
                     child: const Text('Emergency'),
                   ),
@@ -780,7 +840,7 @@ class _RideFormState extends State<RideForm> {
                           pcLL!,
                           dcLL!,
                         );
-                        final rideDoc = await FirebaseFirestore.instance
+                        final latest = await FirebaseFirestore.instance
                             .collection('rides')
                             .where(
                               'riderId',
@@ -789,8 +849,8 @@ class _RideFormState extends State<RideForm> {
                             .orderBy('createdAt', descending: true)
                             .limit(1)
                             .get();
-                        if (rideDoc.docs.isNotEmpty) {
-                          setState(() => activeRideId = rideDoc.docs.first.id);
+                        if (latest.docs.isNotEmpty) {
+                          setState(() => activeRideId = latest.docs.first.id);
                         }
                       }
                     : null,

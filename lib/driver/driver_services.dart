@@ -304,10 +304,23 @@ class _DriverMapWidgetState extends State<DriverMapWidget> {
 
     setState(() => _isSendingEmergency = true);
     try {
+      final currentUid = FirebaseAuth.instance.currentUser!.uid;
+      final isDriver = widget.rideData['driverId'] == currentUid;
+      final otherUid = isDriver
+          ? widget.rideData['riderId']
+          : widget.rideData['driverId'];
+
+      if (otherUid == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to identify other user.')),
+        );
+        return;
+      }
+
       await EmergencyService.sendEmergency(
         rideId: widget.rideData['rideId'],
-        currentUid: FirebaseAuth.instance.currentUser!.uid,
-        otherUid: widget.rideData['riderId'] ?? widget.rideData['driverId'],
+        currentUid: currentUid,
+        otherUid: otherUid,
       );
       if (mounted) {
         ScaffoldMessenger.of(
