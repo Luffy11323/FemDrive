@@ -1,0 +1,55 @@
+name: Flutter CI/CD for Testing and Running the Project
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the code
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Step 2: Set up Flutter environment
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Step 4: Run Flutter tests (optional, but recommended for quality assurance)
+      - name: Run tests
+        run: flutter test
+
+      # Step 5: Build the app for Android (APK) or iOS (IPA)
+      - name: Build APK for Android (Release)
+        run: flutter build apk --release
+
+      # Step 6: Upload APK as an artifact (for downloading later)
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: flutter-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          
+      # Step 7 (optional): Upload IPA for iOS (if using iOS)
+      # Uncomment the following lines if you need to build an IPA for iOS (requires a macOS runner)
+      # - name: Build IPA for iOS (Release)
+      #   run: flutter build ios --release --no-codesign
+      #
+      # - name: Upload IPA Artifact
+      #   uses: actions/upload-artifact@v2
+      #   with:
+      #     name: flutter-ipa
+      #     path: build/ios/iphoneos/Runner.ipa
+
