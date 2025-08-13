@@ -448,7 +448,7 @@ class RidePopupWidget extends ConsumerWidget {
             children: [
               Text('From: ${data['pickup']}'),
               Text('To: ${data['dropoff']}'),
-              Text('Rate: \$${data['rate']}'),
+              Text('fare: \$${data['fare']}'),
             ],
           ),
           actions: [

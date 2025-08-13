@@ -134,7 +134,7 @@ class RideService {
       'pickupLng': data['pickupLng'],
       'dropoffLat': data['dropoffLat'],
       'dropoffLng': data['dropoffLng'],
-      'rate': data['rate'],
+      'fare': data['fare'],
       'riderId': userId,
       'rideId': rideId,
       'createdAt': ServerValue.timestamp,
@@ -262,7 +262,7 @@ class PastRidesPage extends StatelessWidget {
               final ride = rides[index];
               final pickup = ride['pickup'];
               final dropoff = ride['dropoff'];
-              final fare = ride['rate'];
+              final fare = ride['fare'];
               final status = ride['status'];
               final time = ride['createdAt']?.toDate();
 
@@ -575,7 +575,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
     final status = (data['status'] ?? 'unknown').toString();
     final pickupText = data['pickup'] ?? 'N/A';
     final dropoffText = data['dropoff'] ?? 'N/A';
-    final rate = data['rate']?.toString() ?? '--';
+    final fare = data['fare']?.toString() ?? '--';
     final rideId = data['rideId'];
 
     return Column(
@@ -632,7 +632,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
                 ),
                 const SizedBox(height: 8),
                 Text("Status: ${status.toUpperCase()}"),
-                Text("Rate: \$$rate"),
+                Text("fare: \$$fare"),
                 Text("Driver: $driver"),
                 const SizedBox(height: 10),
                 if (status == 'accepted')
@@ -700,7 +700,7 @@ class _RideFormState extends State<RideForm> {
   final pc = TextEditingController();
   final dc = TextEditingController();
   String selectedCar = 'Luxury';
-  double? rate;
+  double? fare;
   String? eta;
   LatLng? pcLL, dcLL;
   bool loading = false;
@@ -722,7 +722,7 @@ class _RideFormState extends State<RideForm> {
       }
 
       final r = await ms.getRateAndEta(pcLL!, dcLL!);
-      rate = double.parse((r['distanceKm'] * 1.5).toStringAsFixed(2));
+      fare = double.parse((r['distanceKm'] * 1.5).toStringAsFixed(2));
       eta = '${r['durationMin'].round()} min';
 
       _updateMarker('pickup', pcLL!);
@@ -821,8 +821,8 @@ class _RideFormState extends State<RideForm> {
                 onChanged: (v) => setState(() => selectedCar = v!),
               ),
               const SizedBox(height: 8),
-              if (rate != null && eta != null)
-                Text('🚗 \$${rate!.toStringAsFixed(2)} • ETA: $eta'),
+              if (fare != null && eta != null)
+                Text('🚗 \$${fare!.toStringAsFixed(2)} • ETA: $eta'),
               const SizedBox(height: 8),
               loading
                   ? const CircularProgressIndicator()
@@ -832,12 +832,12 @@ class _RideFormState extends State<RideForm> {
                     ),
               const SizedBox(height: 8),
               ElevatedButton(
-                onPressed: rate != null && pcLL != null && dcLL != null
+                onPressed: fare != null && pcLL != null && dcLL != null
                     ? () async {
                         widget.onSubmit(
                           pc.text.trim(),
                           dc.text.trim(),
-                          rate!,
+                          fare!,
                           pcLL!,
                           dcLL!,
                         );

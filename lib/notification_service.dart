@@ -1,17 +1,15 @@
 import 'dart:io';
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-// Define a global navigatorKey if not already defined elsewhere
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
-Future<void> _firebaseBackgroundHandler(RemoteMessage msg) async {
+Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   await NotificationService.instance.initialize();
-  await NotificationService.instance._show(msg);
-  NotificationService.instance._route(msg.data['screen']);
+  await NotificationService.instance.handleMessage(message);
 }
 
 class NotificationService {
@@ -27,25 +25,26 @@ class NotificationService {
       await FirebaseMessaging.instance.requestPermission();
     }
 
-    const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
-    );
-    const iosSettings = DarwinInitializationSettings();
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings();
 
     await _fln.initialize(
-      const InitializationSettings(android: androidSettings, iOS: iosSettings),
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        _route(response.payload);
+      const InitializationSettings(android: androidInit, iOS: iosInit),
+      onDidReceiveNotificationResponse: (response) {
+        if (response.payload != null) {
+          final screen = response.payload!;
+          route({'screen': screen});
+        }
       },
     );
 
-    FirebaseMessaging.onMessage.listen((msg) => _show(msg));
-    FirebaseMessaging.onMessageOpenedApp.listen(
-      (msg) => _route(msg.data['screen']),
-    );
+    FirebaseMessaging.onMessage.listen(show);
+    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      route(msg.data);
+    });
   }
 
-  Future<void> _show(RemoteMessage msg) async {
+  Future<void> show(RemoteMessage msg) async {
     final notif = msg.notification;
     if (notif == null) return;
 
@@ -63,18 +62,39 @@ class NotificationService {
         ),
         iOS: const DarwinNotificationDetails(),
       ),
-      payload: msg.data['screen'], // used for navigation
+      payload: msg.data['screen'],
     );
   }
 
-  void _route(String? screen) {
-    if (screen == 'ride_details') {
-      navigatorKey.currentState?.pushNamed('/driver-ride-details');
-      if (kDebugMode) {
-        print('[NotificationService] Navigate to: ride_details');
-      }
+  Future<void> handleMessage(RemoteMessage message) async {
+    await show(message);
+    route(message.data);
+  }
+
+  void route(Map<String, dynamic> data) {
+    final screen = data['screen'];
+    final rideId = data['rideId'];
+
+    switch (screen) {
+      case 'driver_ride_details':
+        if (rideId != null) {
+          navigatorKey.currentState?.pushNamed(
+            '/driver-ride-details',
+            arguments: rideId,
+          );
+        }
+        break;
+      case 'dashboard':
+        navigatorKey.currentState?.pushNamed('/dashboard');
+        break;
+      case 'profile':
+        navigatorKey.currentState?.pushNamed('/profile');
+        break;
+      default:
+        if (kDebugMode) {
+          print('[NotificationService] Unhandled screen: $screen');
+        }
     }
-    // Add more routes as needed
   }
 
   Future<String?> getToken() => FirebaseMessaging.instance.getToken();

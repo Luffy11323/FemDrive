@@ -70,7 +70,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
         data: (rideDoc) {
           if (rideDoc == null) {
             return RideForm(
-              onSubmit: (pickup, dropoff, rate, pcLL, dcLL) {
+              onSubmit: (pickup, dropoff, fare, pcLL, dcLL) {
                 ref.read(riderDashboardProvider.notifier).fetchActiveRide();
               },
             );

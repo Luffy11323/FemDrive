@@ -1,17 +1,22 @@
-import 'package:femdrive/admin.dart';
-import 'package:femdrive/driver/driver_services.dart';
-import 'package:femdrive/login_page.dart';
-import 'package:femdrive/sign_up_page.dart';
-import 'package:femdrive/rider_dashboard.dart';
-import 'package:femdrive/driver_dashboard.dart';
-import 'package:femdrive/rider/rider_services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart';
-import 'theme.dart';
+
 import 'firebase_options.dart';
+import 'theme.dart';
+
+// Auth & Pages
+import 'login_page.dart';
+import 'sign_up_page.dart';
+import 'driver_dashboard.dart';
+import 'rider_dashboard.dart';
+import 'admin.dart';
+import 'rider/rider_services.dart';
+import 'driver/driver_services.dart';
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -38,12 +43,11 @@ class _FemDriveAppState extends State<FemDriveApp> {
   @override
   void initState() {
     super.initState();
-    _initFCM();
+    _setupFCM();
   }
 
-  Future<void> _initFCM() async {
+  Future<void> _setupFCM() async {
     final fbm = FirebaseMessaging.instance;
-
     await fbm.requestPermission();
     final token = await fbm.getToken();
     final user = FirebaseAuth.instance.currentUser;
@@ -54,44 +58,45 @@ class _FemDriveAppState extends State<FemDriveApp> {
       );
     }
 
-    // Foreground notifications
-    FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
-      if (msg.notification != null && mounted) {
+    FirebaseMessaging.onMessage.listen((msg) {
+      final notif = msg.notification;
+      if (notif != null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              '${msg.notification!.title}: ${msg.notification!.body}',
-            ),
+            content: Text('${notif.title}: ${notif.body}'),
             backgroundColor: Colors.teal,
-            duration: const Duration(seconds: 4),
           ),
         );
       }
     });
 
-    // Tapped from background
     FirebaseMessaging.onMessageOpenedApp.listen((msg) {
       final data = msg.data;
-      if (data['action'] == 'NEW_REQUEST' && mounted) {
-        Navigator.pushNamed(
-          context,
+      final action = data['action'];
+      final rideId = data['rideId'];
+      if (action == 'NEW_REQUEST') {
+        navigatorKey.currentState?.pushNamed(
           '/driver-ride-details',
-          arguments: data['rideId'],
+          arguments: rideId,
         );
-      } else {
-        // handle other actions if needed
+      } else if (action == 'RIDER_STATUS') {
+        navigatorKey.currentState?.pushNamed('/dashboard');
       }
     });
 
-    // Cold start
-    final initialMsg = await FirebaseMessaging.instance.getInitialMessage();
-    if (initialMsg?.data['action'] == 'NEW_REQUEST') {
+    final initialMsg = await fbm.getInitialMessage();
+    if (initialMsg != null) {
+      final action = initialMsg.data['action'];
+      final rideId = initialMsg.data['rideId'];
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushNamed(
-          context,
-          '/driver-ride-details',
-          arguments: initialMsg!.data['rideId'],
-        );
+        if (action == 'NEW_REQUEST') {
+          navigatorKey.currentState?.pushNamed(
+            '/driver-ride-details',
+            arguments: rideId,
+          );
+        } else if (action == 'RIDER_STATUS') {
+          navigatorKey.currentState?.pushNamed('/dashboard');
+        }
       });
     }
   }
@@ -99,18 +104,19 @@ class _FemDriveAppState extends State<FemDriveApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'FemDrive',
       theme: femTheme,
       debugShowCheckedModeBanner: false,
       home: const LoginPage(),
       routes: {
+        '/login': (context) => const LoginPage(),
         '/signup': (context) => const SignUpPage(),
         '/dashboard': (context) => const RiderDashboardPage(),
+        '/driver-dashboard': (context) => const DriverDashboard(),
         '/admin': (context) => const AdminDriverVerificationPage(),
         '/profile': (context) => const ProfilePage(),
         '/past-rides': (context) => const PastRidesPage(),
-        '/driver-dashboard': (context) => const DriverDashboard(),
-        '/login': (context) => const LoginPage(),
         '/driver-ride-details': (context) {
           final rideId = ModalRoute.of(context)!.settings.arguments as String;
           return DriverRideDetailsPage(rideId: rideId);
