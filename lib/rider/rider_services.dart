@@ -19,7 +19,7 @@ const String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 
 /// MAP SERVICE
 class MapService {
-  final poly = PolylinePoints();
+  final poly = PolylinePoints(apiKey: '');
 
   Future<LatLng> currentLocation() async {
     final position = await Geolocator.getCurrentPosition();
@@ -27,17 +27,19 @@ class MapService {
   }
 
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
-    final result = await poly.getRouteBetweenCoordinates(
-      googleApiKey: googleApiKey,
-      request: PolylineRequest(
+    final result = await poly.getRouteBetweenCoordinatesV2(
+      request: RoutesApiRequest(
         origin: PointLatLng(start.latitude, start.longitude),
         destination: PointLatLng(end.latitude, end.longitude),
-        mode: TravelMode.driving,
+        travelMode: TravelMode.driving,
+        // You can optionally add routingPreference, routeModifiers, etc.
       ),
     );
 
-    if (result.points.isEmpty) throw Exception('No route found');
-    return result.points.map((p) => LatLng(p.latitude, p.longitude)).toList();
+    if (result.routes.isEmpty) throw Exception('No route found');
+    final route = result.routes.first;
+    final points = route.polylinePoints ?? [];
+    return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
   }
 
   Future<Map<String, dynamic>> getRateAndEta(
@@ -812,7 +814,7 @@ class _RideFormState extends State<RideForm> {
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: selectedCar,
+                initialValue: selectedCar,
                 items: const [
                   DropdownMenuItem(value: 'Luxury', child: Text('Luxury')),
                   DropdownMenuItem(value: 'Comfort', child: Text('Comfort')),

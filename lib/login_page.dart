@@ -120,7 +120,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     });
   }
 
-  /// ✅ New confirmation dialog
+  /// ✅ Confirmation dialog before sending OTP
   Future<bool> _confirmPhoneNumber(String formattedPhone) async {
     return await showDialog<bool>(
           context: context,
@@ -132,11 +132,11 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context, false), // Edit
+                onPressed: () => Navigator.pop(context, false),
                 child: const Text("Edit"),
               ),
               ElevatedButton(
-                onPressed: () => Navigator.pop(context, true), // Yes
+                onPressed: () => Navigator.pop(context, true),
                 child: const Text("Yes"),
               ),
             ],
@@ -150,10 +150,8 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
     final formattedPhone = _formatPakistaniPhone(phoneController.text);
 
-    /// Ask user to confirm before sending OTP
     final confirmed = await _confirmPhoneNumber(formattedPhone);
     if (!confirmed && mounted) {
-      // Move focus back to phone input if user wants to edit
       FocusScope.of(context).requestFocus(FocusNode());
       await Future.delayed(const Duration(milliseconds: 100));
       // ignore: use_build_context_synchronously
@@ -243,7 +241,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
         route = '/driver-dashboard';
         break;
       case 'rider':
-        route = '/rider-dashboard';
+        route = '/dashboard'; // ✅ Matches main.dart auto-login
         break;
       default:
         return _showError("Invalid role: $role");

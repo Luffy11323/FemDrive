@@ -6,6 +6,9 @@
 	<string>AIzaSyBfBay9sYuFkcApCsw4mYh6n_fT_edNObg</string>
 	<key>GCM_SENDER_ID</key>
 	<string>278929890705</string>
+	<key>NSCameraUsageDescription</key>
+<string>Camera permission is required to scan your document.</string>
+
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>

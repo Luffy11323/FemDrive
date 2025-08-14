@@ -1,12 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:image/image.dart' as img;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:camera/camera.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image/image.dart' as img;
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -18,7 +19,6 @@ class SignUpPage extends StatefulWidget {
 class _SignUpPageState extends State<SignUpPage> {
   final _formKey = GlobalKey<FormState>();
 
-  final picker = ImagePicker();
   final phoneController = TextEditingController();
   final otpController = TextEditingController();
   final usernameController = TextEditingController();
@@ -38,6 +38,22 @@ class _SignUpPageState extends State<SignUpPage> {
   bool canResend = false;
   int resendSeconds = 60;
   Timer? _resendTimer;
+
+  late List<CameraDescription> _cameras;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCameras();
+  }
+
+  Future<void> _initCameras() async {
+    try {
+      _cameras = await availableCameras();
+    } catch (e) {
+      showError("Camera initialization failed: $e");
+    }
+  }
 
   @override
   void dispose() {
@@ -65,26 +81,53 @@ class _SignUpPageState extends State<SignUpPage> {
     });
   }
 
-  Future<void> pickImage(ImageSource source, bool isLicense) async {
-    final picked = await picker.pickImage(source: source);
-    if (picked != null) {
-      final file = File(picked.path);
-      final base64Str = await compressAndEncode(file);
+  /// ✅ New Camera + Cropper method
+  Future<void> _captureAndCrop(bool isLicense) async {
+    try {
+      final controller = CameraController(
+        _cameras.first,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+      await controller.initialize();
+
+      final picture = await controller.takePicture();
+      await controller.dispose();
+
+      final cropped = await ImageCropper().cropImage(
+        sourcePath: picture.path,
+        aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: isLicense ? 'Crop License' : 'Crop Birth Cert',
+            initAspectRatio: CropAspectRatioPreset.ratio4x3,
+            lockAspectRatio: false,
+          ),
+          IOSUiSettings(title: isLicense ? 'Crop License' : 'Crop Birth Cert'),
+        ],
+      );
+
+      if (cropped == null) return;
+
+      final bytes = await File(cropped.path).readAsBytes();
+      final base64 = await compressAndEncodeBytes(bytes);
+
       setState(() {
         if (isLicense) {
-          licenseImage = file;
-          licenseBase64 = base64Str;
+          licenseImage = File(cropped.path);
+          licenseBase64 = base64;
         } else {
-          birthCertificateImage = file;
-          birthCertBase64 = base64Str;
+          birthCertificateImage = File(cropped.path);
+          birthCertBase64 = base64;
         }
       });
+    } catch (e) {
+      showError("Image capture failed: $e");
     }
   }
 
-  Future<String> compressAndEncode(File file) async {
-    final originalBytes = await file.readAsBytes();
-    final decoded = img.decodeImage(originalBytes);
+  Future<String> compressAndEncodeBytes(List<int> bytes) async {
+    final decoded = img.decodeImage(Uint8List.fromList(bytes));
     final resized = img.copyResize(decoded!, width: 600);
     final compressed = img.encodeJpg(resized, quality: 70);
     return base64Encode(compressed);
@@ -131,7 +174,7 @@ class _SignUpPageState extends State<SignUpPage> {
           altContactController.text.trim().isEmpty ||
           licenseBase64 == null ||
           birthCertBase64 == null) {
-        return showError('Please fill all driver details and upload images.');
+        return showError('Please fill all driver details and capture images.');
       }
     }
 
@@ -143,17 +186,7 @@ class _SignUpPageState extends State<SignUpPage> {
       }
 
       final confirmed = await _confirmNumberDialog(formatted);
-      if (!confirmed && mounted) {
-        FocusScope.of(context).requestFocus(FocusNode());
-        FocusScope.of(context).requestFocus(FocusNode());
-        FocusScope.of(context).requestFocus(FocusNode());
-        FocusScope.of(context).requestFocus(FocusNode());
-        FocusScope.of(context).requestFocus(FocusNode());
-        phoneController.selection = TextSelection.fromPosition(
-          TextPosition(offset: phoneController.text.length),
-        );
-        return;
-      }
+      if (!confirmed) return;
 
       setState(() => isSubmitting = true);
 
@@ -187,7 +220,6 @@ class _SignUpPageState extends State<SignUpPage> {
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() => isSubmitting = true);
 
     try {
@@ -299,7 +331,6 @@ class _SignUpPageState extends State<SignUpPage> {
                   labelText: 'Phone (e.g. 0300-1234567)',
                 ),
                 keyboardType: TextInputType.phone,
-                inputFormatters: [PhoneNumberHyphenFormatter()],
                 validator: (v) {
                   try {
                     formatPhoneNumber(v ?? '');
@@ -326,7 +357,7 @@ class _SignUpPageState extends State<SignUpPage> {
               ],
               const SizedBox(height: 15),
               DropdownButtonFormField<String>(
-                value: role,
+                initialValue: role,
                 items: ['rider', 'driver']
                     .map(
                       (r) => DropdownMenuItem(
@@ -341,7 +372,7 @@ class _SignUpPageState extends State<SignUpPage> {
               if (role == 'driver') ...[
                 const SizedBox(height: 15),
                 DropdownButtonFormField<String>(
-                  value: selectedCarType,
+                  initialValue: selectedCarType,
                   decoration: fieldDecoration.copyWith(labelText: 'Car Type'),
                   items: carTypeList
                       .map((t) => DropdownMenuItem(value: t, child: Text(t)))
@@ -361,7 +392,6 @@ class _SignUpPageState extends State<SignUpPage> {
                     labelText: 'Alternate Number',
                   ),
                   keyboardType: TextInputType.phone,
-                  inputFormatters: [PhoneNumberHyphenFormatter()],
                   validator: (v) {
                     try {
                       formatPhoneNumber(v ?? '');
@@ -373,20 +403,20 @@ class _SignUpPageState extends State<SignUpPage> {
                 ),
                 const SizedBox(height: 10),
                 ElevatedButton(
-                  onPressed: () => pickImage(ImageSource.gallery, true),
+                  onPressed: () => _captureAndCrop(true),
                   child: Text(
                     licenseImage == null
-                        ? "Upload License"
+                        ? "Capture License"
                         : _truncateFileName(licenseImage!.path),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(height: 10),
                 ElevatedButton(
-                  onPressed: () => pickImage(ImageSource.gallery, false),
+                  onPressed: () => _captureAndCrop(false),
                   child: Text(
                     birthCertificateImage == null
-                        ? "Upload Birth Certificate"
+                        ? "Capture Birth Certificate"
                         : _truncateFileName(birthCertificateImage!.path),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -407,29 +437,6 @@ class _SignUpPageState extends State<SignUpPage> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class PhoneNumberHyphenFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
-    String formatted = '';
-    if (digitsOnly.length <= 4) {
-      formatted = digitsOnly;
-    } else {
-      formatted = digitsOnly.substring(0, 4);
-      if (digitsOnly.length > 4) {
-        formatted += '-${digitsOnly.substring(4)}';
-      }
-    }
-    return TextEditingValue(
-      text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }
