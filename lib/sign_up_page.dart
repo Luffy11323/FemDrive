@@ -17,8 +17,8 @@ class SignUpPage extends StatefulWidget {
 
 class _SignUpPageState extends State<SignUpPage> {
   final _formKey = GlobalKey<FormState>();
-  final picker = ImagePicker();
 
+  final picker = ImagePicker();
   final phoneController = TextEditingController();
   final otpController = TextEditingController();
   final usernameController = TextEditingController();
@@ -90,6 +90,14 @@ class _SignUpPageState extends State<SignUpPage> {
     return base64Encode(compressed);
   }
 
+  String formatPhoneNumber(String input) {
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 11 || !digits.startsWith('03')) {
+      throw Exception("Must be 11 digits starting with 03");
+    }
+    return '+92${digits.substring(1)}';
+  }
+
   Future<bool> phoneNumberExists(String phone) async {
     final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
     final snap = await FirebaseFirestore.instance
@@ -100,31 +108,64 @@ class _SignUpPageState extends State<SignUpPage> {
     return snap.docs.isNotEmpty;
   }
 
+  String _mapFirebaseError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-phone-number':
+        return 'The phone number format is incorrect.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please try again later.';
+      case 'session-expired':
+        return 'OTP session expired. Please request again.';
+      case 'invalid-verification-code':
+        return 'The OTP entered is incorrect.';
+      default:
+        return e.message ?? 'An unexpected authentication error occurred.';
+    }
+  }
+
   Future<void> sendOtp() async {
-    final digitsOnly = phoneController.text.replaceAll(RegExp(r'\D'), '');
-    if (digitsOnly.length != 11) {
-      showError('Phone must be 11 digits.');
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
-    if (await phoneNumberExists(digitsOnly)) {
-      showError('Phone number already in use.');
-      return;
+    if (role == 'driver') {
+      if (carModelController.text.trim().isEmpty ||
+          altContactController.text.trim().isEmpty ||
+          licenseBase64 == null ||
+          birthCertBase64 == null) {
+        return showError('Please fill all driver details and upload images.');
+      }
     }
-
-    final formatted = '+92${digitsOnly.substring(1)}';
 
     try {
+      final formatted = formatPhoneNumber(phoneController.text);
+
+      if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
+        return showError('This phone number is already registered.');
+      }
+
+      final confirmed = await _confirmNumberDialog(formatted);
+      if (!confirmed && mounted) {
+        FocusScope.of(context).requestFocus(FocusNode());
+        FocusScope.of(context).requestFocus(FocusNode());
+        FocusScope.of(context).requestFocus(FocusNode());
+        FocusScope.of(context).requestFocus(FocusNode());
+        FocusScope.of(context).requestFocus(FocusNode());
+        phoneController.selection = TextSelection.fromPosition(
+          TextPosition(offset: phoneController.text.length),
+        );
+        return;
+      }
+
+      setState(() => isSubmitting = true);
+
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
-        verificationCompleted: (_) {},
-        verificationFailed: (e) {
-          if (e.code == 'captcha-check-failed') {
-            showError('reCAPTCHA verification failed. Please try again.');
-          } else {
-            showError('OTP failed: ${e.message}');
-          }
+        verificationCompleted: (PhoneAuthCredential credential) async {
+          await FirebaseAuth.instance.signInWithCredential(credential);
+          await confirmOtp(autoCredential: credential);
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          showError(_mapFirebaseError(e));
         },
         codeSent: (id, _) {
           setState(() {
@@ -135,34 +176,35 @@ class _SignUpPageState extends State<SignUpPage> {
         },
         codeAutoRetrievalTimeout: (id) => verificationId = id,
       );
+    } on FirebaseAuthException catch (e) {
+      showError(_mapFirebaseError(e));
     } catch (e) {
       showError('Unexpected error: $e');
+    } finally {
+      setState(() => isSubmitting = false);
     }
   }
 
-  Future<void> confirmOtp() async {
+  Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (!_formKey.currentState!.validate()) return;
-
-    final digitsOnly = phoneController.text.replaceAll(RegExp(r'\D'), '');
-    if (role == 'driver' &&
-        (licenseBase64 == null || birthCertBase64 == null)) {
-      showError('Please upload license and birth certificate.');
-      return;
-    }
 
     setState(() => isSubmitting = true);
 
     try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: verificationId!,
-        smsCode: otpController.text.trim(),
-      );
+      final credential =
+          autoCredential ??
+          PhoneAuthProvider.credential(
+            verificationId: verificationId!,
+            smsCode: otpController.text.trim(),
+          );
 
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
       final user = userCred.user;
       if (user == null) throw Exception('Sign-in failed');
+
+      final digitsOnly = phoneController.text.replaceAll(RegExp(r'\D'), '');
 
       final doc = {
         'uid': user.uid,
@@ -185,7 +227,10 @@ class _SignUpPageState extends State<SignUpPage> {
           .collection('users')
           .doc(user.uid)
           .set(doc);
+
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
+    } on FirebaseAuthException catch (e) {
+      showError(_mapFirebaseError(e));
     } catch (e) {
       showError('Verification failed: $e');
     } finally {
@@ -193,136 +238,174 @@ class _SignUpPageState extends State<SignUpPage> {
     }
   }
 
+  Future<bool> _confirmNumberDialog(String formatted) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Confirm Number'),
+            content: Text('Is this number correct?\n$formatted'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Edit'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Yes'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
   void showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: Theme.of(context).colorScheme.error,
-      ),
-    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
+
+  String _truncateFileName(String path) {
+    final fileName = path.split('/').last;
+    return fileName.length > 15 ? '${fileName.substring(0, 12)}...' : fileName;
   }
 
   @override
   Widget build(BuildContext context) {
+    final fieldDecoration = const InputDecoration(
+      labelStyle: TextStyle(height: 1.2),
+      border: OutlineInputBorder(),
+    );
+
     return Scaffold(
       appBar: AppBar(title: const Text('Sign Up - FemDrive')),
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Form(
-              key: _formKey,
-              child: ListView(
-                children: [
-                  TextFormField(
-                    controller: usernameController,
-                    decoration: const InputDecoration(labelText: 'Username'),
-                    validator: (v) =>
-                        v == null || v.isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: phoneController,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone (e.g. 0300-1234567)',
-                    ),
-                    keyboardType: TextInputType.phone,
-                    inputFormatters: [PhoneNumberHyphenFormatter()],
-                    validator: (v) {
-                      final digits = v?.replaceAll(RegExp(r'\D'), '') ?? '';
-                      if (digits.length != 11) return 'Must be 11 digits';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  if (isOtpSent) ...[
-                    TextFormField(
-                      controller: otpController,
-                      decoration: const InputDecoration(labelText: 'Enter OTP'),
-                      keyboardType: TextInputType.number,
-                    ),
-                    const SizedBox(height: 10),
-                    if (!canResend)
-                      Text('Resend in $resendSeconds seconds')
-                    else
-                      TextButton(
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            children: [
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: usernameController,
+                decoration: fieldDecoration.copyWith(labelText: 'Username'),
+                validator: (v) => v == null || v.isEmpty ? 'Required' : null,
+              ),
+              const SizedBox(height: 15),
+              TextFormField(
+                controller: phoneController,
+                decoration: fieldDecoration.copyWith(
+                  labelText: 'Phone (e.g. 0300-1234567)',
+                ),
+                keyboardType: TextInputType.phone,
+                inputFormatters: [PhoneNumberHyphenFormatter()],
+                validator: (v) {
+                  try {
+                    formatPhoneNumber(v ?? '');
+                    return null;
+                  } catch (e) {
+                    return e.toString().replaceAll('Exception: ', '');
+                  }
+                },
+              ),
+              if (isOtpSent) ...[
+                const SizedBox(height: 15),
+                TextFormField(
+                  controller: otpController,
+                  decoration: fieldDecoration.copyWith(labelText: 'Enter OTP'),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 10),
+                canResend
+                    ? TextButton(
                         onPressed: sendOtp,
                         child: const Text('Resend OTP'),
+                      )
+                    : Text('Resend in $resendSeconds seconds'),
+              ],
+              const SizedBox(height: 15),
+              DropdownButtonFormField<String>(
+                value: role,
+                items: ['rider', 'driver']
+                    .map(
+                      (r) => DropdownMenuItem(
+                        value: r,
+                        child: Text(r.toUpperCase()),
                       ),
-                  ],
-                  DropdownButtonFormField<String>(
-                    value: role,
-                    items: ['rider', 'driver']
-                        .map(
-                          (r) => DropdownMenuItem(
-                            value: r,
-                            child: Text(r.toUpperCase()),
-                          ),
-                        )
-                        .toList(),
-                    decoration: const InputDecoration(labelText: 'Register as'),
-                    onChanged: (v) => setState(() => role = v!),
-                  ),
-                  if (role == 'driver') ...[
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: selectedCarType,
-                      decoration: const InputDecoration(labelText: 'Car Type'),
-                      items: carTypeList
-                          .map(
-                            (t) => DropdownMenuItem(value: t, child: Text(t)),
-                          )
-                          .toList(),
-                      onChanged: (v) => setState(() => selectedCarType = v!),
-                    ),
-                    TextFormField(
-                      controller: carModelController,
-                      decoration: const InputDecoration(labelText: 'Car Model'),
-                      validator: (v) =>
-                          v == null || v.isEmpty ? 'Required' : null,
-                    ),
-                    TextFormField(
-                      controller: altContactController,
-                      decoration: const InputDecoration(
-                        labelText: 'Alt Contact',
-                      ),
-                      validator: (v) =>
-                          v == null || v.isEmpty ? 'Required' : null,
-                    ),
-                    ElevatedButton(
-                      onPressed: () => pickImage(ImageSource.gallery, true),
-                      child: Text(
-                        licenseImage == null
-                            ? "Upload License"
-                            : licenseImage!.path,
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => pickImage(ImageSource.gallery, false),
-                      child: Text(
-                        birthCertificateImage == null
-                            ? "Upload Birth Cert."
-                            : birthCertificateImage!.path,
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: isSubmitting
-                        ? null
-                        : isOtpSent
-                        ? confirmOtp
-                        : sendOtp,
-                    child: isSubmitting
-                        ? const CircularProgressIndicator()
-                        : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
-                  ),
-                ],
+                    )
+                    .toList(),
+                decoration: fieldDecoration.copyWith(labelText: 'Register as'),
+                onChanged: (v) => setState(() => role = v!),
               ),
-            ),
+              if (role == 'driver') ...[
+                const SizedBox(height: 15),
+                DropdownButtonFormField<String>(
+                  value: selectedCarType,
+                  decoration: fieldDecoration.copyWith(labelText: 'Car Type'),
+                  items: carTypeList
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                      .toList(),
+                  onChanged: (v) => setState(() => selectedCarType = v!),
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: carModelController,
+                  decoration: fieldDecoration.copyWith(labelText: 'Car Model'),
+                  validator: (v) => v == null || v.isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: altContactController,
+                  decoration: fieldDecoration.copyWith(
+                    labelText: 'Alternate Number',
+                  ),
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [PhoneNumberHyphenFormatter()],
+                  validator: (v) {
+                    try {
+                      formatPhoneNumber(v ?? '');
+                      return null;
+                    } catch (e) {
+                      return e.toString().replaceAll('Exception: ', '');
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton(
+                  onPressed: () => pickImage(ImageSource.gallery, true),
+                  child: Text(
+                    licenseImage == null
+                        ? "Upload License"
+                        : _truncateFileName(licenseImage!.path),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton(
+                  onPressed: () => pickImage(ImageSource.gallery, false),
+                  child: Text(
+                    birthCertificateImage == null
+                        ? "Upload Birth Certificate"
+                        : _truncateFileName(birthCertificateImage!.path),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 25),
+              ElevatedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : isOtpSent
+                    ? confirmOtp
+                    : sendOtp,
+                child: isSubmitting
+                    ? const CircularProgressIndicator()
+                    : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -334,11 +417,19 @@ class PhoneNumberHyphenFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    String digits = newValue.text.replaceAll(RegExp(r'\D'), '');
-    if (digits.length <= 4) return TextEditingValue(text: digits);
+    final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
+    String formatted = '';
+    if (digitsOnly.length <= 4) {
+      formatted = digitsOnly;
+    } else {
+      formatted = digitsOnly.substring(0, 4);
+      if (digitsOnly.length > 4) {
+        formatted += '-${digitsOnly.substring(4)}';
+      }
+    }
     return TextEditingValue(
-      text: '${digits.substring(0, 4)}-${digits.substring(4)}',
-      selection: TextSelection.collapsed(offset: digits.length + 1),
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }

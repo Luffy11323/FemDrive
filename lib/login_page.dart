@@ -5,7 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 
-class PhoneNumberFormatter extends TextInputFormatter {
+/// Same hyphen formatting as signup page
+class PhoneNumberHyphenFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
     TextEditingValue oldValue,
@@ -21,7 +22,6 @@ class PhoneNumberFormatter extends TextInputFormatter {
         formatted += '-${digitsOnly.substring(4)}';
       }
     }
-
     return TextEditingValue(
       text: formatted,
       selection: TextSelection.collapsed(offset: formatted.length),
@@ -31,14 +31,15 @@ class PhoneNumberFormatter extends TextInputFormatter {
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
+
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> with CodeAutoFill {
+  final _formKey = GlobalKey<FormState>();
   final phoneController = TextEditingController();
   final otpController = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
 
   bool loading = false;
   bool otpSent = false;
@@ -55,8 +56,10 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   @override
   void dispose() {
-    _timer?.cancel();
     cancel();
+    phoneController.dispose();
+    otpController.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -68,79 +71,145 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     }
   }
 
-  void startTimer() {
-    countdown = 60;
-    canResend = false;
+  String? _validatePakistaniPhone(String? input) {
+    if (input == null || input.trim().isEmpty) {
+      return "Phone number is required.";
+    }
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 11 || !digits.startsWith('03')) {
+      return "Must be 11 digits starting with 03 (e.g. 0300-1234567).";
+    }
+    return null;
+  }
+
+  String _formatPakistaniPhone(String input) {
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    return '+92${digits.substring(1)}';
+  }
+
+  String _mapFirebaseError(String code, [String? message]) {
+    switch (code) {
+      case 'invalid-verification-code':
+        return "The OTP you entered is incorrect.";
+      case 'too-many-requests':
+        return "Too many OTP attempts. Please wait before trying again.";
+      case 'session-expired':
+        return "Your OTP has expired. Please request a new one.";
+      case 'invalid-phone-number':
+        return "Invalid Pakistani phone number format.";
+      case 'network-request-failed':
+        return "No internet connection. Please check and try again.";
+      default:
+        return message ?? "Something went wrong. Please try again.";
+    }
+  }
+
+  void _startResendTimer() {
+    setState(() {
+      countdown = 60;
+      canResend = false;
+    });
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        countdown--;
-        if (countdown <= 0) {
-          timer.cancel();
-          canResend = true;
-        }
-      });
+      if (countdown <= 0) {
+        timer.cancel();
+        setState(() => canResend = true);
+      } else {
+        setState(() => countdown--);
+      }
     });
+  }
+
+  /// ✅ New confirmation dialog
+  Future<bool> _confirmPhoneNumber(String formattedPhone) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text("Confirm your number"),
+            content: Text(
+              "We will send an OTP to:\n$formattedPhone",
+              style: const TextStyle(fontSize: 16),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false), // Edit
+                child: const Text("Edit"),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true), // Yes
+                child: const Text("Yes"),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final phone = phoneController.text.replaceAll('-', '');
-    setState(() {
-      loading = true;
-      otpSent = false;
-    });
+    final formattedPhone = _formatPakistaniPhone(phoneController.text);
+
+    /// Ask user to confirm before sending OTP
+    final confirmed = await _confirmPhoneNumber(formattedPhone);
+    if (!confirmed && mounted) {
+      // Move focus back to phone input if user wants to edit
+      FocusScope.of(context).requestFocus(FocusNode());
+      await Future.delayed(const Duration(milliseconds: 100));
+      // ignore: use_build_context_synchronously
+      FocusScope.of(context).requestFocus(FocusNode());
+      return;
+    }
 
     try {
+      setState(() {
+        loading = true;
+        otpSent = false;
+      });
+
       await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: '+92$phone',
+        phoneNumber: formattedPhone,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential cred) async {
           await FirebaseAuth.instance.signInWithCredential(cred);
           await _handlePostLogin();
         },
         verificationFailed: (FirebaseAuthException e) {
-          String errorMsg = 'Verification failed: ${e.message}';
-          if (e.code == 'invalid-phone-number') {
-            errorMsg = 'Invalid phone number format.';
-          }
-          _showError(errorMsg);
+          _showError(_mapFirebaseError(e.code, e.message));
         },
         codeSent: (String id, int? token) {
           setState(() {
             verificationId = id;
             otpSent = true;
           });
-          startTimer();
+          _startResendTimer();
         },
-        codeAutoRetrievalTimeout: (String id) {
-          verificationId = id;
-        },
+        codeAutoRetrievalTimeout: (String id) => verificationId = id,
       );
     } catch (e) {
       _showError("OTP sending failed: $e");
+    } finally {
+      setState(() => loading = false);
     }
-
-    setState(() => loading = false);
   }
 
   Future<void> verifyOtp() async {
-    final code = otpController.text.trim();
-    if (verificationId == null || code.length < 6) {
+    if (verificationId == null || otpController.text.trim().length < 6) {
       return _showError("Enter a valid 6-digit OTP.");
     }
 
-    setState(() => loading = true);
     try {
+      setState(() => loading = true);
+
       final credential = PhoneAuthProvider.credential(
         verificationId: verificationId!,
-        smsCode: code,
+        smsCode: otpController.text.trim(),
       );
+
       await FirebaseAuth.instance.signInWithCredential(credential);
       await _handlePostLogin();
     } on FirebaseAuthException catch (e) {
-      _showError("Login failed: ${e.message}");
+      _showError(_mapFirebaseError(e.code, e.message));
     } finally {
       setState(() => loading = false);
     }
@@ -154,18 +223,18 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
         .collection('users')
         .doc(user.uid)
         .get();
-    final data = doc.data();
-    if (data == null) return _showError("User profile not found.");
+    if (!doc.exists) return _showError("User profile not found.");
 
-    final isVerified = data['verified'] == true;
+    final data = doc.data()!;
     final role = data['role'];
+    final isVerified = data['verified'] == true;
 
     if (role == 'driver' && !isVerified) {
       await FirebaseAuth.instance.signOut();
       return _showError("Your account is pending admin approval.");
     }
 
-    String route = '/dashboard';
+    String route;
     switch (role) {
       case 'admin':
         route = '/admin';
@@ -193,32 +262,32 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   @override
   Widget build(BuildContext context) {
+    final fieldDecoration = const InputDecoration(
+      labelStyle: TextStyle(height: 1.2),
+      border: OutlineInputBorder(),
+    );
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Login')),
+      appBar: AppBar(title: const Text('Login - FemDrive')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
           key: _formKey,
           child: ListView(
             children: [
+              const SizedBox(height: 10),
               TextFormField(
                 controller: phoneController,
-                decoration: const InputDecoration(
+                decoration: fieldDecoration.copyWith(
                   labelText: 'Phone (e.g. 0300-1234567)',
                 ),
                 keyboardType: TextInputType.phone,
-                inputFormatters: [PhoneNumberFormatter()],
-                validator: (value) {
-                  final pattern = RegExp(r'^03\d{2}-\d{7}$');
-                  if (value == null || !pattern.hasMatch(value)) {
-                    return 'Enter a valid phone number.';
-                  }
-                  return null;
-                },
+                inputFormatters: [PhoneNumberHyphenFormatter()],
+                validator: _validatePakistaniPhone,
                 enabled: !otpSent,
               ),
               if (otpSent) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 15),
                 PinFieldAutoFill(
                   controller: otpController,
                   decoration: BoxLooseDecoration(
@@ -228,28 +297,25 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                   ),
                   codeLength: 6,
                 ),
-              ],
-              const SizedBox(height: 20),
-              if (loading)
-                const Center(child: CircularProgressIndicator())
-              else if (!otpSent)
-                ElevatedButton(
-                  onPressed: sendOtp,
-                  child: const Text('Send OTP'),
-                )
-              else ...[
-                ElevatedButton(
-                  onPressed: verifyOtp,
-                  child: const Text('Verify OTP'),
-                ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 canResend
                     ? TextButton(
                         onPressed: sendOtp,
                         child: const Text('Resend OTP'),
                       )
-                    : Text('Resend in $countdown sec'),
+                    : Text('Resend in $countdown seconds'),
               ],
+              const SizedBox(height: 25),
+              ElevatedButton(
+                onPressed: loading
+                    ? null
+                    : otpSent
+                    ? verifyOtp
+                    : sendOtp,
+                child: loading
+                    ? const CircularProgressIndicator()
+                    : Text(otpSent ? 'Verify OTP' : 'Send OTP'),
+              ),
               const SizedBox(height: 10),
               TextButton(
                 onPressed: () => Navigator.pushNamed(context, '/signup'),
