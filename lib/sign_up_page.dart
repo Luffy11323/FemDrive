@@ -81,49 +81,45 @@ class _SignUpPageState extends State<SignUpPage> {
     });
   }
 
-  /// ✅ New Camera + Cropper method
+  /// New Camera + Cropper method
   Future<void> _captureAndCrop(bool isLicense) async {
-    try {
-      final controller = CameraController(
-        _cameras.first,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-      await controller.initialize();
+    final capturedFile = await Navigator.push<File?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            DocumentCaptureScreen(isLicense: isLicense, cameras: _cameras),
+      ),
+    );
 
-      final picture = await controller.takePicture();
-      await controller.dispose();
+    if (capturedFile == null) return;
 
-      final cropped = await ImageCropper().cropImage(
-        sourcePath: picture.path,
-        aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
-        uiSettings: [
-          AndroidUiSettings(
-            toolbarTitle: isLicense ? 'Crop License' : 'Crop Birth Cert',
-            initAspectRatio: CropAspectRatioPreset.ratio4x3,
-            lockAspectRatio: false,
-          ),
-          IOSUiSettings(title: isLicense ? 'Crop License' : 'Crop Birth Cert'),
-        ],
-      );
+    final cropped = await ImageCropper().cropImage(
+      sourcePath: capturedFile.path,
+      aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: isLicense ? 'Crop License' : 'Crop Birth Cert',
+          initAspectRatio: CropAspectRatioPreset.ratio4x3,
+          lockAspectRatio: false,
+        ),
+        IOSUiSettings(title: isLicense ? 'Crop License' : 'Crop Birth Cert'),
+      ],
+    );
 
-      if (cropped == null) return;
+    if (cropped == null) return;
 
-      final bytes = await File(cropped.path).readAsBytes();
-      final base64 = await compressAndEncodeBytes(bytes);
+    final bytes = await File(cropped.path).readAsBytes();
+    final base64 = await compressAndEncodeBytes(bytes);
 
-      setState(() {
-        if (isLicense) {
-          licenseImage = File(cropped.path);
-          licenseBase64 = base64;
-        } else {
-          birthCertificateImage = File(cropped.path);
-          birthCertBase64 = base64;
-        }
-      });
-    } catch (e) {
-      showError("Image capture failed: $e");
-    }
+    setState(() {
+      if (isLicense) {
+        licenseImage = File(cropped.path);
+        licenseBase64 = base64;
+      } else {
+        birthCertificateImage = File(cropped.path);
+        birthCertBase64 = base64;
+      }
+    });
   }
 
   Future<String> compressAndEncodeBytes(List<int> bytes) async {
@@ -298,6 +294,7 @@ class _SignUpPageState extends State<SignUpPage> {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
+  // ignore: unused_element
   String _truncateFileName(String path) {
     final fileName = path.split('/').last;
     return fileName.length > 15 ? '${fileName.substring(0, 12)}...' : fileName;
@@ -402,25 +399,9 @@ class _SignUpPageState extends State<SignUpPage> {
                   },
                 ),
                 const SizedBox(height: 10),
-                ElevatedButton(
-                  onPressed: () => _captureAndCrop(true),
-                  child: Text(
-                    licenseImage == null
-                        ? "Capture License"
-                        : _truncateFileName(licenseImage!.path),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+                _buildImageCaptureField(true),
                 const SizedBox(height: 10),
-                ElevatedButton(
-                  onPressed: () => _captureAndCrop(false),
-                  child: Text(
-                    birthCertificateImage == null
-                        ? "Capture Birth Certificate"
-                        : _truncateFileName(birthCertificateImage!.path),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
+                _buildImageCaptureField(false),
               ],
               const SizedBox(height: 25),
               ElevatedButton(
@@ -439,4 +420,216 @@ class _SignUpPageState extends State<SignUpPage> {
       ),
     );
   }
+
+  Widget _buildImageCaptureField(bool isLicense) {
+    final file = isLicense ? licenseImage : birthCertificateImage;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (file != null)
+          Column(
+            children: [
+              Image.file(file, height: 150, fit: BoxFit.cover),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () => _captureAndCrop(isLicense),
+                    child: const Text("Retake"),
+                  ),
+                  const SizedBox(width: 10),
+                  TextButton(
+                    onPressed: () => _viewImage(file),
+                    child: const Text("View"),
+                  ),
+                ],
+              ),
+            ],
+          )
+        else
+          ElevatedButton(
+            onPressed: () => _captureAndCrop(isLicense),
+            child: Text(
+              isLicense ? "Capture License" : "Capture Birth Certificate",
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _viewImage(File file) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(),
+          body: Center(child: Image.file(file)),
+        ),
+      ),
+    );
+  }
+}
+
+class DocumentCaptureScreen extends StatefulWidget {
+  final bool isLicense;
+  final List<CameraDescription> cameras;
+
+  const DocumentCaptureScreen({
+    super.key,
+    required this.isLicense,
+    required this.cameras,
+  });
+
+  @override
+  State<DocumentCaptureScreen> createState() => _DocumentCaptureScreenState();
+}
+
+class _DocumentCaptureScreenState extends State<DocumentCaptureScreen> {
+  CameraController? _controller;
+  bool _isReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCamera();
+  }
+
+  Future<void> _initCamera() async {
+    _controller = CameraController(
+      widget.cameras.first,
+      ResolutionPreset.high,
+      enableAudio: false,
+    );
+    await _controller!.initialize();
+    if (!mounted) return;
+    setState(() => _isReady = true);
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _captureImage() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    final picture = await _controller!.takePicture();
+    if (!mounted) return;
+    Navigator.pop(context, File(picture.path));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: !_isReady
+          ? const Center(child: CircularProgressIndicator())
+          : Stack(
+              children: [
+                CameraPreview(_controller!),
+                Positioned.fill(
+                  child: CustomPaint(painter: DocumentFramePainter()),
+                ),
+                Positioned(
+                  bottom: 40,
+                  left: 0,
+                  right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      FloatingActionButton(
+                        backgroundColor: Colors.white,
+                        onPressed: _captureImage,
+                        child: const Icon(
+                          Icons.camera_alt,
+                          color: Colors.black,
+                          size: 28,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 40,
+                  left: 0,
+                  right: 0,
+                  child: Text(
+                    widget.isLicense
+                        ? "Align your LICENSE in the frame"
+                        : "Align your BIRTH CERTIFICATE in the frame",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class DocumentFramePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(
+      size.width * 0.1,
+      size.height * 0.25,
+      size.width * 0.8,
+      size.height * 0.4,
+    );
+
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+
+    canvas.drawRect(rect, borderPaint);
+
+    final cornerPaint = Paint()
+      ..color = Colors.greenAccent
+      ..strokeWidth = 4;
+
+    const cornerLength = 20.0;
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(0, cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight - const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight + const Offset(0, cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft + const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft - const Offset(0, cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight - const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight - const Offset(0, cornerLength),
+      cornerPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

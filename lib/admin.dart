@@ -313,7 +313,7 @@ class _AdminDriverVerificationPageState
         title: Text(title),
         content: Image.network(
           url,
-          errorBuilder: (_, __, ___) => const Text("Image not found"),
+          errorBuilder: (_, _, _) => const Text("Image not found"),
         ),
         actions: [
           TextButton(

@@ -19,10 +19,9 @@ class DirectionsService {
     final route = data['routes'][0];
     final leg = route['legs'][0];
     final duration = leg['duration']['text'];
-    final points = PolylinePoints()
-        .decodePolyline(route['overview_polyline']['points'])
-        .map((p) => LatLng(p.latitude, p.longitude))
-        .toList();
+    final points = PolylinePoints.decodePolyline(
+      route['overview_polyline']['points'],
+    ).map((p) => LatLng(p.latitude, p.longitude)).toList();
 
     return {'polyline': points, 'eta': duration};
   }
