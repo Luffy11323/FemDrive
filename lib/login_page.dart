@@ -151,13 +151,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     final formattedPhone = _formatPakistaniPhone(phoneController.text);
 
     final confirmed = await _confirmPhoneNumber(formattedPhone);
-    if (!confirmed && mounted) {
-      FocusScope.of(context).requestFocus(FocusNode());
-      await Future.delayed(const Duration(milliseconds: 100));
-      // ignore: use_build_context_synchronously
-      FocusScope.of(context).requestFocus(FocusNode());
-      return;
-    }
+    if (!confirmed) return;
 
     try {
       setState(() {
@@ -169,8 +163,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
         phoneNumber: formattedPhone,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential cred) async {
-          await FirebaseAuth.instance.signInWithCredential(cred);
-          await _handlePostLogin();
+          await verifyOtp(autoCredential: cred); // ✅ unified flow
         },
         verificationFailed: (FirebaseAuthException e) {
           _showError(_mapFirebaseError(e.code, e.message));
@@ -191,18 +184,21 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     }
   }
 
-  Future<void> verifyOtp() async {
-    if (verificationId == null || otpController.text.trim().length < 6) {
-      return _showError("Enter a valid 6-digit OTP.");
+  Future<void> verifyOtp({PhoneAuthCredential? autoCredential}) async {
+    if (autoCredential == null &&
+        (verificationId == null || otpController.text.trim().length != 6)) {
+      return _showError("Please enter the full 6-digit OTP.");
     }
 
     try {
       setState(() => loading = true);
 
-      final credential = PhoneAuthProvider.credential(
-        verificationId: verificationId!,
-        smsCode: otpController.text.trim(),
-      );
+      final credential =
+          autoCredential ??
+          PhoneAuthProvider.credential(
+            verificationId: verificationId!,
+            smsCode: otpController.text.trim(),
+          );
 
       await FirebaseAuth.instance.signInWithCredential(credential);
       await _handlePostLogin();

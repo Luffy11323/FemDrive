@@ -215,7 +215,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             verificationId: verificationId!,
             smsCode: otpCode,
           );
-
+      if (autoCredential == null && enteredOtp.length != otpLength) {
+        showError('Please enter the full OTP');
+        return;
+      }
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
