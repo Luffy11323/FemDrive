@@ -15,6 +15,46 @@ class SignUpPage extends StatefulWidget {
   State<SignUpPage> createState() => _SignUpPageState();
 }
 
+class OtpInputField extends StatefulWidget {
+  final int length;
+  final void Function(String) onCompleted;
+
+  const OtpInputField({super.key, this.length = 6, required this.onCompleted});
+
+  @override
+  State<OtpInputField> createState() => _OtpInputFieldState();
+}
+
+class _OtpInputFieldState extends State<OtpInputField> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      keyboardType: TextInputType.number,
+      maxLength: widget.length,
+      textAlign: TextAlign.center,
+      style: const TextStyle(letterSpacing: 30, fontSize: 20),
+      decoration: const InputDecoration(
+        border: OutlineInputBorder(),
+        counterText: "",
+      ),
+      onChanged: (value) {
+        if (value.length == widget.length) {
+          widget.onCompleted(value);
+        }
+      },
+    );
+  }
+}
+
 class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   final _formKey = GlobalKey<FormState>();
 
@@ -22,6 +62,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   final usernameController = TextEditingController();
   final carModelController = TextEditingController();
   final altContactController = TextEditingController();
+  String enteredOtp = "";
 
   String role = 'rider';
   String selectedCarType = 'Ride X';
@@ -39,14 +80,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   // OTP controllers & focus
   final int otpLength = 6;
-  late List<TextEditingController> otpControllers;
-  late List<FocusNode> otpFocusNodes;
 
   @override
   void initState() {
     super.initState();
-    otpControllers = List.generate(otpLength, (_) => TextEditingController());
-    otpFocusNodes = List.generate(otpLength, (_) => FocusNode());
 
     // Start listening for SMS autofill (Android)
     listenForCode();
@@ -59,12 +96,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     usernameController.dispose();
     carModelController.dispose();
     altContactController.dispose();
-    for (var c in otpControllers) {
-      c.dispose();
-    }
-    for (var f in otpFocusNodes) {
-      f.dispose();
-    }
     _resendTimer?.cancel();
     super.dispose();
   }
@@ -74,9 +105,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   void codeUpdated() {
     final received = code ?? '';
     if (received.isEmpty) return;
-    _fillOtpFromString(received);
-    if (received.replaceAll(RegExp(r'\D'), '').length >= otpLength) {
-      // Optional: auto-confirm when full code arrives
+
+    final clean = received.replaceAll(RegExp(r'\D'), '');
+    setState(() => enteredOtp = clean);
+
+    if (clean.length >= otpLength) {
       confirmOtp();
     }
   }
@@ -123,61 +156,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   // ======== OTP logic ========
-  void _fillOtpFromString(String value) {
-    final clean = value.replaceAll(RegExp(r'\D'), '');
-    for (int i = 0; i < otpLength; i++) {
-      final char = i < clean.length ? clean[i] : '';
-      otpControllers[i].text = char;
-    }
-    if (clean.isNotEmpty) {
-      final nextIndex = clean.length.clamp(0, otpLength - 1);
-      FocusScope.of(context).requestFocus(otpFocusNodes[nextIndex]);
-    }
-  }
-
-  void _onOtpChanged(String value, int index) {
-    // Handle paste (multiple chars at once)
-    if (value.length > 1) {
-      _fillOtpFromString(value);
-      if (value.replaceAll(RegExp(r'\D'), '').length >= otpLength) {
-        FocusScope.of(context).unfocus();
-      }
-      return;
-    }
-
-    // Keep only the last digit typed and move forward
-    if (value.isNotEmpty) {
-      final last = value[value.length - 1];
-      otpControllers[index].text = last;
-      otpControllers[index].selection = TextSelection.collapsed(
-        offset: otpControllers[index].text.length,
-      );
-
-      if (index + 1 < otpLength) {
-        FocusScope.of(context).requestFocus(otpFocusNodes[index + 1]);
-      } else {
-        FocusScope.of(context).unfocus();
-      }
-    }
-  }
-
-  KeyEventResult _onOtpKey(FocusNode node, KeyEvent event, int index) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.backspace) {
-      if (otpControllers[index].text.isEmpty && index > 0) {
-        FocusScope.of(context).requestFocus(otpFocusNodes[index - 1]);
-        otpControllers[index - 1].text = '';
-        otpControllers[index - 1].selection = const TextSelection.collapsed(
-          offset: 0,
-        );
-        return KeyEventResult.handled;
-      }
-    }
-    return KeyEventResult.ignored;
-  }
-
-  String _currentOtp() => otpControllers.map((e) => e.text).join();
-
   // ======== Firebase flows ========
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
@@ -199,6 +177,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       setState(() => isSubmitting = true);
+      await Future.delayed(const Duration(milliseconds: 100));
 
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
@@ -230,7 +209,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     setState(() => isSubmitting = true);
     try {
-      final otpCode = _currentOtp();
+      final otpCode = enteredOtp;
       final credential =
           autoCredential ??
           PhoneAuthProvider.credential(
@@ -437,13 +416,23 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                         ? confirmOtp
                         : sendOtp,
                     child: isSubmitting
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text("Please wait..."),
+                            ],
                           )
                         : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
                   ),
+
                   const SizedBox(height: 16),
                 ],
               ),
@@ -462,36 +451,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Widget _buildOtpFields() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(otpLength, (index) {
-        return SizedBox(
-          width: 48,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 5),
-            child: Focus(
-              focusNode: otpFocusNodes[index],
-              onKeyEvent: (node, event) => _onOtpKey(node, event, index),
-              child: TextField(
-                controller: otpControllers[index],
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                maxLength: 1,
-                decoration: const InputDecoration(counterText: ''),
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (value) => _onOtpChanged(value, index),
-                onTap: () {
-                  // Always put caret at the end
-                  final text = otpControllers[index].text;
-                  otpControllers[index].selection = TextSelection.collapsed(
-                    offset: text.length,
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      }),
+    return OtpInputField(
+      length: otpLength,
+      onCompleted: (code) {
+        setState(() => enteredOtp = code);
+      },
     );
   }
 
