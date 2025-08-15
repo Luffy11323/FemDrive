@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:camera/camera.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
+import 'package:sms_autofill/sms_autofill.dart';
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -16,7 +18,15 @@ class SignUpPage extends StatefulWidget {
   State<SignUpPage> createState() => _SignUpPageState();
 }
 
-class _SignUpPageState extends State<SignUpPage> {
+class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
+  @override
+  void codeUpdated() {
+    if (code != null && isOtpSent) {
+      otpController.text = code!;
+      confirmOtp();
+    }
+  }
+
   final _formKey = GlobalKey<FormState>();
 
   final phoneController = TextEditingController();
@@ -45,6 +55,7 @@ class _SignUpPageState extends State<SignUpPage> {
   void initState() {
     super.initState();
     _initCameras();
+    listenForCode();
   }
 
   Future<void> _initCameras() async {
@@ -57,6 +68,7 @@ class _SignUpPageState extends State<SignUpPage> {
 
   @override
   void dispose() {
+    cancel();
     phoneController.dispose();
     otpController.dispose();
     usernameController.dispose();
@@ -108,29 +120,37 @@ class _SignUpPageState extends State<SignUpPage> {
 
     if (cropped == null) return;
 
-    final bytes = await File(cropped.path).readAsBytes();
-    final base64 = await compressAndEncodeBytes(bytes);
+    try {
+      final bytes = await File(cropped.path).readAsBytes();
+      final base64 = await compressAndEncodeBytes(bytes);
 
-    setState(() {
-      if (isLicense) {
-        licenseImage = File(cropped.path);
-        licenseBase64 = base64;
-      } else {
-        birthCertificateImage = File(cropped.path);
-        birthCertBase64 = base64;
-      }
-    });
+      setState(() {
+        if (isLicense) {
+          licenseImage = File(cropped.path);
+          licenseBase64 = base64;
+        } else {
+          birthCertificateImage = File(cropped.path);
+          birthCertBase64 = base64;
+        }
+      });
+    } catch (e) {
+      showError('Image processing failed: $e');
+    }
   }
 
   Future<String> compressAndEncodeBytes(List<int> bytes) async {
     final decoded = img.decodeImage(Uint8List.fromList(bytes));
-    final resized = img.copyResize(decoded!, width: 600);
+    if (decoded == null) throw Exception("Image decoding failed");
+    final resized = img.copyResize(decoded, width: 600);
     final compressed = img.encodeJpg(resized, quality: 70);
     return base64Encode(compressed);
   }
 
   String formatPhoneNumber(String input) {
     final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (kDebugMode) {
+      print('Cleaned phone: $digits');
+    } // For debugging
     if (digits.length != 11 || !digits.startsWith('03')) {
       throw Exception("Must be 11 digits starting with 03");
     }
@@ -339,8 +359,9 @@ class _SignUpPageState extends State<SignUpPage> {
                 ),
                 keyboardType: TextInputType.phone,
                 validator: (v) {
+                  if (v == null || v.isEmpty) return 'Required';
                   try {
-                    formatPhoneNumber(v ?? '');
+                    formatPhoneNumber(v);
                     return null;
                   } catch (e) {
                     return e.toString().replaceAll('Exception: ', '');
@@ -349,11 +370,21 @@ class _SignUpPageState extends State<SignUpPage> {
               ),
               if (isOtpSent) ...[
                 const SizedBox(height: 15),
-                TextFormField(
+                PinFieldAutoFill(
+                  codeLength: 6,
                   controller: otpController,
-                  decoration: fieldDecoration.copyWith(labelText: 'Enter OTP'),
-                  keyboardType: TextInputType.number,
+                  decoration: BoxLooseDecoration(
+                    gapSpace: 12,
+                    strokeColorBuilder: FixedColorBuilder(Colors.purpleAccent),
+                    bgColorBuilder: FixedColorBuilder(Colors.white),
+                  ),
+                  onCodeChanged: (code) {
+                    if (code != null && code.length == 6) {
+                      confirmOtp();
+                    }
+                  },
                 ),
+
                 const SizedBox(height: 10),
                 canResend
                     ? TextButton(
@@ -400,8 +431,9 @@ class _SignUpPageState extends State<SignUpPage> {
                   ),
                   keyboardType: TextInputType.phone,
                   validator: (v) {
+                    if (v == null || v.isEmpty) return 'Required';
                     try {
-                      formatPhoneNumber(v ?? '');
+                      formatPhoneNumber(v);
                       return null;
                     } catch (e) {
                       return e.toString().replaceAll('Exception: ', '');

@@ -65,7 +65,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
 
   @override
   void codeUpdated() {
-    if (code != null && otpSent) {
+    if (code != null && otpSent && otpController.text.length < 6) {
       otpController.text = code!;
       verifyOtp();
     }
@@ -288,12 +288,20 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                 const SizedBox(height: 15),
                 PinFieldAutoFill(
                   controller: otpController,
+                  codeLength: 6,
                   decoration: BoxLooseDecoration(
                     gapSpace: 12,
                     strokeColorBuilder: FixedColorBuilder(Color(0xFFC9A0DC)),
                     bgColorBuilder: FixedColorBuilder(Colors.white),
                   ),
-                  codeLength: 6,
+                  onCodeChanged: (code) {
+                    if (code != null) {
+                      otpController.text = code;
+                      if (code.length == 6) {
+                        verifyOtp(); // optional: auto-submit when complete
+                      }
+                    }
+                  },
                 ),
                 const SizedBox(height: 10),
                 canResend
