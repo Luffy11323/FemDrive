@@ -513,6 +513,8 @@ class _DocumentCaptureScreenState extends State<DocumentCaptureScreen> {
   void _captureImage() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
     final picture = await _controller!.takePicture();
+    await _controller?.dispose();
+    _controller = null;
     if (!mounted) return;
     Navigator.pop(context, File(picture.path));
   }

@@ -9,7 +9,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.femdrive"
+    namespace = "com.example.Femdrive"
     compileSdk = flutter.compileSdkVersion
 
     // Set NDK version to highest needed (Fixes mismatch)
@@ -26,11 +26,19 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.femdrive"
-        minSdk = 23
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+
+minSdk = (project.findProperty("MIN_SDK_VERSION")?.toString()?.toInt()
+    ?: flutter.minSdkVersion)
+
+targetSdk = (project.findProperty("TARGET_SDK_VERSION")?.toString()?.toInt()
+    ?: flutter.targetSdkVersion)
+
+versionCode = (project.findProperty("VERSION_CODE")?.toString()?.toInt()
+    ?: flutter.versionCode)
+
+versionName = (project.findProperty("VERSION_NAME")?.toString()
+    ?: flutter.versionName)
+
     }
 
     buildTypes {
