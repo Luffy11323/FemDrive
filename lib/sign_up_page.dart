@@ -221,10 +221,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       );
 
       final primaryFormatted = formatPhoneNumber(phoneController.text.trim());
-      final altFormatted = formatPhoneNumber(altContactController.text.trim());
-
-      if (primaryFormatted == altFormatted) {
-        return showError('Alternate number cannot be the same as primary.');
+      if (role == 'driver') {
+        final altFormatted = formatPhoneNumber(
+          altContactController.text.trim(),
+        );
+        if (primaryFormatted == altFormatted) {
+          return showError('Alternate number cannot be the same as primary.');
+        }
       }
 
       final user = userCred.user;
