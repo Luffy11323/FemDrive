@@ -41,12 +41,12 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   final phoneController = TextEditingController();
   final otpController = TextEditingController();
 
+  int secondsRemaining = 30;
+  bool enableResend = false;
+  Timer? timer;
   bool loading = false;
   bool otpSent = false;
-  bool canResend = false;
-  int countdown = 60;
   String? verificationId;
-  Timer? _timer;
 
   @override
   void initState() {
@@ -59,7 +59,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     cancel();
     phoneController.dispose();
     otpController.dispose();
-    _timer?.cancel();
+    timer?.cancel();
     super.dispose();
   }
 
@@ -69,6 +69,23 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       otpController.text = code!;
       verifyOtp();
     }
+  }
+
+  void startTimer() {
+    setState(() {
+      secondsRemaining = 30;
+      enableResend = false;
+    });
+
+    timer?.cancel();
+    timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (secondsRemaining == 0) {
+        setState(() => enableResend = true);
+        t.cancel();
+      } else {
+        setState(() => secondsRemaining--);
+      }
+    });
   }
 
   String? _validatePakistaniPhone(String? input) {
@@ -102,22 +119,6 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       default:
         return message ?? "Something went wrong. Please try again.";
     }
-  }
-
-  void _startResendTimer() {
-    setState(() {
-      countdown = 60;
-      canResend = false;
-    });
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (countdown <= 0) {
-        timer.cancel();
-        setState(() => canResend = true);
-      } else {
-        setState(() => countdown--);
-      }
-    });
   }
 
   /// ✅ Confirmation dialog before sending OTP
@@ -173,7 +174,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
             verificationId = id;
             otpSent = true;
           });
-          _startResendTimer();
+          startTimer(); // ✅ unified resend flow
         },
         codeAutoRetrievalTimeout: (String id) => verificationId = id,
       );
@@ -282,30 +283,25 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
               ),
               if (otpSent) ...[
                 const SizedBox(height: 15),
-                PinFieldAutoFill(
+                TextFormField(
                   controller: otpController,
-                  codeLength: 6,
-                  decoration: BoxLooseDecoration(
-                    gapSpace: 12,
-                    strokeColorBuilder: FixedColorBuilder(Color(0xFFC9A0DC)),
-                    bgColorBuilder: FixedColorBuilder(Colors.white),
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  decoration: const InputDecoration(
+                    labelText: "Enter OTP",
+                    counterText: "",
+                    border: OutlineInputBorder(),
                   ),
-                  onCodeChanged: (code) {
-                    if (code != null) {
-                      otpController.text = code;
-                      if (code.length == 6) {
-                        verifyOtp(); // optional: auto-submit when complete
-                      }
-                    }
-                  },
                 ),
                 const SizedBox(height: 10),
-                canResend
-                    ? TextButton(
-                        onPressed: sendOtp,
-                        child: const Text('Resend OTP'),
-                      )
-                    : Text('Resend in $countdown seconds'),
+                TextButton(
+                  onPressed: enableResend ? sendOtp : null,
+                  child: Text(
+                    enableResend
+                        ? "Resend OTP"
+                        : "Resend in $secondsRemaining sec",
+                  ),
+                ),
               ],
               const SizedBox(height: 25),
               ElevatedButton(
