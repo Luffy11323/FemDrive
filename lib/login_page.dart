@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:femdrive/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -218,6 +219,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
         .collection('users')
         .doc(user.uid)
         .get();
+
     if (!doc.exists) return _showError("User profile not found.");
 
     final data = doc.data()!;
@@ -229,23 +231,12 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       return _showError("Your account is pending admin approval.");
     }
 
-    String route;
-    switch (role) {
-      case 'admin':
-        route = '/admin';
-        break;
-      case 'driver':
-        route = '/driver-dashboard';
-        break;
-      case 'rider':
-        route = '/dashboard'; // ✅ Matches main.dart auto-login
-        break;
-      default:
-        return _showError("Invalid role: $role");
-    }
-
+    // ✅ Instead of routing manually, restart into FemDriveApp
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, route);
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const FemDriveApp()),
+    );
   }
 
   void _showError(String msg) {
