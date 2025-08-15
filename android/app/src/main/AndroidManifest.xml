@@ -34,7 +34,7 @@
     <!-- ===== Application ===== -->
     <application
         android:label="FemDrive"
-        android:name="com.company.FemDrive"
+        android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
         <provider
