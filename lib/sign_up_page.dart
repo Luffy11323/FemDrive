@@ -229,6 +229,16 @@ class _SignUpPageState extends State<SignUpPage> {
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
+      final primaryFormatted = formatPhoneNumber(phoneController.text.trim());
+      final altFormatted = formatPhoneNumber(altContactController.text.trim());
+
+      // Check if primary and alternate are the same
+      if (primaryFormatted == altFormatted) {
+        return showError(
+          'Alternate number cannot be the same as your primary number.',
+        );
+      }
+
       final user = userCred.user;
       if (user == null) throw Exception('Sign-in failed');
 
