@@ -26,6 +26,7 @@ android {
     }
 
     defaultConfig {
+        applicationId = "com.company.FemDrive"
 
 minSdk = (project.findProperty("MIN_SDK_VERSION")?.toString()?.toInt()
     ?: flutter.minSdkVersion)

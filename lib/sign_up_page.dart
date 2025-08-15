@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:camera/camera.dart';
-import 'package:image_cropper/image_cropper.dart';
-import 'package:image/image.dart' as img;
 import 'package:sms_autofill/sms_autofill.dart';
 
 class SignUpPage extends StatefulWidget {
@@ -19,18 +16,9 @@ class SignUpPage extends StatefulWidget {
 }
 
 class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
-  @override
-  void codeUpdated() {
-    if (code != null && isOtpSent) {
-      otpController.text = code!;
-      confirmOtp();
-    }
-  }
-
   final _formKey = GlobalKey<FormState>();
 
   final phoneController = TextEditingController();
-  final otpController = TextEditingController();
   final usernameController = TextEditingController();
   final carModelController = TextEditingController();
   final altContactController = TextEditingController();
@@ -49,35 +37,51 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   int resendSeconds = 60;
   Timer? _resendTimer;
 
-  late List<CameraDescription> _cameras;
+  // OTP controllers & focus
+  final int otpLength = 6;
+  late List<TextEditingController> otpControllers;
+  late List<FocusNode> otpFocusNodes;
 
   @override
   void initState() {
     super.initState();
-    _initCameras();
-    listenForCode();
-  }
+    otpControllers = List.generate(otpLength, (_) => TextEditingController());
+    otpFocusNodes = List.generate(otpLength, (_) => FocusNode());
 
-  Future<void> _initCameras() async {
-    try {
-      _cameras = await availableCameras();
-    } catch (e) {
-      showError("Camera initialization failed: $e");
-    }
+    // Start listening for SMS autofill (Android)
+    listenForCode();
   }
 
   @override
   void dispose() {
-    cancel();
+    cancel(); // stop sms_autofill listener
     phoneController.dispose();
-    otpController.dispose();
     usernameController.dispose();
     carModelController.dispose();
     altContactController.dispose();
+    for (var c in otpControllers) {
+      c.dispose();
+    }
+    for (var f in otpFocusNodes) {
+      f.dispose();
+    }
     _resendTimer?.cancel();
     super.dispose();
   }
 
+  // ======== SMS AutoFill hook ========
+  @override
+  void codeUpdated() {
+    final received = code ?? '';
+    if (received.isEmpty) return;
+    _fillOtpFromString(received);
+    if (received.replaceAll(RegExp(r'\D'), '').length >= otpLength) {
+      // Optional: auto-confirm when full code arrives
+      confirmOtp();
+    }
+  }
+
+  // ======== Helpers ========
   void startResendTimer() {
     setState(() {
       canResend = false;
@@ -93,64 +97,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     });
   }
 
-  /// New Camera + Cropper method
-  Future<void> _captureAndCrop(bool isLicense) async {
-    final capturedFile = await Navigator.push<File?>(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            DocumentCaptureScreen(isLicense: isLicense, cameras: _cameras),
-      ),
-    );
-
-    if (capturedFile == null) return;
-
-    final cropped = await ImageCropper().cropImage(
-      sourcePath: capturedFile.path,
-      aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 3),
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: isLicense ? 'Crop License' : 'Crop Birth Cert',
-          initAspectRatio: CropAspectRatioPreset.ratio4x3,
-          lockAspectRatio: false,
-        ),
-        IOSUiSettings(title: isLicense ? 'Crop License' : 'Crop Birth Cert'),
-      ],
-    );
-
-    if (cropped == null) return;
-
-    try {
-      final bytes = await File(cropped.path).readAsBytes();
-      final base64 = await compressAndEncodeBytes(bytes);
-
-      setState(() {
-        if (isLicense) {
-          licenseImage = File(cropped.path);
-          licenseBase64 = base64;
-        } else {
-          birthCertificateImage = File(cropped.path);
-          birthCertBase64 = base64;
-        }
-      });
-    } catch (e) {
-      showError('Image processing failed: $e');
-    }
-  }
-
-  Future<String> compressAndEncodeBytes(List<int> bytes) async {
-    final decoded = img.decodeImage(Uint8List.fromList(bytes));
-    if (decoded == null) throw Exception("Image decoding failed");
-    final resized = img.copyResize(decoded, width: 600);
-    final compressed = img.encodeJpg(resized, quality: 70);
-    return base64Encode(compressed);
-  }
-
   String formatPhoneNumber(String input) {
     final digits = input.replaceAll(RegExp(r'\D'), '');
-    if (kDebugMode) {
-      print('Cleaned phone: $digits');
-    } // For debugging
     if (digits.length != 11 || !digits.startsWith('03')) {
       throw Exception("Must be 11 digits starting with 03");
     }
@@ -167,21 +115,70 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     return snap.docs.isNotEmpty;
   }
 
-  String _mapFirebaseError(FirebaseAuthException e) {
-    switch (e.code) {
-      case 'invalid-phone-number':
-        return 'The phone number format is incorrect.';
-      case 'too-many-requests':
-        return 'Too many attempts. Please try again later.';
-      case 'session-expired':
-        return 'OTP session expired. Please request again.';
-      case 'invalid-verification-code':
-        return 'The OTP entered is incorrect.';
-      default:
-        return e.message ?? 'An unexpected authentication error occurred.';
+  void showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+  }
+
+  // ======== OTP logic ========
+  void _fillOtpFromString(String value) {
+    final clean = value.replaceAll(RegExp(r'\D'), '');
+    for (int i = 0; i < otpLength; i++) {
+      final char = i < clean.length ? clean[i] : '';
+      otpControllers[i].text = char;
+    }
+    if (clean.isNotEmpty) {
+      final nextIndex = clean.length.clamp(0, otpLength - 1);
+      FocusScope.of(context).requestFocus(otpFocusNodes[nextIndex]);
     }
   }
 
+  void _onOtpChanged(String value, int index) {
+    // Handle paste (multiple chars at once)
+    if (value.length > 1) {
+      _fillOtpFromString(value);
+      if (value.replaceAll(RegExp(r'\D'), '').length >= otpLength) {
+        FocusScope.of(context).unfocus();
+      }
+      return;
+    }
+
+    // Keep only the last digit typed and move forward
+    if (value.isNotEmpty) {
+      final last = value[value.length - 1];
+      otpControllers[index].text = last;
+      otpControllers[index].selection = TextSelection.collapsed(
+        offset: otpControllers[index].text.length,
+      );
+
+      if (index + 1 < otpLength) {
+        FocusScope.of(context).requestFocus(otpFocusNodes[index + 1]);
+      } else {
+        FocusScope.of(context).unfocus();
+      }
+    }
+  }
+
+  KeyEventResult _onOtpKey(FocusNode node, KeyEvent event, int index) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.backspace) {
+      if (otpControllers[index].text.isEmpty && index > 0) {
+        FocusScope.of(context).requestFocus(otpFocusNodes[index - 1]);
+        otpControllers[index - 1].text = '';
+        otpControllers[index - 1].selection = const TextSelection.collapsed(
+          offset: 0,
+        );
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  String _currentOtp() => otpControllers.map((e) => e.text).join();
+
+  // ======== Firebase flows ========
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -201,20 +198,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return showError('This phone number is already registered.');
       }
 
-      final confirmed = await _confirmNumberDialog(formatted);
-      if (!confirmed) return;
-
       setState(() => isSubmitting = true);
 
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
+          // Instant auto-verification (Android)
           await FirebaseAuth.instance.signInWithCredential(credential);
           await confirmOtp(autoCredential: credential);
         },
         verificationFailed: (FirebaseAuthException e) {
-          showError(_mapFirebaseError(e));
+          showError(e.message ?? 'Verification failed.');
         },
         codeSent: (id, _) {
           setState(() {
@@ -225,8 +220,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         },
         codeAutoRetrievalTimeout: (id) => verificationId = id,
       );
-    } on FirebaseAuthException catch (e) {
-      showError(_mapFirebaseError(e));
     } catch (e) {
       showError('Unexpected error: $e');
     } finally {
@@ -235,28 +228,25 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
-    if (!_formKey.currentState!.validate()) return;
     setState(() => isSubmitting = true);
-
     try {
+      final otpCode = _currentOtp();
       final credential =
           autoCredential ??
           PhoneAuthProvider.credential(
             verificationId: verificationId!,
-            smsCode: otpController.text.trim(),
+            smsCode: otpCode,
           );
 
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
+
       final primaryFormatted = formatPhoneNumber(phoneController.text.trim());
       final altFormatted = formatPhoneNumber(altContactController.text.trim());
 
-      // Check if primary and alternate are the same
       if (primaryFormatted == altFormatted) {
-        return showError(
-          'Alternate number cannot be the same as your primary number.',
-        );
+        return showError('Alternate number cannot be the same as primary.');
       }
 
       final user = userCred.user;
@@ -288,7 +278,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
     } on FirebaseAuthException catch (e) {
-      showError(_mapFirebaseError(e));
+      showError(e.message ?? 'Verification failed');
     } catch (e) {
       showError('Verification failed: $e');
     } finally {
@@ -296,40 +286,37 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  Future<bool> _confirmNumberDialog(String formatted) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Confirm Number'),
-            content: Text('Is this number correct?\n$formatted'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Edit'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Yes'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
-  void showError(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(
+  // ======== Camera capture (full-screen, preview, retake, use) ========
+  Future<void> _captureDocument(bool isLicense) async {
+    final file = await Navigator.push<File?>(
       context,
-    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+      MaterialPageRoute(builder: (_) => const FullScreenCamera()),
+    );
+
+    if (file == null) return;
+
+    setState(() => isSubmitting = true); // Show loading bar/spinner
+    try {
+      final bytes = await file.readAsBytes();
+      final base64 = base64Encode(bytes);
+
+      setState(() {
+        if (isLicense) {
+          licenseImage = file;
+          licenseBase64 = base64;
+        } else {
+          birthCertificateImage = file;
+          birthCertBase64 = base64;
+        }
+      });
+    } catch (e) {
+      showError('Failed to process image: $e');
+    } finally {
+      if (mounted) setState(() => isSubmitting = false);
+    }
   }
 
-  // ignore: unused_element
-  String _truncateFileName(String path) {
-    final fileName = path.split('/').last;
-    return fileName.length > 15 ? '${fileName.substring(0, 12)}...' : fileName;
-  }
-
+  // ======== UI ========
   @override
   Widget build(BuildContext context) {
     final fieldDecoration = const InputDecoration(
@@ -339,195 +326,231 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sign Up - FemDrive')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: usernameController,
-                decoration: fieldDecoration.copyWith(labelText: 'Username'),
-                validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-              ),
-              const SizedBox(height: 15),
-              TextFormField(
-                controller: phoneController,
-                decoration: fieldDecoration.copyWith(
-                  labelText: 'Phone (e.g. 0300-1234567)',
-                ),
-                keyboardType: TextInputType.phone,
-                validator: (v) {
-                  if (v == null || v.isEmpty) return 'Required';
-                  try {
-                    formatPhoneNumber(v);
-                    return null;
-                  } catch (e) {
-                    return e.toString().replaceAll('Exception: ', '');
-                  }
-                },
-              ),
-              if (isOtpSent) ...[
-                const SizedBox(height: 15),
-                PinFieldAutoFill(
-                  codeLength: 6,
-                  controller: otpController,
-                  decoration: BoxLooseDecoration(
-                    gapSpace: 12,
-                    strokeColorBuilder: FixedColorBuilder(Colors.purpleAccent),
-                    bgColorBuilder: FixedColorBuilder(Colors.white),
+      body: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Form(
+              key: _formKey,
+              child: ListView(
+                children: [
+                  TextFormField(
+                    controller: usernameController,
+                    decoration: fieldDecoration.copyWith(labelText: 'Username'),
+                    validator: (v) =>
+                        v == null || v.isEmpty ? 'Required' : null,
                   ),
-                  onCodeChanged: (code) {
-                    if (code != null && code.length == 6) {
-                      confirmOtp();
-                    }
-                  },
-                ),
-
-                const SizedBox(height: 10),
-                canResend
-                    ? TextButton(
-                        onPressed: sendOtp,
-                        child: const Text('Resend OTP'),
-                      )
-                    : Text('Resend in $resendSeconds seconds'),
-              ],
-              const SizedBox(height: 15),
-              DropdownButtonFormField<String>(
-                initialValue: role,
-                items: ['rider', 'driver']
-                    .map(
-                      (r) => DropdownMenuItem(
-                        value: r,
-                        child: Text(r.toUpperCase()),
+                  const SizedBox(height: 15),
+                  TextFormField(
+                    controller: phoneController,
+                    decoration: fieldDecoration.copyWith(
+                      labelText: 'Phone (e.g. 0300-1234567)',
+                    ),
+                    keyboardType: TextInputType.phone,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Required';
+                      try {
+                        formatPhoneNumber(v);
+                        return null;
+                      } catch (e) {
+                        return e.toString().replaceAll('Exception: ', '');
+                      }
+                    },
+                  ),
+                  if (isOtpSent) ...[
+                    const SizedBox(height: 15),
+                    _buildOtpFields(),
+                    const SizedBox(height: 10),
+                    canResend
+                        ? TextButton(
+                            onPressed: sendOtp,
+                            child: const Text('Resend OTP'),
+                          )
+                        : Text('Resend in $resendSeconds seconds'),
+                  ],
+                  const SizedBox(height: 15),
+                  DropdownButtonFormField<String>(
+                    initialValue: role,
+                    items: ['rider', 'driver']
+                        .map(
+                          (r) => DropdownMenuItem(
+                            value: r,
+                            child: Text(r.toUpperCase()),
+                          ),
+                        )
+                        .toList(),
+                    decoration: fieldDecoration.copyWith(
+                      labelText: 'Register as',
+                    ),
+                    onChanged: (v) => setState(() => role = v!),
+                  ),
+                  if (role == 'driver') ...[
+                    const SizedBox(height: 15),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedCarType,
+                      decoration: fieldDecoration.copyWith(
+                        labelText: 'Car Type',
                       ),
-                    )
-                    .toList(),
-                decoration: fieldDecoration.copyWith(labelText: 'Register as'),
-                onChanged: (v) => setState(() => role = v!),
-              ),
-              if (role == 'driver') ...[
-                const SizedBox(height: 15),
-                DropdownButtonFormField<String>(
-                  initialValue: selectedCarType,
-                  decoration: fieldDecoration.copyWith(labelText: 'Car Type'),
-                  items: carTypeList
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                      .toList(),
-                  onChanged: (v) => setState(() => selectedCarType = v!),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  controller: carModelController,
-                  decoration: fieldDecoration.copyWith(labelText: 'Car Model'),
-                  validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  controller: altContactController,
-                  decoration: fieldDecoration.copyWith(
-                    labelText: 'Alternate Number',
+                      items: carTypeList
+                          .map(
+                            (t) => DropdownMenuItem(value: t, child: Text(t)),
+                          )
+                          .toList(),
+                      onChanged: (v) => setState(() => selectedCarType = v!),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: carModelController,
+                      decoration: fieldDecoration.copyWith(
+                        labelText: 'Car Model',
+                      ),
+                      validator: (v) =>
+                          v == null || v.isEmpty ? 'Required' : null,
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: altContactController,
+                      decoration: fieldDecoration.copyWith(
+                        labelText: 'Alternate Number',
+                      ),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return 'Required';
+                        try {
+                          formatPhoneNumber(v);
+                          return null;
+                        } catch (e) {
+                          return e.toString().replaceAll('Exception: ', '');
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    _buildImageButton(true),
+                    const SizedBox(height: 10),
+                    _buildImageButton(false),
+                  ],
+                  const SizedBox(height: 25),
+                  ElevatedButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : isOtpSent
+                        ? confirmOtp
+                        : sendOtp,
+                    child: isSubmitting
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
                   ),
-                  keyboardType: TextInputType.phone,
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return 'Required';
-                    try {
-                      formatPhoneNumber(v);
-                      return null;
-                    } catch (e) {
-                      return e.toString().replaceAll('Exception: ', '');
-                    }
-                  },
-                ),
-                const SizedBox(height: 10),
-                _buildImageCaptureField(true),
-                const SizedBox(height: 10),
-                _buildImageCaptureField(false),
-              ],
-              const SizedBox(height: 25),
-              ElevatedButton(
-                onPressed: isSubmitting
-                    ? null
-                    : isOtpSent
-                    ? confirmOtp
-                    : sendOtp,
-                child: isSubmitting
-                    ? const CircularProgressIndicator()
-                    : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
+                  const SizedBox(height: 16),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+          if (isSubmitting)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(minHeight: 3),
+            ),
+        ],
       ),
     );
   }
 
-  Widget _buildImageCaptureField(bool isLicense) {
+  Widget _buildOtpFields() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(otpLength, (index) {
+        return SizedBox(
+          width: 48,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            child: Focus(
+              focusNode: otpFocusNodes[index],
+              onKeyEvent: (node, event) => _onOtpKey(node, event, index),
+              child: TextField(
+                controller: otpControllers[index],
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                maxLength: 1,
+                decoration: const InputDecoration(counterText: ''),
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (value) => _onOtpChanged(value, index),
+                onTap: () {
+                  // Always put caret at the end
+                  final text = otpControllers[index].text;
+                  otpControllers[index].selection = TextSelection.collapsed(
+                    offset: text.length,
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildImageButton(bool isLicense) {
     final file = isLicense ? licenseImage : birthCertificateImage;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (file != null)
           Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Image.file(file, height: 150, fit: BoxFit.cover),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(file, height: 160, fit: BoxFit.cover),
+              ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   TextButton(
-                    onPressed: () => _captureAndCrop(isLicense),
+                    onPressed: () => _captureDocument(isLicense),
                     child: const Text("Retake"),
                   ),
-                  const SizedBox(width: 10),
-                  TextButton(
-                    onPressed: () => _viewImage(file),
-                    child: const Text("View"),
+                  const SizedBox(width: 8),
+                  Text(
+                    isLicense
+                        ? "License selected"
+                        : "Birth certificate selected",
+                    style: const TextStyle(color: Colors.grey),
                   ),
                 ],
               ),
             ],
           )
         else
-          ElevatedButton(
-            onPressed: () => _captureAndCrop(isLicense),
-            child: Text(
+          ElevatedButton.icon(
+            onPressed: () => _captureDocument(isLicense),
+            icon: const Icon(Icons.camera_alt),
+            label: Text(
               isLicense ? "Capture License" : "Capture Birth Certificate",
             ),
           ),
       ],
     );
   }
-
-  void _viewImage(File file) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(),
-          body: Center(child: Image.file(file)),
-        ),
-      ),
-    );
-  }
 }
 
-class DocumentCaptureScreen extends StatefulWidget {
-  final bool isLicense;
-  final List<CameraDescription> cameras;
-
-  const DocumentCaptureScreen({
-    super.key,
-    required this.isLicense,
-    required this.cameras,
-  });
+// =================== Full-screen Camera ===================
+class FullScreenCamera extends StatefulWidget {
+  const FullScreenCamera({super.key});
 
   @override
-  State<DocumentCaptureScreen> createState() => _DocumentCaptureScreenState();
+  State<FullScreenCamera> createState() => _FullScreenCameraState();
 }
 
-class _DocumentCaptureScreenState extends State<DocumentCaptureScreen> {
+class _FullScreenCameraState extends State<FullScreenCamera> {
   CameraController? _controller;
-  bool _isReady = false;
+  XFile? _capturedFile;
+  bool _isCameraReady = false;
 
   @override
   void initState() {
@@ -536,14 +559,24 @@ class _DocumentCaptureScreenState extends State<DocumentCaptureScreen> {
   }
 
   Future<void> _initCamera() async {
-    _controller = CameraController(
-      widget.cameras.first,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    await _controller!.initialize();
-    if (!mounted) return;
-    setState(() => _isReady = true);
+    try {
+      final cameras = await availableCameras();
+      final camera = cameras.first;
+      _controller = CameraController(
+        camera,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+      await _controller!.initialize();
+      if (!mounted) return;
+      setState(() => _isCameraReady = true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -552,128 +585,90 @@ class _DocumentCaptureScreenState extends State<DocumentCaptureScreen> {
     super.dispose();
   }
 
-  void _captureImage() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
-    final picture = await _controller!.takePicture();
-    await _controller?.dispose();
-    _controller = null;
-    if (!mounted) return;
-    Navigator.pop(context, File(picture.path));
+  Future<void> _takePicture() async {
+    if (!(_controller?.value.isInitialized ?? false)) return;
+    final file = await _controller!.takePicture();
+    setState(() {
+      _capturedFile = file;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_isCameraReady) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: !_isReady
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
+      body: _capturedFile == null
+          ? Stack(
               children: [
-                CameraPreview(_controller!),
-                Positioned.fill(
-                  child: CustomPaint(painter: DocumentFramePainter()),
+                Positioned.fill(child: CameraPreview(_controller!)),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 12,
+                  left: 12,
+                  child: IconButton(
+                    color: Colors.white,
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ],
+            )
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.file(File(_capturedFile!.path), fit: BoxFit.cover),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 12,
+                  left: 12,
+                  child: IconButton(
+                    color: Colors.white,
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ),
                 Positioned(
-                  bottom: 40,
+                  bottom: 30,
                   left: 0,
                   right: 0,
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      FloatingActionButton(
-                        backgroundColor: Colors.white,
-                        onPressed: _captureImage,
-                        child: const Icon(
-                          Icons.camera_alt,
-                          color: Colors.black,
-                          size: 28,
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
                         ),
+                        onPressed: () => setState(() => _capturedFile = null),
+                        child: const Text("Retake"),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () =>
+                            Navigator.pop(context, File(_capturedFile!.path)),
+                        child: const Text("Use Photo"),
                       ),
                     ],
                   ),
                 ),
-                Positioned(
-                  top: 40,
-                  left: 0,
-                  right: 0,
-                  child: Text(
-                    widget.isLicense
-                        ? "Align your LICENSE in the frame"
-                        : "Align your BIRTH CERTIFICATE in the frame",
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                ),
               ],
             ),
+      floatingActionButton: _capturedFile == null
+          ? FloatingActionButton(
+              backgroundColor: Colors.white,
+              onPressed: _takePicture,
+              child: const Icon(Icons.camera_alt, color: Colors.black),
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
-}
-
-class DocumentFramePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(
-      size.width * 0.1,
-      size.height * 0.25,
-      size.width * 0.8,
-      size.height * 0.4,
-    );
-
-    final borderPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-
-    canvas.drawRect(rect, borderPaint);
-
-    final cornerPaint = Paint()
-      ..color = Colors.greenAccent
-      ..strokeWidth = 4;
-
-    const cornerLength = 20.0;
-    canvas.drawLine(
-      rect.topLeft,
-      rect.topLeft + const Offset(cornerLength, 0),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.topLeft,
-      rect.topLeft + const Offset(0, cornerLength),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.topRight,
-      rect.topRight - const Offset(cornerLength, 0),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.topRight,
-      rect.topRight + const Offset(0, cornerLength),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.bottomLeft,
-      rect.bottomLeft + const Offset(cornerLength, 0),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.bottomLeft,
-      rect.bottomLeft - const Offset(0, cornerLength),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.bottomRight,
-      rect.bottomRight - const Offset(cornerLength, 0),
-      cornerPaint,
-    );
-    canvas.drawLine(
-      rect.bottomRight,
-      rect.bottomRight - const Offset(0, cornerLength),
-      cornerPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }

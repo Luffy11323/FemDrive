@@ -4,6 +4,7 @@
     <!-- ===== Permissions ===== -->
     <!-- Storage & Media -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="23"/>
     
     <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -32,9 +33,20 @@
 
     <!-- ===== Application ===== -->
     <application
-        android:label="femdrive"
-        android:name="${applicationName}"
+        android:label="FemDrive"
+        android:name="com.company.FemDrive"
         android:icon="@mipmap/ic_launcher">
+
+        <provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.fileprovider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/provider_paths"/>
+</provider>
+
 
         <!-- Main Activity -->
         <activity
