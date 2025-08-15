@@ -9,7 +9,7 @@ plugins {
 }
 
 android {
-    namespace = "com.company.Femdrive"
+    namespace = "com.company.FemDrive"
     compileSdk = flutter.compileSdkVersion
 
     // Set NDK version to highest needed (Fixes mismatch)
