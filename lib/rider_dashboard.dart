@@ -25,8 +25,14 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
     Future.microtask(() {
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
     });
+  }
 
-    // 🚀 Listen to ride state changes
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(riderDashboardProvider);
+    final user = FirebaseAuth.instance.currentUser;
+
+    // ✅ Correct place for ref.listen
     ref.listen(riderDashboardProvider, (previous, next) async {
       next.whenOrNull(
         data: (rideDoc) async {
@@ -46,8 +52,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               rideId,
               user!.uid,
             );
-            if (!exists && mounted) {
-              if (!context.mounted) return;
+            if (!exists && context.mounted) {
               showDialog(
                 context: context,
                 builder: (_) => RatingDialog(
@@ -59,7 +64,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                       rating: stars.toDouble(),
                       comment: comment,
                     );
-                    if (mounted) Navigator.pop(context);
+                    if (context.mounted) Navigator.pop(context);
                   },
                 ),
               );
@@ -75,12 +80,6 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
         },
       );
     });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final state = ref.watch(riderDashboardProvider);
-    final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Rider Dashboard')),
