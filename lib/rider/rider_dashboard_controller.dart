@@ -36,6 +36,34 @@ class RiderDashboardController
     );
   }
 
+  /// 🚀 Create a new ride request
+  Future<void> createRide(
+    String pickup,
+    String dropoff,
+    double fare,
+    GeoPoint pickupLocation,
+    GeoPoint dropoffLocation,
+  ) async {
+    try {
+      final docRef = await fire.collection('rides').add({
+        'riderId': uid,
+        'pickup': pickup,
+        'dropoff': dropoff,
+        'pickupLocation': pickupLocation,
+        'dropoffLocation': dropoffLocation,
+        'fare': fare,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // After creating, fetch the active ride
+      final newRide = await docRef.get();
+      state = AsyncData(newRide);
+    } catch (e, st) {
+      state = AsyncError(e, st);
+    }
+  }
+
   Future<void> cancelRide(String rideId) async {
     try {
       await fire.collection('rides').doc(rideId).update({

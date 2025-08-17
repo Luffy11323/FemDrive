@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:femdrive/location/location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,17 +22,22 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   void initState() {
     super.initState();
 
-    // 🚀 Fetch active ride on load
-    Future.microtask(() {
-      ref.read(riderDashboardProvider.notifier).fetchActiveRide();
-    });
-
-    // ✅ Move ref.listen here (not inside build)
+    // ✅ Fetch active ride after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.listen<AsyncValue>(riderDashboardProvider, (previous, next) async {
+      ref.read(riderDashboardProvider.notifier).fetchActiveRide();
+
+      // Listen for ride state changes
+      ref.listen<AsyncValue<DocumentSnapshot?>>(riderDashboardProvider, (
+        previous,
+        next,
+      ) async {
         next.whenOrNull(
           data: (rideDoc) async {
-            if (rideDoc == null) return;
+            if (rideDoc == null) {
+              _trackingStarted = false;
+              _ratingShown = false;
+              return;
+            }
 
             final data = rideDoc.data() as Map<String, dynamic>;
             final status = data['status'];
@@ -48,7 +54,6 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                 user!.uid,
               );
               if (!exists && mounted) {
-                if (!context.mounted) return;
                 showDialog(
                   context: context,
                   builder: (_) => RatingDialog(
@@ -72,6 +77,13 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                 !_trackingStarted) {
               _trackingStarted = true;
               LocationService().startTracking('rider', rideId);
+            }
+
+            // Reset tracking if ride ends or is cancelled
+            if ((status == 'completed' || status == 'cancelled') &&
+                _trackingStarted) {
+              _trackingStarted = false;
+              LocationService().stop();
             }
           },
         );
@@ -110,14 +122,22 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               leading: const Icon(Icons.logout),
               title: const Text('Logout'),
               onTap: () async {
+                // Stop tracking on logout
+                if (_trackingStarted) {
+                  _trackingStarted = false;
+                  LocationService().stop();
+                }
+
                 await FirebaseAuth.instance.signOut();
                 if (!context.mounted) return;
                 Navigator.popUntil(context, (r) => r.isFirst);
 
-                // 🔥 Show feedback after logout
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('You have been logged out')),
                 );
+
+                // Reset rating flag for next session
+                _ratingShown = false;
               },
             ),
           ],
