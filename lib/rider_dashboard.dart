@@ -19,18 +19,19 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   bool _ratingShown = false;
 
   @override
+  @override
   void initState() {
     super.initState();
 
-    // ✅ Fetch active ride after build
+    // ✅ Fetch active ride after first build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
 
-      // Listen for ride state changes
+      // Listen for ride state changes safely
       ref.listen<AsyncValue<DocumentSnapshot?>>(riderDashboardProvider, (
-        previous,
+        prev,
         next,
-      ) async {
+      ) {
         next.whenOrNull(
           data: (rideDoc) async {
             if (rideDoc == null) {
@@ -45,7 +46,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             final rideId = rideDoc.id;
             final user = FirebaseAuth.instance.currentUser;
 
-            // --- Handle completed ride & rating dialog ---
+            // --- Handle completed ride & rating dialog safely ---
             if (status == 'completed' && !_ratingShown && driverId != null) {
               _ratingShown = true;
 
@@ -53,22 +54,27 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                 rideId,
                 user!.uid,
               );
+
               if (!exists && mounted) {
-                showDialog(
-                  context: context,
-                  builder: (_) => RatingDialog(
-                    onSubmit: (stars, comment) async {
-                      await RatingService().submitRating(
-                        rideId: rideId,
-                        fromUid: user.uid,
-                        toUid: driverId,
-                        rating: stars.toDouble(),
-                        comment: comment,
-                      );
-                      if (mounted) Navigator.pop(context);
-                    },
-                  ),
-                );
+                // Ensure context is fully attached
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  showDialog(
+                    context: context,
+                    builder: (_) => RatingDialog(
+                      onSubmit: (stars, comment) async {
+                        await RatingService().submitRating(
+                          rideId: rideId,
+                          fromUid: user.uid,
+                          toUid: driverId,
+                          rating: stars.toDouble(),
+                          comment: comment,
+                        );
+                        if (mounted) Navigator.pop(context);
+                      },
+                    ),
+                  );
+                });
               }
             }
 
@@ -122,22 +128,38 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               leading: const Icon(Icons.logout),
               title: const Text('Logout'),
               onTap: () async {
-                // Stop tracking on logout
+                // Stop tracking safely
                 if (_trackingStarted) {
                   _trackingStarted = false;
                   LocationService().stop();
                 }
 
-                await FirebaseAuth.instance.signOut();
-                if (!context.mounted) return;
-                Navigator.popUntil(context, (r) => r.isFirst);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('You have been logged out')),
-                );
-
                 // Reset rating flag for next session
                 _ratingShown = false;
+
+                try {
+                  await FirebaseAuth.instance.signOut();
+                } catch (e) {
+                  // Optional: show snackbar if sign-out fails
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Logout failed: $e')),
+                    );
+                  }
+                  return;
+                }
+
+                // Navigate safely after sign-out
+                if (!mounted) return;
+                // Use addPostFrameCallback to ensure context is valid
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  Navigator.popUntil(context, (route) => route.isFirst);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('You have been logged out')),
+                    );
+                  }
+                });
               },
             ),
           ],
