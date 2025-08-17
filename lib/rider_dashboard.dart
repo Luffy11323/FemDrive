@@ -142,6 +142,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                 } catch (e) {
                   // Optional: show snackbar if sign-out fails
                   if (mounted) {
+                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Logout failed: $e')),
                     );
