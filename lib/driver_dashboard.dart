@@ -245,41 +245,42 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     });
 
     // Listen to pending requests once; show dialog for first nearby request not shown yet
-    ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
-      prev,
-      next,
-    ) async {
-      final list = next.asData?.value ?? const <PendingRequest>[];
-      if (list.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
+        prev,
+        next,
+      ) async {
+        final list = next.asData?.value ?? const <PendingRequest>[];
+        if (list.isEmpty) return;
 
-      // ensure driver geohash (prefix) ready for proximity
-      await _ensureDriverHashPrefix();
+        await _ensureDriverHashPrefix();
 
-      for (final req in list) {
-        if (_shownRequestIds.contains(req.rideId)) continue;
-        final prefix = _driverGeoHashPrefix;
-        bool isNearby = true;
-        if (prefix != null && prefix.isNotEmpty) {
-          try {
-            final ph = _geoHasher.encode(
-              req.pickupLat,
-              req.pickupLng,
-              precision: GeoCfg.popupProximityPrecision,
+        for (final req in list) {
+          if (_shownRequestIds.contains(req.rideId)) continue;
+          final prefix = _driverGeoHashPrefix;
+          bool isNearby = true;
+          if (prefix != null && prefix.isNotEmpty) {
+            try {
+              final ph = _geoHasher.encode(
+                req.pickupLat,
+                req.pickupLng,
+                precision: GeoCfg.popupProximityPrecision,
+              );
+              final checkLen = min(prefix.length, 4);
+              isNearby = ph.startsWith(prefix.substring(0, checkLen));
+            } catch (_) {}
+          }
+
+          if (isNearby && mounted) {
+            _shownRequestIds.add(req.rideId);
+            showDialog(
+              context: context,
+              builder: (_) => RidePopupWidget(request: req),
             );
-            final checkLen = min(prefix.length, 4);
-            isNearby = ph.startsWith(prefix.substring(0, checkLen));
-          } catch (_) {}
+            break;
+          }
         }
-
-        if (isNearby && mounted) {
-          _shownRequestIds.add(req.rideId);
-          showDialog(
-            context: context,
-            builder: (_) => RidePopupWidget(request: req),
-          );
-          break;
-        }
-      }
+      });
     });
   }
 
