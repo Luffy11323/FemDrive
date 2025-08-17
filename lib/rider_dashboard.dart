@@ -1,17 +1,14 @@
 import 'package:femdrive/location/location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-// ignore: unused_import
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-// ignore: unused_import
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'rider/rider_dashboard_controller.dart';
-import 'rider/rider_services.dart'; // Single point of access for RideForm, RideStatusCard, etc.
+import 'rider/rider_services.dart';
 
 class RiderDashboardPage extends ConsumerStatefulWidget {
   const RiderDashboardPage({super.key});
+
   @override
   ConsumerState<RiderDashboardPage> createState() => _RiderDashboardPageState();
 }
@@ -23,7 +20,61 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   @override
   void initState() {
     super.initState();
-    ref.read(riderDashboardProvider.notifier).fetchActiveRide();
+
+    // 🚀 Fetch active ride on load
+    Future.microtask(() {
+      ref.read(riderDashboardProvider.notifier).fetchActiveRide();
+    });
+
+    // 🚀 Listen to ride state changes
+    ref.listen(riderDashboardProvider, (previous, next) async {
+      next.whenOrNull(
+        data: (rideDoc) async {
+          if (rideDoc == null) return;
+
+          final data = rideDoc.data() as Map<String, dynamic>;
+          final status = data['status'];
+          final driverId = data['driverId'];
+          final rideId = rideDoc.id;
+          final user = FirebaseAuth.instance.currentUser;
+
+          // --- Handle completed ride & rating dialog ---
+          if (status == 'completed' && !_ratingShown && driverId != null) {
+            _ratingShown = true;
+
+            final exists = await RatingService().hasAlreadyRated(
+              rideId,
+              user!.uid,
+            );
+            if (!exists && mounted) {
+              if (!context.mounted) return;
+              showDialog(
+                context: context,
+                builder: (_) => RatingDialog(
+                  onSubmit: (stars, comment) async {
+                    await RatingService().submitRating(
+                      rideId: rideId,
+                      fromUid: user.uid,
+                      toUid: driverId,
+                      rating: stars.toDouble(),
+                      comment: comment,
+                    );
+                    if (mounted) Navigator.pop(context);
+                  },
+                ),
+              );
+            }
+          }
+
+          // --- Handle accepted/in_progress ride & tracking ---
+          if ((status == 'accepted' || status == 'in_progress') &&
+              !_trackingStarted) {
+            _trackingStarted = true;
+            LocationService().startTracking('rider', rideId);
+          }
+        },
+      );
+    });
   }
 
   @override
@@ -56,9 +107,15 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             ListTile(
               leading: const Icon(Icons.logout),
               title: const Text('Logout'),
-              onTap: () {
-                FirebaseAuth.instance.signOut();
+              onTap: () async {
+                await FirebaseAuth.instance.signOut();
+                if (!context.mounted) return;
                 Navigator.popUntil(context, (r) => r.isFirst);
+
+                // 🔥 Show feedback after logout
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('You have been logged out')),
+                );
               },
             ),
           ],
@@ -76,48 +133,12 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             );
           }
 
-          final data = rideDoc.data() as Map<String, dynamic>;
-          final status = data['status'];
-          final driverId = data['driverId'];
-          final rideId = rideDoc.id;
-
-          if (status == 'completed' && !_ratingShown && driverId != null) {
-            _ratingShown = true;
-            RatingService().hasAlreadyRated(rideId, user!.uid).then((exists) {
-              if (!exists && mounted) {
-                showDialog(
-                  // ignore: use_build_context_synchronously
-                  context: context,
-                  builder: (_) => RatingDialog(
-                    onSubmit: (stars, comment) async {
-                      await RatingService().submitRating(
-                        rideId: rideId,
-                        fromUid: user.uid,
-                        toUid: driverId,
-                        rating: stars.toDouble(),
-                        comment: comment,
-                      );
-                      // ignore: use_build_context_synchronously
-                      if (mounted) Navigator.pop(context);
-                    },
-                  ),
-                );
-              }
-            });
-          }
-
-          if ((status == 'accepted' || status == 'in_progress') &&
-              !_trackingStarted) {
-            _trackingStarted = true;
-            LocationService().startTracking('rider', rideId);
-          }
-
           return RideStatusCard(
             ride: rideDoc,
             onCancel: () async {
               await ref
                   .read(riderDashboardProvider.notifier)
-                  .cancelRide(rideId);
+                  .cancelRide(rideDoc.id);
             },
           );
         },

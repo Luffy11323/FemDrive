@@ -1,105 +1,153 @@
+// lib/driver/driver_dashboard.dart
+// Dashboard: Riverpod-first, no duplicate Firebase listeners, clean pending popup.
+
 // ignore: unnecessary_library_name
 library driver_dashboard;
 
 import 'dart:async';
-import 'package:femdrive/location/location_service.dart';
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dart_geohash/dart_geohash.dart';
+import 'package:femdrive/driver/driver_services.dart';
+import 'package:femdrive/driver/driver_ride_details_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
-import '../driver/driver_services.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:dart_geohash/dart_geohash.dart';
-import 'package:femdrive/location/directions_service.dart';
 
-/// Earnings summary widget
-class EarningsSummaryWidget extends StatelessWidget {
+/// Earnings + past rides (kept here as they are dashboard-only)
+class EarningsSummary {
+  final int totalRides;
+  final double totalEarnings;
+  const EarningsSummary({
+    required this.totalRides,
+    required this.totalEarnings,
+  });
+}
+
+final _auth = FirebaseAuth.instance;
+final _fire = FirebaseFirestore.instance;
+final _rtdb = FirebaseDatabase.instance.ref();
+
+final earningsProvider = FutureProvider.autoDispose<EarningsSummary>((
+  ref,
+) async {
+  final user = _auth.currentUser;
+  if (user == null) {
+    return const EarningsSummary(totalRides: 0, totalEarnings: 0);
+  }
+  final q = await _fire
+      .collection(AppPaths.ridesCollection)
+      .where('driverId', isEqualTo: user.uid)
+      .where('status', isEqualTo: RideStatus.completed)
+      .get();
+
+  double total = 0;
+  for (final d in q.docs) {
+    total += (d.data()['fare'] as num?)?.toDouble() ?? 0.0;
+  }
+  return EarningsSummary(totalRides: q.docs.length, totalEarnings: total);
+});
+
+final pastRidesProvider =
+    StreamProvider.autoDispose<QuerySnapshot<Map<String, dynamic>>>((ref) {
+      final user = _auth.currentUser;
+      if (user == null) return const Stream.empty();
+      return _fire
+          .collection(AppPaths.ridesCollection)
+          .where('driverId', isEqualTo: user.uid)
+          .where('status', isEqualTo: RideStatus.completed)
+          .orderBy('completedAt', descending: true)
+          .snapshots();
+    });
+
+class EarningsSummaryWidget extends ConsumerWidget {
   const EarningsSummaryWidget({super.key});
   @override
-  Widget build(BuildContext ctx) {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return const SizedBox.shrink();
-
-    return FutureBuilder<QuerySnapshot>(
-      future: FirebaseFirestore.instance
-          .collection('rides')
-          .where('driverId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'completed')
-          .get(),
-      builder: (ctx, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final docs = snap.data?.docs ?? [];
-        final total = docs.fold<double>(
-          0,
-          // ignore: avoid_types_as_parameter_names
-          (sum, d) => sum + (d['fare'] as num).toDouble(),
-        );
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Total Rides: ${docs.length}'),
-              const SizedBox(height: 4),
-              Text('Total Earnings: \$${total.toStringAsFixed(2)}'),
-            ],
-          ),
-        );
-      },
+  Widget build(BuildContext context, WidgetRef ref) {
+    final e = ref.watch(earningsProvider);
+    return e.when(
+      data: (s) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Total Rides: ${s.totalRides}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            Expanded(
+              child: Text(
+                'Total Earnings: \$${s.totalEarnings.toStringAsFixed(2)}',
+                textAlign: TextAlign.end,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+      loading: () => const Padding(
+        padding: EdgeInsets.all(16),
+        child: LinearProgressIndicator(),
+      ),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text('Earnings unavailable'),
+      ),
     );
   }
 }
 
-/// Past rides list widget
-class PastRidesListWidget extends StatelessWidget {
+class PastRidesListWidget extends ConsumerWidget {
   const PastRidesListWidget({super.key});
   @override
-  Widget build(BuildContext ctx) {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return const SizedBox.shrink();
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('rides')
-          .where('driverId', isEqualTo: user.uid)
-          .where('status', isEqualTo: 'completed')
-          .orderBy('completedAt', descending: true)
-          .snapshots(),
-      builder: (ctx, snap) {
-        if (!snap.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.data!.docs.isEmpty) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final snap = ref.watch(pastRidesProvider);
+    return snap.when(
+      data: (qSnap) {
+        if (qSnap.docs.isEmpty) {
           return const Center(child: Text('No past rides yet.'));
         }
-        return ListView.builder(
-          itemCount: snap.data!.docs.length,
+        return ListView.separated(
+          itemCount: qSnap.docs.length,
+          separatorBuilder: (_, _) => const Divider(height: 1),
           itemBuilder: (ctx, i) {
-            final d = snap.data!.docs[i].data()! as Map<String, dynamic>;
-            final ts = d['completedAt'] as Timestamp?;
+            final raw = qSnap.docs[i].data();
+            final fare = (raw['fare'] as num?)?.toDouble();
+            final ts = raw['completedAt'] as Timestamp?;
             final dt = ts?.toDate();
+            final fareStr = fare != null
+                ? '\$${fare.toStringAsFixed(2)}'
+                : '--';
+            final dateStr = dt != null ? dt.toLocal().toString() : '-';
             return ListTile(
-              title: Text('${d['pickup']} → ${d['dropoff']}'),
-              subtitle: Text('Fare: \$${d['fare']} • ${dt?.toLocal() ?? '-'}'),
-              trailing: Text(d['status'].toString().toUpperCase()),
+              dense: true,
+              title: Text('${raw['pickup'] ?? '-'} → ${raw['dropoff'] ?? '-'}'),
+              subtitle: Text('Fare: $fareStr • $dateStr'),
+              trailing: Text(
+                (raw['status'] ?? '').toString().toUpperCase(),
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
             );
           },
         );
       },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('Failed to load past rides')),
     );
   }
 }
 
-/// Idle dashboard view (no active ride)
 class IdleDashboard extends StatelessWidget {
   const IdleDashboard({super.key});
   @override
-  Widget build(BuildContext ctx) {
+  Widget build(BuildContext context) {
     return Column(
       children: const [
         EarningsSummaryWidget(),
@@ -109,7 +157,67 @@ class IdleDashboard extends StatelessWidget {
   }
 }
 
-/// Main Driver Dashboard
+/// Ride request popup (Riverpod-only; no duplicate listeners)
+class RidePopupWidget extends ConsumerWidget {
+  final PendingRequest request;
+  const RidePopupWidget({super.key, required this.request});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return AlertDialog(
+      title: const Text('New Ride Request'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (request.pickupLabel != null) Text('From: ${request.pickupLabel}'),
+          if (request.dropoffLabel != null) Text('To: ${request.dropoffLabel}'),
+          Text(
+            'Pickup: ${request.pickupLat.toStringAsFixed(4)}, ${request.pickupLng.toStringAsFixed(4)}',
+          ),
+          Text(
+            'Dropoff: ${request.dropoffLat.toStringAsFixed(4)}, ${request.dropoffLng.toStringAsFixed(4)}',
+          ),
+          if (request.fare != null)
+            Text('Fare: \$${(request.fare as num).toStringAsFixed(2)}'),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Decline'),
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            try {
+              await ref
+                  .read(driverDashboardProvider.notifier)
+                  .acceptRide(request.rideId, context: request);
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Accept failed: $e')));
+              }
+              return;
+            }
+            if (context.mounted) {
+              Navigator.of(context).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      DriverRideDetailsPage(rideId: request.rideId), // ✅ fix
+                ),
+              );
+            }
+          },
+          child: const Text('Accept'),
+        ),
+      ],
+    );
+  }
+}
+
 class DriverDashboard extends ConsumerStatefulWidget {
   const DriverDashboard({super.key});
   @override
@@ -118,118 +226,106 @@ class DriverDashboard extends ConsumerStatefulWidget {
 
 class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   bool _isOnline = false;
-  bool _trackingStarted = false;
-  bool _mapReady = false;
-
-  GoogleMapController? _mapController;
-  final Set<Marker> _markers = {};
-  Polyline? _pickupPolyline;
-  Polyline? _dropoffPolyline;
-
-  late StreamSubscription _connSub;
-  final _geo = GeoHasher();
-  final _rtdb = FirebaseDatabase.instance.ref();
-  StreamSubscription<DatabaseEvent>? _rideReqSub;
-  String? _pickupHash;
+  late final StreamSubscription<List<ConnectivityResult>> _connSub;
+  final _geoHasher = GeoHasher();
+  String? _driverGeoHashPrefix; // for proximity filtering
+  final Set<String> _shownRequestIds =
+      {}; // prevent duplicate dialogs in session
 
   @override
   void initState() {
     super.initState();
-    _connSub = Connectivity().onConnectivityChanged.listen((status) {
-      // ignore: unrelated_type_equality_checks
-      if (status == ConnectivityResult.none && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No internet. Working offline...'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+    _connSub = Connectivity().onConnectivityChanged.listen((results) {
+      final connected =
+          results.contains(ConnectivityResult.mobile) ||
+          results.contains(ConnectivityResult.wifi);
+      if (kDebugMode) {
+        debugPrint(connected ? 'Internet Connected' : 'No Internet');
       }
     });
-    _subscribeRequests();
+
+    // Listen to pending requests once; show dialog for first nearby request not shown yet
+    ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
+      prev,
+      next,
+    ) async {
+      final list = next.asData?.value ?? const <PendingRequest>[];
+      if (list.isEmpty) return;
+
+      // ensure driver geohash (prefix) ready for proximity
+      await _ensureDriverHashPrefix();
+
+      for (final req in list) {
+        if (_shownRequestIds.contains(req.rideId)) continue;
+        final prefix = _driverGeoHashPrefix;
+        bool isNearby = true;
+        if (prefix != null && prefix.isNotEmpty) {
+          try {
+            final ph = _geoHasher.encode(
+              req.pickupLat,
+              req.pickupLng,
+              precision: GeoCfg.popupProximityPrecision,
+            );
+            final checkLen = min(prefix.length, 4);
+            isNearby = ph.startsWith(prefix.substring(0, checkLen));
+          } catch (_) {}
+        }
+
+        if (isNearby && mounted) {
+          _shownRequestIds.add(req.rideId);
+          showDialog(
+            context: context,
+            builder: (_) => RidePopupWidget(request: req),
+          );
+          break;
+        }
+      }
+    });
+  }
+
+  Future<void> _ensureDriverHashPrefix() async {
+    if (_driverGeoHashPrefix != null) return;
+    final user = _auth.currentUser;
+    if (user == null) return;
+    try {
+      final snap = await _rtdb
+          .child(AppPaths.driversOnline)
+          .child(user.uid)
+          .child('geohash')
+          .get();
+      if (snap.exists && snap.value is String) {
+        _driverGeoHashPrefix = (snap.value as String).substring(0, 5);
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      _driverGeoHashPrefix = _geoHasher.encode(
+        pos.latitude,
+        pos.longitude,
+        precision: 5,
+      );
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _connSub.cancel();
-    _rideReqSub?.cancel();
     super.dispose();
   }
 
-  void _subscribeRequests() {
-    _rideReqSub?.cancel();
-    if (!_isOnline) return;
-
-    _rideReqSub = _rtdb.child('rides_pending').onChildAdded.listen((evt) {
-      final d = Map<String, dynamic>.from(evt.snapshot.value as Map);
-      final hash = _geo.encode(d['pickupLat'], d['pickupLng'], precision: 5);
-      if (_pickupHash != null && hash.startsWith(_pickupHash!)) {
-        if (mounted) {
-          showDialog(context: context, builder: (_) => const RidePopupWidget());
-        }
-      }
-    });
-  }
-
-  void _toggleOnline(bool v) async {
+  Future<void> _toggleOnline(bool v) async {
     setState(() => _isOnline = v);
     if (v) {
       await DriverLocationService().startOnlineMode();
-      _subscribeRequests();
-
-      if (!_trackingStarted && mounted) {
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          _trackingStarted = true;
-          LocationService().startTracking(user.uid, 'driver');
-          final pos = await Geolocator.getCurrentPosition();
-          _pickupHash = _geo.encode(pos.latitude, pos.longitude, precision: 5);
-        }
-      }
+      await _ensureDriverHashPrefix();
     } else {
       await DriverLocationService().goOffline();
-      _rideReqSub?.cancel();
-    }
-  }
-
-  void _addMarker(String id, LatLng p) {
-    final old = _markers.firstWhere(
-      (m) => m.markerId.value == id,
-      orElse: () => Marker(markerId: MarkerId(id)),
-    );
-    final updated = old.copyWith(positionParam: p);
-    setState(() {
-      _markers.removeWhere((m) => m.markerId.value == id);
-      _markers.add(updated);
-    });
-  }
-
-  Future<void> _syncPolyline(Map<String, dynamic> data) async {
-    final p = LatLng(data['pickupLat'], data['pickupLng']);
-    final d = LatLng(data['dropoffLat'], data['dropoffLng']);
-    final route = await DirectionsService.getRoute(p, d);
-    if (mounted && route != null) {
-      final pts = List<LatLng>.from(route['polyline']);
-      setState(() {
-        _pickupPolyline = Polyline(
-          polylineId: const PolylineId('pickup'),
-          color: Colors.green,
-          width: 5,
-          points: pts,
-        );
-        _dropoffPolyline = Polyline(
-          polylineId: const PolylineId('dropoff'),
-          color: Colors.blue,
-          width: 5,
-          points: pts,
-        );
-      });
     }
   }
 
   @override
-  Widget build(BuildContext ctx) {
-    final state = ref.watch(driverDashboardProvider);
+  Widget build(BuildContext context) {
+    final ride = ref.watch(driverDashboardProvider);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Driver Dashboard'),
@@ -243,91 +339,92 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         ],
       ),
       drawer: Drawer(
-        child: Column(
-          children: [
-            UserAccountsDrawerHeader(
-              accountName: Text(
-                FirebaseAuth.instance.currentUser?.displayName ?? '',
+        child: SafeArea(
+          child: Column(
+            children: [
+              UserAccountsDrawerHeader(
+                accountName: Text(_auth.currentUser?.displayName ?? ''),
+                accountEmail: Text(_auth.currentUser?.email ?? ''),
+                currentAccountPicture: const CircleAvatar(
+                  child: Icon(Icons.person),
+                ),
               ),
-              accountEmail: Text(
-                FirebaseAuth.instance.currentUser?.email ?? '',
+              const ListTile(
+                leading: Icon(Icons.account_balance_wallet),
+                title: Text('Earnings Summary'),
               ),
-              currentAccountPicture: const CircleAvatar(
-                child: Icon(Icons.person),
+              const Divider(height: 1),
+              const Expanded(child: PastRidesListWidget()),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('Logout'),
+                onTap: () async {
+                  await DriverLocationService().goOffline();
+                  await _auth.signOut();
+                  if (!mounted) return;
+                  // ignore: use_build_context_synchronously
+                  Navigator.of(context).popUntil((r) => r.isFirst);
+                },
               ),
-            ),
-            const ListTile(
-              leading: Icon(Icons.account_balance_wallet),
-              title: Text('Earnings Summary'),
-            ),
-            const Divider(height: 1),
-            const Expanded(child: PastRidesListWidget()),
-            ListTile(
-              leading: const Icon(Icons.logout),
-              title: const Text('Logout'),
-              onTap: () async {
-                await DriverLocationService().goOffline();
-                await FirebaseAuth.instance.signOut();
-                // ignore: use_build_context_synchronously
-                if (mounted) Navigator.popUntil(ctx, (r) => r.isFirst);
-              },
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-      body: state.when(
+      body: ride.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: ${e.toString()}')),
-        data: (rideDoc) {
-          if (rideDoc == null) return const IdleDashboard();
+        data: (doc) {
+          if (doc == null) return const IdleDashboard();
 
-          return StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('rides')
-                .doc(rideDoc.id)
-                .snapshots(),
-            builder: (ctx, snap) {
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final data = snap.data!.data() as Map<String, dynamic>;
+          // Live ride doc -> render embedded map here for quick glance
+          final data = doc.data();
+          if (data == null) {
+            return const Center(child: Text('Ride data unavailable.'));
+          }
+          final rideId = doc.id;
 
-              final lat = data['driverLat'] as double?;
-              final lng = data['driverLng'] as double?;
-              if (_mapReady && lat != null && lng != null) {
-                final p = LatLng(lat, lng);
-                _mapController?.animateCamera(CameraUpdate.newLatLng(p));
-                _addMarker('driver', p);
-              }
-
-              _syncPolyline(data);
-
-              return GoogleMap(
-                initialCameraPosition: CameraPosition(
-                  target: LatLng(data['pickupLat'], data['pickupLng']),
-                  zoom: 14,
+          return GoogleMap(
+            initialCameraPosition: CameraPosition(
+              target: data['pickupLat'] is num && data['pickupLng'] is num
+                  ? LatLng(
+                      (data['pickupLat'] as num).toDouble(),
+                      (data['pickupLng'] as num).toDouble(),
+                    )
+                  : const LatLng(0, 0),
+              zoom: 14,
+            ),
+            markers: {
+              if (data['pickupLat'] is num && data['pickupLng'] is num)
+                Marker(
+                  markerId: const MarkerId('pickup'),
+                  position: LatLng(
+                    (data['pickupLat'] as num).toDouble(),
+                    (data['pickupLng'] as num).toDouble(),
+                  ),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure,
+                  ),
                 ),
-                markers: {
-                  ..._markers,
-                  Marker(
-                    markerId: const MarkerId('pickup'),
-                    position: LatLng(data['pickupLat'], data['pickupLng']),
+              if (data['dropoffLat'] is num && data['dropoffLng'] is num)
+                Marker(
+                  markerId: const MarkerId('dropoff'),
+                  position: LatLng(
+                    (data['dropoffLat'] as num).toDouble(),
+                    (data['dropoffLng'] as num).toDouble(),
                   ),
-                  Marker(
-                    markerId: const MarkerId('dropoff'),
-                    position: LatLng(data['dropoffLat'], data['dropoffLng']),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueGreen,
                   ),
-                },
-                polylines: {
-                  if (_pickupPolyline != null) _pickupPolyline!,
-                  if (_dropoffPolyline != null) _dropoffPolyline!,
-                },
-                onMapCreated: (ctrl) {
-                  _mapController = ctrl;
-                  _mapReady = true;
-                },
-                myLocationEnabled: true,
-                myLocationButtonEnabled: true,
+                ),
+            },
+            myLocationEnabled: true,
+            myLocationButtonEnabled: true,
+            onTap: (_) {
+              // Navigate to full ride details
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => DriverRideDetailsPage(rideId: rideId),
+                ),
               );
             },
           );

@@ -14,7 +14,9 @@ import 'driver_dashboard.dart';
 import 'rider_dashboard.dart';
 import 'admin.dart';
 import 'rider/rider_services.dart';
+// ignore: unused_import
 import 'driver/driver_services.dart';
+import 'driver/driver_ride_details_page.dart' as details;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -142,7 +144,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
         '/past-rides': (context) => const PastRidesPage(),
         '/driver-ride-details': (context) {
           final rideId = ModalRoute.of(context)!.settings.arguments as String;
-          return DriverRideDetailsPage(rideId: rideId);
+          return details.DriverRideDetailsPage(rideId: rideId);
         },
       },
     );
