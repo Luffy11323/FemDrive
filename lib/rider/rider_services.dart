@@ -436,6 +436,30 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _logout() async {
+    // Stop any services here if needed (tracking, etc.)
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Navigator.popUntil(context, (r) => r.isFirst);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You have been logged out')),
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext c) {
     return Scaffold(
@@ -531,10 +555,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.redAccent,
                   ),
-                  onPressed: () {
-                    FirebaseAuth.instance.signOut();
-                    Navigator.popUntil(context, (r) => r.isFirst);
-                  },
+                  onPressed: _logout,
                 ),
               ],
             ),

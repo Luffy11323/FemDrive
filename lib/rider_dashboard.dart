@@ -19,11 +19,10 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   bool _ratingShown = false;
 
   @override
-  @override
   void initState() {
     super.initState();
 
-    // ✅ Fetch active ride after first build
+    // Fetch active ride after first build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
 
@@ -46,7 +45,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             final rideId = rideDoc.id;
             final user = FirebaseAuth.instance.currentUser;
 
-            // --- Handle completed ride & rating dialog safely ---
+            // Handle completed ride & rating dialog safely
             if (status == 'completed' && !_ratingShown && driverId != null) {
               _ratingShown = true;
 
@@ -56,7 +55,6 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               );
 
               if (!exists && mounted) {
-                // Ensure context is fully attached
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted) return;
                   showDialog(
@@ -78,7 +76,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               }
             }
 
-            // --- Handle accepted/in_progress ride & tracking ---
+            // Handle accepted/in_progress ride & tracking
             if ((status == 'accepted' || status == 'in_progress') &&
                 !_trackingStarted) {
               _trackingStarted = true;
@@ -140,9 +138,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                 try {
                   await FirebaseAuth.instance.signOut();
                 } catch (e) {
-                  // Optional: show snackbar if sign-out fails
                   if (mounted) {
-                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Logout failed: $e')),
                     );
@@ -150,9 +146,8 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                   return;
                 }
 
-                // Navigate safely after sign-out
                 if (!mounted) return;
-                // Use addPostFrameCallback to ensure context is valid
+
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   Navigator.popUntil(context, (route) => route.isFirst);
                   if (mounted) {
