@@ -139,6 +139,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                   await FirebaseAuth.instance.signOut();
                 } catch (e) {
                   if (mounted) {
+                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Logout failed: $e')),
                     );
