@@ -249,6 +249,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void initState() {
     super.initState();
+
+    // Existing connectivity listener
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
           results.contains(ConnectivityResult.mobile) ||
@@ -258,6 +260,30 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       }
     });
 
+    // ---------- VERIFIED AUTO-LOGOUT LISTENER ----------
+    getDriverUid().then((uid) {
+      if (uid == null) return;
+      _fire.collection('users').doc(uid).snapshots().listen((snap) async {
+        if (!mounted) return;
+        final data = snap.data();
+        if (data == null) return;
+        final isVerified = data['verified'] as bool? ?? true;
+        if (!isVerified) {
+          // Stop tracking / online mode
+          await DriverLocationService().goOffline();
+          // Sign out Firebase
+          await _auth.signOut();
+          if (!mounted) return;
+          // Navigate to root
+          Navigator.of(context).popUntil((r) => r.isFirst);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('You have been logged out.')),
+          );
+        }
+      });
+    });
+
+    // Existing pending requests listener
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
         prev,
