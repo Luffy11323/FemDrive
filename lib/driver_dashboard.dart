@@ -1,6 +1,7 @@
 // lib/driver/driver_dashboard.dart
 // Dashboard: Riverpod-first, no duplicate Firebase listeners, clean pending popup.
 
+// ignore: unnecessary_library_name
 library driver_dashboard;
 
 import 'dart:async';
@@ -376,6 +377,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                   await DriverLocationService().goOffline();
                   await _auth.signOut();
                   if (!mounted) return;
+                  // ignore: use_build_context_synchronously
                   Navigator.of(context).popUntil((r) => r.isFirst);
                 },
               ),
