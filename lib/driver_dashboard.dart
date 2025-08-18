@@ -1,7 +1,6 @@
 // lib/driver/driver_dashboard.dart
 // Dashboard: Riverpod-first, no duplicate Firebase listeners, clean pending popup.
 
-// ignore: unnecessary_library_name
 library driver_dashboard;
 
 import 'dart:async';
@@ -34,16 +33,30 @@ final _auth = FirebaseAuth.instance;
 final _fire = FirebaseFirestore.instance;
 final _rtdb = FirebaseDatabase.instance.ref();
 
+/// ---------- UID MECHANISM UPDATED ----------
+String? universalUid; // will hold the driver UID globally
+
+Future<String?> getDriverUid() async {
+  if (universalUid != null) return universalUid;
+  final user = _auth.currentUser;
+  if (user != null) {
+    universalUid = user.uid;
+    return universalUid;
+  }
+  return null;
+}
+
+/// ---------- Providers using universal UID ----------
 final earningsProvider = FutureProvider.autoDispose<EarningsSummary>((
   ref,
 ) async {
-  final user = _auth.currentUser;
-  if (user == null) {
+  final uid = await getDriverUid();
+  if (uid == null) {
     return const EarningsSummary(totalRides: 0, totalEarnings: 0);
   }
   final q = await _fire
       .collection(AppPaths.ridesCollection)
-      .where('driverId', isEqualTo: user.uid)
+      .where('driverId', isEqualTo: uid)
       .where('status', isEqualTo: RideStatus.completed)
       .get();
 
@@ -55,12 +68,15 @@ final earningsProvider = FutureProvider.autoDispose<EarningsSummary>((
 });
 
 final pastRidesProvider =
-    StreamProvider.autoDispose<QuerySnapshot<Map<String, dynamic>>>((ref) {
-      final user = _auth.currentUser;
-      if (user == null) return const Stream.empty();
-      return _fire
+    StreamProvider.autoDispose<QuerySnapshot<Map<String, dynamic>>>((
+      ref,
+    ) async* {
+      final uid = await getDriverUid();
+      if (uid == null) return;
+
+      yield* _fire
           .collection(AppPaths.ridesCollection)
-          .where('driverId', isEqualTo: user.uid)
+          .where('driverId', isEqualTo: uid)
           .where('status', isEqualTo: RideStatus.completed)
           .orderBy('completedAt', descending: true)
           .snapshots();
@@ -157,7 +173,6 @@ class IdleDashboard extends StatelessWidget {
   }
 }
 
-/// Ride request popup (Riverpod-only; no duplicate listeners)
 class RidePopupWidget extends ConsumerWidget {
   final PendingRequest request;
   const RidePopupWidget({super.key, required this.request});
@@ -205,8 +220,7 @@ class RidePopupWidget extends ConsumerWidget {
               Navigator.of(context).pop();
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) =>
-                      DriverRideDetailsPage(rideId: request.rideId), // ✅ fix
+                  builder: (_) => DriverRideDetailsPage(rideId: request.rideId),
                 ),
               );
             }
@@ -229,8 +243,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
   final _geoHasher = GeoHasher();
   String? _driverGeoHashPrefix; // for proximity filtering
-  final Set<String> _shownRequestIds =
-      {}; // prevent duplicate dialogs in session
+  final Set<String> _shownRequestIds = {};
 
   @override
   void initState() {
@@ -244,7 +257,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       }
     });
 
-    // Listen to pending requests once; show dialog for first nearby request not shown yet
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
         prev,
@@ -286,12 +298,13 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
   Future<void> _ensureDriverHashPrefix() async {
     if (_driverGeoHashPrefix != null) return;
-    final user = _auth.currentUser;
-    if (user == null) return;
+    final uid = await getDriverUid();
+    if (uid == null) return;
+
     try {
       final snap = await _rtdb
           .child(AppPaths.driversOnline)
-          .child(user.uid)
+          .child(uid)
           .child('geohash')
           .get();
       if (snap.exists && snap.value is String) {
@@ -363,7 +376,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                   await DriverLocationService().goOffline();
                   await _auth.signOut();
                   if (!mounted) return;
-                  // ignore: use_build_context_synchronously
                   Navigator.of(context).popUntil((r) => r.isFirst);
                 },
               ),
@@ -377,7 +389,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         data: (doc) {
           if (doc == null) return const IdleDashboard();
 
-          // Live ride doc -> render embedded map here for quick glance
           final data = doc.data();
           if (data == null) {
             return const Center(child: Text('Ride data unavailable.'));
@@ -421,7 +432,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
             onTap: (_) {
-              // Navigate to full ride details
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => DriverRideDetailsPage(rideId: rideId),

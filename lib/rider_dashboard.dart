@@ -18,9 +18,37 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   bool _trackingStarted = false;
   bool _ratingShown = false;
 
+  /// Universal UID to be used anywhere in the dashboard
+  String? universalUid;
+
   @override
   void initState() {
     super.initState();
+
+    // Fetch and set universal UID
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      universalUid = currentUser.uid;
+
+      // Show a popup with UID on login (for testing)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Logged-in UID'),
+              content: Text('Your UID is: $universalUid'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      });
+    }
 
     // Fetch active ride after first build
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -43,7 +71,9 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             final status = data['status'];
             final driverId = data['driverId'];
             final rideId = rideDoc.id;
-            final user = FirebaseAuth.instance.currentUser;
+
+            // Use universalUid if FirebaseAuth fails
+            final uid = universalUid ?? FirebaseAuth.instance.currentUser?.uid;
 
             // Handle completed ride & rating dialog safely
             if (status == 'completed' && !_ratingShown && driverId != null) {
@@ -51,7 +81,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
 
               final exists = await RatingService().hasAlreadyRated(
                 rideId,
-                user!.uid,
+                uid!,
               );
 
               if (!exists && mounted) {
@@ -63,7 +93,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                       onSubmit: (stars, comment) async {
                         await RatingService().submitRating(
                           rideId: rideId,
-                          fromUid: user.uid,
+                          fromUid: uid,
                           toUid: driverId,
                           rating: stars.toDouble(),
                           comment: comment,
