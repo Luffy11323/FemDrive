@@ -25,12 +25,12 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   void initState() {
     super.initState();
 
-    // Fetch and set universal UID
+    // Existing universal UID logic
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       universalUid = currentUser.uid;
 
-      // Show a popup with UID on login (for testing)
+      // Optional: test popup
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           showDialog(
@@ -48,13 +48,42 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
           );
         }
       });
+
+      // ---------- VERIFIED AUTO-LOGOUT LISTENER ----------
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(universalUid)
+          .snapshots()
+          .listen((snap) async {
+            if (!mounted) return;
+            final data = snap.data();
+            if (data == null) return;
+            final isVerified = data['verified'] as bool? ?? true;
+            if (!isVerified) {
+              // Stop tracking and reset rating
+              if (_trackingStarted) {
+                _trackingStarted = false;
+                LocationService().stop();
+              }
+              _ratingShown = false;
+
+              // Sign out Firebase
+              await FirebaseAuth.instance.signOut();
+              if (!mounted) return;
+
+              // Navigate to root safely
+              Navigator.popUntil(context, (route) => route.isFirst);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('You have been logged out')),
+              );
+            }
+          });
     }
 
-    // Fetch active ride after first build
+    // Existing ride fetching and listener logic
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
 
-      // Listen for ride state changes safely
       ref.listen<AsyncValue<DocumentSnapshot?>>(riderDashboardProvider, (
         prev,
         next,
@@ -71,11 +100,8 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             final status = data['status'];
             final driverId = data['driverId'];
             final rideId = rideDoc.id;
-
-            // Use universalUid if FirebaseAuth fails
             final uid = universalUid ?? FirebaseAuth.instance.currentUser?.uid;
 
-            // Handle completed ride & rating dialog safely
             if (status == 'completed' && !_ratingShown && driverId != null) {
               _ratingShown = true;
 
@@ -106,14 +132,12 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               }
             }
 
-            // Handle accepted/in_progress ride & tracking
             if ((status == 'accepted' || status == 'in_progress') &&
                 !_trackingStarted) {
               _trackingStarted = true;
               LocationService().startTracking('rider', rideId);
             }
 
-            // Reset tracking if ride ends or is cancelled
             if ((status == 'completed' || status == 'cancelled') &&
                 _trackingStarted) {
               _trackingStarted = false;
