@@ -42,10 +42,18 @@ class FemDriveApp extends StatefulWidget {
 }
 
 class _FemDriveAppState extends State<FemDriveApp> {
+  String? _lastKnownUid;
+
   @override
   void initState() {
     super.initState();
     _setupFCM();
+  }
+
+  String? getSafeUid() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) _lastKnownUid = uid;
+    return uid ?? _lastKnownUid;
   }
 
   Future<void> _setupFCM() async {
@@ -54,20 +62,20 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
     // Initial token setup
     final token = await fbm.getToken();
-    final user = FirebaseAuth.instance.currentUser;
-    if (token != null && user != null) {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update(
-        {'fcmToken': token},
-      );
+    final uid = getSafeUid();
+    if (token != null && uid != null) {
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'fcmToken': token,
+      });
     }
 
     // Token refresh listener
     fbm.onTokenRefresh.listen((newToken) async {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser != null) {
+      final currentUid = getSafeUid();
+      if (currentUid != null) {
         await FirebaseFirestore.instance
             .collection('users')
-            .doc(currentUser.uid)
+            .doc(currentUid)
             .update({'fcmToken': newToken});
       }
     });
@@ -108,11 +116,11 @@ class _FemDriveAppState extends State<FemDriveApp> {
         arguments: rideId,
       );
     } else if (action == 'RIDER_STATUS') {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
+      final uid = getSafeUid();
+      if (uid != null) {
         final doc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(uid)
             .get();
         if (doc.exists) {
           final role = doc['role'];
@@ -143,7 +151,8 @@ class _FemDriveAppState extends State<FemDriveApp> {
         '/profile': (context) => const ProfilePage(),
         '/past-rides': (context) => const PastRidesPage(),
         '/driver-ride-details': (context) {
-          final rideId = ModalRoute.of(context)!.settings.arguments as String;
+          final rideId = ModalRoute.of(context)?.settings.arguments as String?;
+          if (rideId == null) return const LoginPage(); // fallback
           return details.DriverRideDetailsPage(rideId: rideId);
         },
       },
@@ -160,14 +169,11 @@ class _FemDriveAppState extends State<FemDriveApp> {
           );
         }
 
-        final user = snapshot.data;
-        if (user == null) return const LoginPage();
+        final uid = getSafeUid();
+        if (uid == null) return const LoginPage();
 
         return FutureBuilder<DocumentSnapshot>(
-          future: FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .get(),
+          future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
           builder: (context, snap) {
             if (!snap.hasData) {
               return const Scaffold(
@@ -178,9 +184,6 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
             final data = snap.data!.data() as Map<String, dynamic>;
             final role = data['role'];
-            final isVerified = data['verified'] == true;
-
-            if (role == 'driver' && !isVerified) return const LoginPage();
 
             switch (role) {
               case 'admin':

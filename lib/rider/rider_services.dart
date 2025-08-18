@@ -107,16 +107,27 @@ class PlaceService {
 }
 
 /// RIDE SERVICE
-
 class RideService {
   final _fire = FirebaseFirestore.instance;
   final _rtdb = FirebaseDatabase.instance;
-  final String userId = FirebaseAuth.instance.currentUser!.uid;
+
+  /// Keep track of last successful UID
+  String? _lastUid;
+
+  /// Always get the current UID dynamically, fallback to last successful one
+  String? get userId {
+    final current = FirebaseAuth.instance.currentUser?.uid;
+    if (current != null) _lastUid = current;
+    return current ?? _lastUid;
+  }
 
   Stream<DocumentSnapshot?> listenActiveRide() {
+    final uid = userId;
+    if (uid == null) return const Stream.empty();
+
     return _fire
         .collection('rides')
-        .where('riderId', isEqualTo: userId)
+        .where('riderId', isEqualTo: uid)
         .where('status', whereIn: ['pending', 'accepted', 'in_progress'])
         .orderBy('createdAt', descending: false)
         .limit(1)
@@ -125,10 +136,12 @@ class RideService {
   }
 
   Future<void> requestRide(Map<String, dynamic> data) async {
+    final uid = userId;
+    if (uid == null) return;
+
     final doc = await _fire.collection('rides').add(data);
     final rideId = doc.id;
 
-    // Push to RTDB for driver discovery
     await _rtdb.ref('rides_pending/$rideId').set({
       'pickup': data['pickup'],
       'dropoff': data['dropoff'],
@@ -137,24 +150,22 @@ class RideService {
       'dropoffLat': data['dropoffLat'],
       'dropoffLng': data['dropoffLng'],
       'fare': data['fare'],
-      'riderId': userId,
+      'riderId': uid,
       'rideId': rideId,
       'createdAt': ServerValue.timestamp,
     });
 
-    // Trigger backend notification
     await http.post(
       Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'riderId': userId,
-        'status': 'pending',
-        'rideId': rideId,
-      }),
+      body: jsonEncode({'riderId': uid, 'status': 'pending', 'rideId': rideId}),
     );
   }
 
   Future<void> cancelRide(String id) async {
+    final uid = userId;
+    if (uid == null) return;
+
     await _fire.collection('rides').doc(id).update({
       'status': 'cancelled',
       'cancelledAt': FieldValue.serverTimestamp(),
@@ -165,18 +176,17 @@ class RideService {
     await http.post(
       Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'riderId': userId,
-        'status': 'cancelled',
-        'rideId': id,
-      }),
+      body: jsonEncode({'riderId': uid, 'status': 'cancelled', 'rideId': id}),
     );
   }
 
   Stream<QuerySnapshot> pastRides() {
+    final uid = userId;
+    if (uid == null) return const Stream.empty();
+
     return _fire
         .collection('rides')
-        .where('riderId', isEqualTo: userId)
+        .where('riderId', isEqualTo: uid)
         .where('status', whereIn: ['cancelled', 'completed'])
         .orderBy('createdAt', descending: true)
         .snapshots();
@@ -186,13 +196,24 @@ class RideService {
 /// USER SERVICE
 class UserService {
   final _fire = FirebaseFirestore.instance;
-  final String uid = FirebaseAuth.instance.currentUser!.uid;
+
+  String? _lastUid;
+
+  String? get uid {
+    final current = FirebaseAuth.instance.currentUser?.uid;
+    if (current != null) _lastUid = current;
+    return current ?? _lastUid;
+  }
 
   Stream<DocumentSnapshot> userStream() {
+    final uid = this.uid;
+    if (uid == null) throw Exception('No UID available');
     return _fire.collection('users').doc(uid).snapshots();
   }
 
   Future<void> updateProfile(Map<String, dynamic> data) async {
+    final uid = this.uid;
+    if (uid == null) return;
     await _fire.collection('users').doc(uid).update(data);
   }
 }
@@ -231,18 +252,36 @@ class RatingService {
 }
 
 /// PAST RIDES PAGE
-class PastRidesPage extends StatelessWidget {
+class PastRidesPage extends StatefulWidget {
   const PastRidesPage({super.key});
 
   @override
+  State<PastRidesPage> createState() => _PastRidesPageState();
+}
+
+class _PastRidesPageState extends State<PastRidesPage> {
+  String? _lastUid;
+
+  String? get uid {
+    final current = FirebaseAuth.instance.currentUser?.uid;
+    if (current != null) _lastUid = current;
+    return current ?? _lastUid;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final currentUid = uid;
+
+    if (currentUid == null) {
+      return const Scaffold(body: Center(child: Text('No user logged in.')));
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Past Rides')),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('rides')
-            .where('riderId', isEqualTo: uid)
+            .where('riderId', isEqualTo: currentUid)
             .where('status', whereIn: ['completed', 'cancelled'])
             .orderBy('createdAt', descending: true)
             .snapshots(),
@@ -526,6 +565,14 @@ class _RideStatusCardState extends State<RideStatusCard> {
   Polyline? _polyline;
   String? _eta;
 
+  /// Fallback for last successful UID
+  String? _lastUid;
+  String? get currentUid {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) _lastUid = uid;
+    return uid ?? _lastUid;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -634,7 +681,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
                 ),
                 const SizedBox(height: 8),
                 Text("Status: ${status.toUpperCase()}"),
-                Text("fare: \$$fare"),
+                Text("Fare: \$$fare"),
                 Text("Driver: $driver"),
                 const SizedBox(height: 10),
                 if (status == 'accepted')
@@ -643,8 +690,15 @@ class _RideStatusCardState extends State<RideStatusCard> {
                       backgroundColor: Colors.redAccent,
                     ),
                     onPressed: () async {
-                      final currentUid = FirebaseAuth.instance.currentUser!.uid;
-                      final isDriver = data['driverId'] == currentUid;
+                      final uid = currentUid;
+                      if (uid == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('User not available.')),
+                        );
+                        return;
+                      }
+
+                      final isDriver = data['driverId'] == uid;
                       final otherUid = isDriver
                           ? data['riderId']
                           : data['driverId'];
@@ -660,7 +714,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
 
                       await EmergencyService.sendEmergency(
                         rideId: rideId,
-                        currentUid: currentUid,
+                        currentUid: uid,
                         otherUid: otherUid,
                       );
 
@@ -710,8 +764,16 @@ class _RideFormState extends State<RideForm> {
   final Set<Marker> _markers = {};
   String? activeRideId;
 
+  String? _lastUid;
   final ps = PlaceService();
   final ms = MapService();
+
+  /// Always get current UID, fallback to last known successful UID
+  String? get uid {
+    final current = FirebaseAuth.instance.currentUser?.uid;
+    if (current != null) _lastUid = current;
+    return current ?? _lastUid;
+  }
 
   Future<void> calculateDetails() async {
     setState(() => loading = true);
@@ -760,6 +822,7 @@ class _RideFormState extends State<RideForm> {
 
   @override
   Widget build(BuildContext context) {
+    final currentUid = uid;
     return Column(
       children: [
         SizedBox(
@@ -776,7 +839,7 @@ class _RideFormState extends State<RideForm> {
                 myLocationEnabled: true,
                 myLocationButtonEnabled: true,
               ),
-              if (activeRideId != null)
+              if (activeRideId != null && currentUid != null)
                 StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('rides')
@@ -834,7 +897,11 @@ class _RideFormState extends State<RideForm> {
                     ),
               const SizedBox(height: 8),
               ElevatedButton(
-                onPressed: fare != null && pcLL != null && dcLL != null
+                onPressed:
+                    (fare != null &&
+                        pcLL != null &&
+                        dcLL != null &&
+                        currentUid != null)
                     ? () async {
                         widget.onSubmit(
                           pc.text.trim(),
@@ -845,10 +912,7 @@ class _RideFormState extends State<RideForm> {
                         );
                         final latest = await FirebaseFirestore.instance
                             .collection('rides')
-                            .where(
-                              'riderId',
-                              isEqualTo: FirebaseAuth.instance.currentUser!.uid,
-                            )
+                            .where('riderId', isEqualTo: currentUid)
                             .orderBy('createdAt', descending: true)
                             .limit(1)
                             .get();

@@ -13,18 +13,40 @@ class RiderDashboardController
   RiderDashboardController() : super(const AsyncLoading());
 
   final fire = FirebaseFirestore.instance;
-  final uid = FirebaseAuth.instance.currentUser!.uid;
 
-  Stream<DocumentSnapshot?> get rideStream => fire
-      .collection('rides')
-      .where('riderId', isEqualTo: uid)
-      .where('status', whereIn: ['pending', 'accepted', 'in_progress'])
-      .orderBy('createdAt', descending: false)
-      .limit(1)
-      .snapshots()
-      .map((s) => s.docs.isNotEmpty ? s.docs.first : null);
+  /// Store last known UID as fallback
+  String? _lastUid;
 
+  /// Always get the current UID dynamically, fallback to last known
+  String? get uid {
+    final current = FirebaseAuth.instance.currentUser?.uid;
+    if (current != null) _lastUid = current;
+    return current ?? _lastUid;
+  }
+
+  /// Stream active ride safely
+  Stream<DocumentSnapshot?> get rideStream {
+    final currentUid = uid;
+    if (currentUid == null) return const Stream.empty();
+
+    return fire
+        .collection('rides')
+        .where('riderId', isEqualTo: currentUid)
+        .where('status', whereIn: ['pending', 'accepted', 'in_progress'])
+        .orderBy('createdAt', descending: false)
+        .limit(1)
+        .snapshots()
+        .map((s) => s.docs.isNotEmpty ? s.docs.first : null);
+  }
+
+  /// Fetch active ride
   void fetchActiveRide() {
+    final currentUid = uid;
+    if (currentUid == null) {
+      state = const AsyncData(null);
+      return;
+    }
+
     state = const AsyncLoading();
     rideStream.listen(
       (doc) {
@@ -36,7 +58,7 @@ class RiderDashboardController
     );
   }
 
-  /// 🚀 Create a new ride request
+  /// Create a new ride request
   Future<void> createRide(
     String pickup,
     String dropoff,
@@ -44,9 +66,12 @@ class RiderDashboardController
     GeoPoint pickupLocation,
     GeoPoint dropoffLocation,
   ) async {
+    final currentUid = uid;
+    if (currentUid == null) return;
+
     try {
       final docRef = await fire.collection('rides').add({
-        'riderId': uid,
+        'riderId': currentUid,
         'pickup': pickup,
         'dropoff': dropoff,
         'pickupLocation': pickupLocation,
@@ -56,7 +81,6 @@ class RiderDashboardController
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // After creating, fetch the active ride
       final newRide = await docRef.get();
       state = AsyncData(newRide);
     } catch (e, st) {
@@ -64,7 +88,11 @@ class RiderDashboardController
     }
   }
 
+  /// Cancel an active ride
   Future<void> cancelRide(String rideId) async {
+    final currentUid = uid;
+    if (currentUid == null) return;
+
     try {
       await fire.collection('rides').doc(rideId).update({
         'status': 'cancelled',
