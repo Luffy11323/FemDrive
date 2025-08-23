@@ -244,14 +244,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': role == 'rider',
+        'verified': role == 'rider' ? true : false,
         if (role == 'driver') ...{
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
-          'altContact': altContactController.text.trim(),
-          'licenseBase64': licenseBase64,
-          'birthCertificateBase64': birthCertBase64,
-          'verified': false,
+          'altContact': altContactController.text.replaceAll(RegExp(r'\D'), ''),
+          'licenseBase64': licenseBase64 ?? '',
+          'birthCertificateBase64': birthCertBase64 ?? '',
         },
       };
 
