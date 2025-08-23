@@ -1,9 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -280,7 +280,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (role == 'driver' && !validateDriverFields()) {
-      return; // hard stop before any network call
+      return;
     }
 
     setState(() => isSubmitting = true);
@@ -312,9 +312,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      // ---------------- Driver uploads (REQUIRED) ----------------
-      String? licenseUrl;
-      String? birthCertUrl;
+      // ---------------- Driver Base64 Images (SPARK PLAN COMPATIBLE) ----------------
+      String? licenseBase64;
+      String? birthCertBase64;
 
       if (role == 'driver') {
         // Alt contact must differ from primary
@@ -325,47 +325,43 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           return;
         }
 
-        // Guard again (defensive)
-        if (licenseImage == null) {
-          showError('Driver license image is required.');
-          return;
-        }
-        if (birthCertificateImage == null) {
-          showError('Birth certificate image is required.');
-          return;
-        }
-
-        final folder = FirebaseStorage.instance.ref().child(
-          'users/${user.uid}/driver-docs',
-        );
-
-        final ts = DateTime.now().millisecondsSinceEpoch;
-
-        try {
-          // license
-          final licenseRef = folder.child('license_$ts.jpg');
-          final licenseTask = await licenseRef.putFile(
-            licenseImage!,
-            SettableMetadata(contentType: 'image/jpeg'),
-          );
-          licenseUrl = await licenseTask.ref.getDownloadURL();
-        } catch (e) {
-          showError('Failed to upload license. Please retake and try again.');
+        if (licenseImage == null || birthCertificateImage == null) {
+          showError('Both license and birth certificate images are required.');
           return;
         }
 
         try {
-          // birth certificate
-          final birthRef = folder.child('birth_certificate_$ts.jpg');
-          final birthTask = await birthRef.putFile(
-            birthCertificateImage!,
-            SettableMetadata(contentType: 'image/jpeg'),
-          );
-          birthCertUrl = await birthTask.ref.getDownloadURL();
+          showInfo('Processing license image...');
+
+          // Convert license to Base64
+          final licenseBytes = await licenseImage!.readAsBytes();
+          licenseBase64 = base64Encode(licenseBytes);
+
+          // Check if Base64 is too large (Firestore document limit is 1MB)
+          if (licenseBase64.length > 800000) {
+            // ~800KB limit to be safe
+            showError(
+              'License image is too large. Please retake with lower quality.',
+            );
+            return;
+          }
+
+          showInfo('Processing birth certificate image...');
+
+          // Convert birth certificate to Base64
+          final birthCertBytes = await birthCertificateImage!.readAsBytes();
+          birthCertBase64 = base64Encode(birthCertBytes);
+
+          if (birthCertBase64.length > 800000) {
+            showError(
+              'Birth certificate image is too large. Please retake with lower quality.',
+            );
+            return;
+          }
+
+          showInfo('Images processed successfully. Creating profile...');
         } catch (e) {
-          showError(
-            'Failed to upload birth certificate. Please retake and try again.',
-          );
+          showError('Failed to process images: $e');
           return;
         }
       }
@@ -374,7 +370,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final primaryLocal = phoneController.text.replaceAll(RegExp(r'\D'), '');
       final doc = <String, dynamic>{
         'uid': user.uid,
-        'phone': primaryLocal, // store local 03xxxxxxxxx
+        'phone': primaryLocal,
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
@@ -390,8 +386,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
           'altContact': altLocal,
-          'licenseUrl': licenseUrl, // guaranteed non-null here
-          'birthCertificateUrl': birthCertUrl, // guaranteed non-null here
+          'licenseImage': licenseBase64!, // Base64 string instead of URL
+          'birthCertificateImage':
+              birthCertBase64!, // Base64 string instead of URL
+          'documentsUploaded': true,
+          'uploadTimestamp': FieldValue.serverTimestamp(),
         });
       }
 
@@ -400,37 +399,94 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           .doc(user.uid)
           .set(doc);
 
+      showInfo('Registration completed successfully!');
+
+      if (!mounted) return;
+      await Future.delayed(const Duration(seconds: 1));
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/login');
     } on FirebaseAuthException catch (e) {
       showError(e.message ?? 'Verification failed');
     } catch (e) {
-      showError('Verification failed: $e');
+      showError('Registration failed: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
   }
 
-  Future<File> _compressToJpeg(File input, {int quality = 75}) async {
+  Future<File> _compressToJpeg(File input, {int quality = 60}) async {
     try {
+      if (!await input.exists()) {
+        throw Exception('Input file does not exist');
+      }
+
+      final bytes = await input.readAsBytes();
+      if (bytes.isEmpty) {
+        throw Exception('Input file is empty');
+      }
+
       final dir = await getTemporaryDirectory();
       final outPath = p.join(
         dir.path,
         "fd_${DateTime.now().millisecondsSinceEpoch}.jpg",
       );
 
+      // Compress with smaller dimensions and lower quality for Base64 storage
       final XFile? result = await FlutterImageCompress.compressAndGetFile(
         input.path,
         outPath,
-        quality: quality,
+        quality: quality, // Lower quality for smaller Base64
         format: CompressFormat.jpeg,
         keepExif: false,
+        minWidth: 600, // Smaller dimensions
+        minHeight: 400,
+        rotate: 0,
       );
 
-      // Convert XFile to File
-      return result != null ? File(result.path) : input;
+      if (result == null) {
+        throw Exception('Compression failed');
+      }
+
+      final compressedFile = File(result.path);
+
+      if (!await compressedFile.exists()) {
+        throw Exception('Compressed file was not created');
+      }
+
+      final compressedBytes = await compressedFile.readAsBytes();
+      if (compressedBytes.isEmpty) {
+        throw Exception('Compressed file is empty');
+      }
+
+      // Check if compressed file is still too large for Base64
+      final base64Size = (compressedBytes.length * 4 / 3)
+          .round(); // Estimate Base64 size
+      if (base64Size > 800000) {
+        // Try with even lower quality
+        final XFile? smallerResult =
+            await FlutterImageCompress.compressAndGetFile(
+              input.path,
+              "${outPath}_smaller.jpg",
+              quality: 40, // Much lower quality
+              format: CompressFormat.jpeg,
+              keepExif: false,
+              minWidth: 400,
+              minHeight: 300,
+            );
+
+        if (smallerResult != null) {
+          return File(smallerResult.path);
+        }
+      }
+
+      debugPrint(
+        'Image compressed: ${bytes.length} -> ${compressedBytes.length} bytes',
+      );
+      debugPrint('Estimated Base64 size: $base64Size bytes');
+
+      return compressedFile;
     } catch (e) {
-      // fallback: return original file
+      debugPrint('Image compression error: $e');
       return input;
     }
   }

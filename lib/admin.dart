@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -51,6 +53,37 @@ class _AdminDriverVerificationPageState
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Driver marked as $status')));
+    }
+  }
+
+  Widget buildBase64Image(
+    String base64String, {
+    double? height,
+    double? width,
+  }) {
+    try {
+      final bytes = base64Decode(base64String);
+      return Image.memory(
+        bytes,
+        height: height,
+        width: width,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            height: height ?? 100,
+            width: width ?? 100,
+            color: Colors.grey[300],
+            child: const Icon(Icons.error),
+          );
+        },
+      );
+    } catch (e) {
+      return Container(
+        height: height ?? 100,
+        width: width ?? 100,
+        color: Colors.grey[300],
+        child: const Icon(Icons.error),
+      );
     }
   }
 
