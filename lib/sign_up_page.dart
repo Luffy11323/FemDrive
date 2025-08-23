@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -278,6 +279,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
+  // Add this debug version to your confirmOtp method in SignUpPage
+  // Replace the existing confirmOtp method with this enhanced version
+
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (role == 'driver' && !validateDriverFields()) {
       return;
@@ -303,21 +307,52 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
+      if (kDebugMode) {
+        print('🔄 Starting Firebase Auth sign-in...');
+      }
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
       final user = userCred.user;
+
       if (user == null) {
         showError('Sign-in failed. Try again.');
         return;
       }
 
-      // ---------------- Driver Base64 Images (SPARK PLAN COMPATIBLE) ----------------
+      if (kDebugMode) {
+        print('✅ Firebase Auth successful. UID: ${user.uid}');
+      }
+      if (kDebugMode) {
+        print('🔄 Auth token: ${await user.getIdToken()}');
+      }
+
+      // Wait a moment for auth state to propagate
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Check if user document already exists
+      if (kDebugMode) {
+        print('🔄 Checking if user document exists...');
+      }
+      final existingDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (existingDoc.exists) {
+        if (kDebugMode) {
+          print('⚠️ User document already exists');
+        }
+        showError('Account already exists. Please try logging in.');
+        return;
+      }
+
+      // Driver Base64 Images Processing
       String? licenseBase64;
       String? birthCertBase64;
 
       if (role == 'driver') {
-        // Alt contact must differ from primary
+        // Alt contact validation
         final primaryE164 = formatPhoneNumber(phoneController.text.trim());
         final altE164 = formatPhoneNumber(altContactController.text.trim());
         if (primaryE164 == altE164) {
@@ -331,15 +366,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
 
         try {
+          if (kDebugMode) {
+            print('🔄 Processing driver documents...');
+          }
           showInfo('Processing license image...');
 
-          // Convert license to Base64
           final licenseBytes = await licenseImage!.readAsBytes();
           licenseBase64 = base64Encode(licenseBytes);
+          if (kDebugMode) {
+            print('📄 License Base64 size: ${licenseBase64.length} characters');
+          }
 
-          // Check if Base64 is too large (Firestore document limit is 1MB)
           if (licenseBase64.length > 800000) {
-            // ~800KB limit to be safe
             showError(
               'License image is too large. Please retake with lower quality.',
             );
@@ -347,10 +385,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           }
 
           showInfo('Processing birth certificate image...');
-
-          // Convert birth certificate to Base64
           final birthCertBytes = await birthCertificateImage!.readAsBytes();
           birthCertBase64 = base64Encode(birthCertBytes);
+          if (kDebugMode) {
+            print(
+              '📄 Birth cert Base64 size: ${birthCertBase64.length} characters',
+            );
+          }
 
           if (birthCertBase64.length > 800000) {
             showError(
@@ -359,14 +400,19 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             return;
           }
 
-          showInfo('Images processed successfully. Creating profile...');
+          if (kDebugMode) {
+            print('✅ Driver documents processed successfully');
+          }
         } catch (e) {
+          if (kDebugMode) {
+            print('❌ Document processing error: $e');
+          }
           showError('Failed to process images: $e');
           return;
         }
       }
 
-      // ---------------- Firestore document ----------------
+      // Prepare Firestore document
       final primaryLocal = phoneController.text.replaceAll(RegExp(r'\D'), '');
       final doc = <String, dynamic>{
         'uid': user.uid,
@@ -386,28 +432,92 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
           'altContact': altLocal,
-          'licenseImage': licenseBase64!, // Base64 string instead of URL
-          'birthCertificateImage':
-              birthCertBase64!, // Base64 string instead of URL
+          'licenseImage': licenseBase64!,
+          'birthCertificateImage': birthCertBase64!,
           'documentsUploaded': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
         });
       }
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set(doc);
+      if (kDebugMode) {
+        print('🔄 Writing to Firestore...');
+      }
+      if (kDebugMode) {
+        print(
+          '📄 Document size estimate: ${jsonEncode(doc).length} characters',
+        );
+      }
+      if (kDebugMode) {
+        print('🎯 Collection: users, Document ID: ${user.uid}');
+      }
 
-      showInfo('Registration completed successfully!');
+      // Try to write to Firestore with detailed error handling
+      try {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .set(doc);
 
-      if (!mounted) return;
-      await Future.delayed(const Duration(seconds: 1));
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/login');
+        if (kDebugMode) {
+          print('✅ Firestore write successful');
+        }
+        showInfo('Registration completed successfully!');
+
+        if (!mounted) return;
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, '/login');
+      } catch (firestoreError) {
+        if (kDebugMode) {
+          print('❌ Firestore write error: $firestoreError');
+        }
+
+        // Check auth state again
+        final currentUser = FirebaseAuth.instance.currentUser;
+        if (kDebugMode) {
+          print('🔍 Current user after error: ${currentUser?.uid}');
+        }
+        if (kDebugMode) {
+          print(
+            '🔍 Auth token after error: ${await currentUser?.getIdToken()}',
+          );
+        }
+
+        // Try to get more specific error info
+        if (firestoreError is FirebaseException) {
+          if (kDebugMode) {
+            print('🔍 Firebase error code: ${firestoreError.code}');
+          }
+          if (kDebugMode) {
+            print('🔍 Firebase error message: ${firestoreError.message}');
+          }
+          if (kDebugMode) {
+            print('🔍 Firebase error plugin: ${firestoreError.plugin}');
+          }
+        }
+
+        rethrow; // Re-throw to be caught by outer catch
+      }
     } on FirebaseAuthException catch (e) {
-      showError(e.message ?? 'Verification failed');
+      if (kDebugMode) {
+        print('❌ Firebase Auth error: ${e.code} - ${e.message}');
+      }
+      showError('Auth error: ${e.message ?? 'Verification failed'}');
+    } on FirebaseException catch (e) {
+      if (kDebugMode) {
+        print('❌ Firebase error: ${e.code} - ${e.message}');
+      }
+      if (e.code == 'permission-denied') {
+        showError(
+          'Permission denied. Please check Firebase rules or try again.',
+        );
+      } else {
+        showError('Firebase error: ${e.message ?? 'Operation failed'}');
+      }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ General error: $e');
+      }
       showError('Registration failed: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
@@ -680,17 +790,21 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                         : sendOtp,
                     child: isSubmitting
                         ? Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
-                            children: const [
+                            children: [
                               SizedBox(
-                                width: 22,
-                                height: 22,
+                                width: 20,
+                                height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
                                 ),
                               ),
-                              SizedBox(width: 10),
-                              Text("Please wait..."),
+                              SizedBox(width: 12),
+                              Text(isOtpSent ? 'Verifying...' : 'Sending...'),
                             ],
                           )
                         : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),

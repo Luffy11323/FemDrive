@@ -301,7 +301,24 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                     ? verifyOtp
                     : sendOtp,
                 child: loading
-                    ? const CircularProgressIndicator()
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Text(otpSent ? 'Verifying...' : 'Sending...'),
+                        ],
+                      )
                     : Text(otpSent ? 'Verify OTP' : 'Send OTP'),
               ),
               const SizedBox(height: 10),
