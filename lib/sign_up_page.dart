@@ -1,12 +1,19 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 
+/// FemDrive – Production-grade signup with:
+/// - Rider & Driver roles
+/// - Centralized driver validation
+/// - Phone OTP (FirebaseAuth)
+/// - Firestore profile write
+/// - Firebase Storage upload for license & birth certificate (no Base64 in DB)
+/// - Resend timer + SMS Autofill
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
 
@@ -14,6 +21,7 @@ class SignUpPage extends StatefulWidget {
   State<SignUpPage> createState() => _SignUpPageState();
 }
 
+/// Simple OTP input. You can swap with a package like `pin_code_fields` for richer UI.
 class OtpInputField extends StatefulWidget {
   final int length;
   final void Function(String) onCompleted;
@@ -46,8 +54,9 @@ class _OtpInputFieldState extends State<OtpInputField> {
         counterText: "",
       ),
       onChanged: (value) {
-        if (value.length == widget.length) {
-          widget.onCompleted(value);
+        final digits = value.replaceAll(RegExp(r'\D'), '');
+        if (digits.length == widget.length) {
+          widget.onCompleted(digits);
         }
       },
     );
@@ -57,45 +66,45 @@ class _OtpInputFieldState extends State<OtpInputField> {
 class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   final _formKey = GlobalKey<FormState>();
 
+  // Controllers
   final phoneController = TextEditingController();
   final usernameController = TextEditingController();
   final carModelController = TextEditingController();
   final altContactController = TextEditingController();
-  String enteredOtp = "";
 
+  // Role & vehicle
   String role = 'rider';
   String selectedCarType = 'Ride X';
-  final carTypeList = ['Ride X', 'Ride mini', 'Bike'];
+  final carTypeList = const ['Ride X', 'Ride mini', 'Bike'];
 
-  File? licenseImage, birthCertificateImage;
-  String? licenseBase64, birthCertBase64;
+  // Document files (kept locally until upload)
+  File? licenseImage;
+  File? birthCertificateImage;
 
+  // OTP state
+  String enteredOtp = '';
   bool isOtpSent = false;
   bool isSubmitting = false;
   String? verificationId;
   bool canResend = false;
   int resendSeconds = 60;
   Timer? _resendTimer;
-
-  // OTP controllers & focus
   final int otpLength = 6;
 
   @override
   void initState() {
     super.initState();
-
-    // Start listening for SMS autofill (Android)
-    listenForCode();
+    listenForCode(); // sms_autofill
   }
 
   @override
   void dispose() {
-    cancel(); // stop sms_autofill listener
+    cancel(); // sms_autofill stop
+    _resendTimer?.cancel();
     phoneController.dispose();
     usernameController.dispose();
     carModelController.dispose();
     altContactController.dispose();
-    _resendTimer?.cancel();
     super.dispose();
   }
 
@@ -104,10 +113,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   void codeUpdated() {
     final received = code ?? '';
     if (received.isEmpty) return;
-
     final clean = received.replaceAll(RegExp(r'\D'), '');
     setState(() => enteredOtp = clean);
-
     if (clean.length >= otpLength) {
       confirmOtp();
     }
@@ -122,9 +129,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (resendSeconds == 0) {
         timer.cancel();
-        setState(() => canResend = true);
+        if (mounted) setState(() => canResend = true);
       } else {
-        setState(() => resendSeconds--);
+        if (mounted) setState(() => resendSeconds--);
       }
     });
   }
@@ -137,11 +144,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     return '+92${digits.substring(1)}';
   }
 
-  Future<bool> phoneNumberExists(String phone) async {
-    final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
+  Future<bool> phoneNumberExists(String e164orLocal) async {
+    // We store as local format (0300xxxxxxx). Normalize to local
+    final local = e164orLocal.startsWith('+92')
+        ? e164orLocal.replaceFirst('+92', '0')
+        : e164orLocal.replaceAll(RegExp(r'\D'), '');
     final snap = await FirebaseFirestore.instance
         .collection('users')
-        .where('phone', isEqualTo: digitsOnly)
+        .where('phone', isEqualTo: local)
         .limit(1)
         .get();
     return snap.docs.isNotEmpty;
@@ -154,37 +164,90 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  // ======== OTP logic ========
+  void showInfo(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Centralized validation for driver-only fields. Shows a single dialog if missing.
+  bool validateDriverFields() {
+    final missingFields = <String>[];
+
+    // Keep username validation in the form validator for both roles.
+
+    if (carModelController.text.trim().isEmpty) {
+      missingFields.add('Car Model');
+    }
+
+    if (altContactController.text.trim().isEmpty) {
+      missingFields.add('Alternate Contact Number');
+    } else {
+      try {
+        formatPhoneNumber(altContactController.text.trim());
+      } catch (_) {
+        missingFields.add('Valid Alternate Contact Number');
+      }
+    }
+
+    if (licenseImage == null) {
+      missingFields.add('Driving License Image');
+    }
+    if (birthCertificateImage == null) {
+      missingFields.add('Birth Certificate Image');
+    }
+
+    if (missingFields.isNotEmpty) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text("Incomplete Driver Details"),
+          content: Text(
+            "Please provide the following information:\n\n${missingFields.map((f) => '• $f').join('\n')}",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("OK"),
+            ),
+          ],
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
   // ======== Firebase flows ========
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
 
-    if (role == 'driver') {
-      if (carModelController.text.trim().isEmpty ||
-          altContactController.text.trim().isEmpty ||
-          licenseBase64 == null ||
-          birthCertBase64 == null) {
-        return showError('Please fill all driver details and capture images.');
-      }
+    if (role == 'driver' && !validateDriverFields()) {
+      return; // Prevent OTP if driver details are incomplete
     }
 
     try {
-      final formatted = formatPhoneNumber(phoneController.text);
+      final formatted = formatPhoneNumber(phoneController.text.trim());
 
-      if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
-        return showError('This phone number is already registered.');
+      // Prevent duplicate registration by phone
+      if (await phoneNumberExists(formatted)) {
+        showError('This phone number is already registered.');
+        return;
       }
 
       setState(() => isSubmitting = true);
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 80));
 
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
           // Instant auto-verification (Android)
-          await FirebaseAuth.instance.signInWithCredential(credential);
-          await confirmOtp(autoCredential: credential);
+          try {
+            await FirebaseAuth.instance.signInWithCredential(credential);
+            await confirmOtp(autoCredential: credential);
+          } catch (e) {
+            showError('Auto-verification failed: $e');
+          }
         },
         verificationFailed: (FirebaseAuthException e) {
           showError(e.message ?? 'Verification failed.');
@@ -195,17 +258,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             isOtpSent = true;
           });
           startResendTimer();
+          showInfo('OTP sent. Please check your messages.');
         },
-        codeAutoRetrievalTimeout: (id) => verificationId = id,
+        codeAutoRetrievalTimeout: (id) {
+          verificationId = id;
+          if (mounted) {
+            showInfo('You can request a new OTP once the timer ends.');
+          }
+        },
       );
     } catch (e) {
       showError('Unexpected error: $e');
     } finally {
-      setState(() => isSubmitting = false);
+      if (mounted) setState(() => isSubmitting = false);
     }
   }
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
+    if (role == 'driver' && !validateDriverFields()) {
+      return; // Prevent confirmation if driver details invalid
+    }
+
     setState(() => isSubmitting = true);
     try {
       final otpCode = enteredOtp;
@@ -215,51 +288,83 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             verificationId: verificationId!,
             smsCode: otpCode,
           );
-      if (autoCredential == null && enteredOtp.length != otpLength) {
-        showError('Please enter the full OTP');
+
+      if (autoCredential == null && otpCode.length != otpLength) {
+        showError('Please enter the full OTP.');
         return;
       }
+
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
-
-      final primaryFormatted = formatPhoneNumber(phoneController.text.trim());
-      if (role == 'driver') {
-        final altFormatted = formatPhoneNumber(
-          altContactController.text.trim(),
-        );
-        if (primaryFormatted == altFormatted) {
-          return showError('Alternate number cannot be the same as primary.');
-        }
-      }
-
       final user = userCred.user;
       if (user == null) throw Exception('Sign-in failed');
 
-      final digitsOnly = phoneController.text.replaceAll(RegExp(r'\D'), '');
+      // Upload documents for drivers (if any). Store URLs, not raw bytes.
+      String? licenseUrl;
+      String? birthCertUrl;
+      if (role == 'driver') {
+        final storage = FirebaseStorage.instance.ref(
+          'users/${user.uid}/driver-docs',
+        );
+        final now = DateTime.now().millisecondsSinceEpoch;
 
-      final doc = {
+        if (licenseImage != null) {
+          final fileBytes = await licenseImage!.readAsBytes();
+          final task = await storage
+              .child('license_$now.jpg')
+              .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'));
+          licenseUrl = await task.ref.getDownloadURL();
+        }
+        if (birthCertificateImage != null) {
+          final fileBytes = await birthCertificateImage!.readAsBytes();
+          final task = await storage
+              .child('birth_certificate_$now.jpg')
+              .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'));
+          birthCertUrl = await task.ref.getDownloadURL();
+        }
+      }
+
+      // Build Firestore user document
+      final primaryLocal = phoneController.text.replaceAll(
+        RegExp(r'\D'),
+        '',
+      ); // 03xxxxxxxxx
+      final doc = <String, dynamic>{
         'uid': user.uid,
-        'phone': digitsOnly,
+        'phone': primaryLocal,
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
         'verified': role == 'rider' ? true : false,
-        if (role == 'driver') ...{
+      };
+
+      if (role == 'driver') {
+        final altE164 = formatPhoneNumber(altContactController.text.trim());
+        final altLocal = altE164.replaceFirst('+92', '0');
+
+        final primaryE164 = formatPhoneNumber(phoneController.text.trim());
+        if (primaryE164 == altE164) {
+          showError('Alternate number cannot be the same as primary.');
+          return;
+        }
+
+        doc.addAll({
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
-          'altContact': altContactController.text.replaceAll(RegExp(r'\D'), ''),
-          'licenseBase64': licenseBase64 ?? '',
-          'birthCertificateBase64': birthCertBase64 ?? '',
-        },
-      };
+          'altContact': altLocal,
+          if (licenseUrl != null) 'licenseUrl': licenseUrl,
+          if (birthCertUrl != null) 'birthCertificateUrl': birthCertUrl,
+        });
+      }
 
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .set(doc);
 
-      if (mounted) Navigator.pushReplacementNamed(context, '/login');
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/login');
     } on FirebaseAuthException catch (e) {
       showError(e.message ?? 'Verification failed');
     } catch (e) {
@@ -278,18 +383,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     if (file == null) return;
 
-    setState(() => isSubmitting = true); // Show loading bar/spinner
+    setState(() => isSubmitting = true); // show top progress bar
     try {
-      final bytes = await file.readAsBytes();
-      final base64 = base64Encode(bytes);
-
       setState(() {
         if (isLicense) {
           licenseImage = file;
-          licenseBase64 = base64;
         } else {
           birthCertificateImage = file;
-          birthCertBase64 = base64;
         }
       });
     } catch (e) {
@@ -319,13 +419,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 children: [
                   TextFormField(
                     controller: usernameController,
-                    decoration: fieldDecoration.copyWith(labelText: 'Username'),
+                    textInputAction: TextInputAction.next,
+                    decoration: fieldDecoration.copyWith(
+                      labelText: 'Username',
+                      hintText: 'e.g. Ayesha Khan',
+                    ),
                     validator: (v) =>
-                        v == null || v.isEmpty ? 'Required' : null,
+                        v == null || v.trim().isEmpty ? 'Required' : null,
                   ),
                   const SizedBox(height: 15),
                   TextFormField(
                     controller: phoneController,
+                    textInputAction: TextInputAction.next,
                     decoration: fieldDecoration.copyWith(
                       labelText: 'Phone (e.g. 0300-1234567)',
                     ),
@@ -340,33 +445,56 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       }
                     },
                   ),
+
                   if (isOtpSent) ...[
                     const SizedBox(height: 15),
                     _buildOtpFields(),
                     const SizedBox(height: 10),
-                    canResend
-                        ? TextButton(
-                            onPressed: sendOtp,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        if (canResend)
+                          TextButton(
+                            onPressed: isSubmitting ? null : sendOtp,
                             child: const Text('Resend OTP'),
                           )
-                        : Text('Resend in $resendSeconds seconds'),
+                        else
+                          Text('Resend in $resendSeconds seconds'),
+                        TextButton(
+                          onPressed: () async {
+                            // Allow editing phone number before verifying
+                            setState(() {
+                              isOtpSent = false;
+                              enteredOtp = '';
+                              verificationId = null;
+                              _resendTimer?.cancel();
+                              canResend = false;
+                              resendSeconds = 60;
+                            });
+                          },
+                          child: const Text('Edit number'),
+                        ),
+                      ],
+                    ),
                   ],
+
                   const SizedBox(height: 15),
                   DropdownButtonFormField<String>(
                     initialValue: role,
-                    items: ['rider', 'driver']
-                        .map(
-                          (r) => DropdownMenuItem(
-                            value: r,
-                            child: Text(r.toUpperCase()),
-                          ),
-                        )
-                        .toList(),
+                    items: const [
+                      DropdownMenuItem(value: 'rider', child: Text('RIDER')),
+                      DropdownMenuItem(value: 'driver', child: Text('DRIVER')),
+                    ],
                     decoration: fieldDecoration.copyWith(
                       labelText: 'Register as',
                     ),
-                    onChanged: (v) => setState(() => role = v!),
+                    onChanged: isSubmitting
+                        ? null
+                        : (v) => setState(() {
+                            role = v ?? 'rider';
+                          }),
                   ),
+
                   if (role == 'driver') ...[
                     const SizedBox(height: 15),
                     DropdownButtonFormField<String>(
@@ -379,25 +507,35 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                             (t) => DropdownMenuItem(value: t, child: Text(t)),
                           )
                           .toList(),
-                      onChanged: (v) => setState(() => selectedCarType = v!),
+                      onChanged: isSubmitting
+                          ? null
+                          : (v) => setState(
+                              () => selectedCarType = v ?? selectedCarType,
+                            ),
                     ),
                     const SizedBox(height: 10),
                     TextFormField(
                       controller: carModelController,
+                      textInputAction: TextInputAction.next,
                       decoration: fieldDecoration.copyWith(
                         labelText: 'Car Model',
+                        hintText: 'e.g. Toyota Corolla 2020',
                       ),
                       validator: (v) =>
-                          v == null || v.isEmpty ? 'Required' : null,
+                          role == 'driver' && (v == null || v.trim().isEmpty)
+                          ? 'Required'
+                          : null,
                     ),
                     const SizedBox(height: 10),
                     TextFormField(
                       controller: altContactController,
                       decoration: fieldDecoration.copyWith(
-                        labelText: 'Alternate Number',
+                        labelText: 'Alternate Contact Number',
+                        hintText: 'e.g. 0311-1234567',
                       ),
                       keyboardType: TextInputType.phone,
                       validator: (v) {
+                        if (role != 'driver') return null;
                         if (v == null || v.isEmpty) return 'Required';
                         try {
                           formatPhoneNumber(v);
@@ -412,7 +550,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                     const SizedBox(height: 10),
                     _buildImageButton(false),
                   ],
-                  const SizedBox(height: 25),
+
+                  const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: isSubmitting
                         ? null
@@ -480,7 +619,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
               Row(
                 children: [
                   TextButton(
-                    onPressed: () => _captureDocument(isLicense),
+                    onPressed: isSubmitting
+                        ? null
+                        : () => _captureDocument(isLicense),
                     child: const Text("Retake"),
                   ),
                   const SizedBox(width: 8),
@@ -496,7 +637,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           )
         else
           ElevatedButton.icon(
-            onPressed: () => _captureDocument(isLicense),
+            onPressed: isSubmitting ? null : () => _captureDocument(isLicense),
             icon: const Icon(Icons.camera_alt),
             label: Text(
               isLicense ? "Capture License" : "Capture Birth Certificate",
