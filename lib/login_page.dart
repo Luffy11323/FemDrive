@@ -1,4 +1,5 @@
 import 'dart:async';
+// ignore: unused_import
 import 'package:femdrive/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -231,12 +232,10 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       return _showError("Your account is pending admin approval.");
     }
 
-    // ✅ Instead of routing manually, restart into FemDriveApp
+    // ✅ FIX: Don't create new FemDriveApp instance, just navigate to login
+    // Let the existing app's auth state handling redirect to appropriate dashboard
     if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const FemDriveApp()),
-    );
+    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
   void _showError(String msg) {

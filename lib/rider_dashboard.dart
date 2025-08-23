@@ -203,14 +203,13 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
 
                 if (!mounted) return;
 
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  Navigator.popUntil(context, (route) => route.isFirst);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('You have been logged out')),
-                    );
-                  }
-                });
+                // ✅ FIX: Navigate to login route and let main.dart handle the reset
+                Navigator.pushNamedAndRemoveUntil(
+                  // ignore: use_build_context_synchronously
+                  context,
+                  '/login',
+                  (route) => false,
+                );
               },
             ),
           ],

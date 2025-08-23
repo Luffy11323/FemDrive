@@ -58,6 +58,12 @@ class RiderDashboardController
     );
   }
 
+  /// Clear cached UID on logout
+  void clearCachedUid() {
+    _lastUid = null;
+    state = const AsyncData(null);
+  }
+
   /// Create a new ride request
   Future<void> createRide(
     String pickup,

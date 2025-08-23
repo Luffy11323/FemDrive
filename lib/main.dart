@@ -52,7 +52,12 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   String? getSafeUid() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) _lastKnownUid = uid;
+    if (uid != null) {
+      _lastKnownUid = uid;
+    } else {
+      // If no current user, clear the cached UID
+      _lastKnownUid = null;
+    }
     return uid ?? _lastKnownUid;
   }
 
@@ -103,6 +108,10 @@ class _FemDriveAppState extends State<FemDriveApp> {
         _handleNotificationNavigation(initialMsg);
       });
     }
+  }
+
+  void clearLastKnownUid() {
+    _lastKnownUid = null;
   }
 
   Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
@@ -170,7 +179,10 @@ class _FemDriveAppState extends State<FemDriveApp> {
         }
 
         final uid = getSafeUid();
-        if (uid == null) return const LoginPage();
+        // ✅ FIX: More robust null checking
+        if (uid == null || FirebaseAuth.instance.currentUser == null) {
+          return const LoginPage();
+        }
 
         return FutureBuilder<DocumentSnapshot>(
           future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
@@ -180,7 +192,15 @@ class _FemDriveAppState extends State<FemDriveApp> {
                 body: Center(child: CircularProgressIndicator()),
               );
             }
-            if (!snap.data!.exists) return const LoginPage();
+
+            // ✅ FIX: Handle document not existing after logout
+            if (!snap.data!.exists) {
+              // Clear the cached UID and show login
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _lastKnownUid = null;
+              });
+              return const LoginPage();
+            }
 
             final data = snap.data!.data() as Map<String, dynamic>;
             final role = data['role'];
