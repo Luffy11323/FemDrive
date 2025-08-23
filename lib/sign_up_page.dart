@@ -1,6 +1,8 @@
 import 'dart:async';
+// ignore: unused_import
 import 'dart:convert';
 import 'dart:io';
+// ignore: unnecessary_import
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -232,37 +234,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   // ======== Firebase flows ========
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
+    if (role == 'driver' && !validateDriverFields()) return;
 
-    // Driver: hard stop here if missing anything (before any Firebase calls)
-    if (role == 'driver' && !validateDriverFields()) {
+    final formatted = formatPhoneNumber(phoneController.text.trim());
+
+    if (await phoneNumberExists(formatted)) {
+      showError('This phone number is already registered.');
       return;
     }
 
+    setState(() => isSubmitting = true);
     try {
-      final formatted = formatPhoneNumber(phoneController.text.trim());
-
-      if (await phoneNumberExists(formatted)) {
-        showError('This phone number is already registered.');
-        return;
-      }
-
-      setState(() => isSubmitting = true);
-      await Future.delayed(const Duration(milliseconds: 80));
-
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
-          try {
-            await FirebaseAuth.instance.signInWithCredential(credential);
-            await confirmOtp(autoCredential: credential);
-          } catch (e) {
-            showError('Auto-verification failed: $e');
-          }
+          // Auto-verification (test or real)
+          await FirebaseAuth.instance.signInWithCredential(credential);
+          await confirmOtp(autoCredential: credential);
         },
-        verificationFailed: (FirebaseAuthException e) {
-          showError(e.message ?? 'Verification failed.');
-        },
+        verificationFailed: (e) =>
+            showError(e.message ?? 'Verification failed.'),
         codeSent: (id, _) {
           setState(() {
             verificationId = id;
@@ -284,33 +276,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   // Replace the existing confirmOtp method with this enhanced version
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
-    if (role == 'driver' && !validateDriverFields()) {
-      return;
-    }
-
     setState(() => isSubmitting = true);
+
     try {
       if (verificationId == null && autoCredential == null) {
         showError('Verification not started. Please request OTP again.');
         return;
       }
 
-      final otpCode = enteredOtp;
       final credential =
           autoCredential ??
           PhoneAuthProvider.credential(
             verificationId: verificationId!,
-            smsCode: otpCode,
+            smsCode: enteredOtp,
           );
 
-      if (autoCredential == null && otpCode.length != otpLength) {
+      if (autoCredential == null && enteredOtp.length != otpLength) {
         showError('Please enter the full OTP.');
         return;
       }
 
-      if (kDebugMode) {
-        print('🔄 Starting Firebase Auth sign-in...');
-      }
+      // 1️⃣ Sign in the user
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
@@ -321,195 +307,57 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      if (kDebugMode) {
-        print('✅ Firebase Auth successful. UID: ${user.uid}');
-      }
-      if (kDebugMode) {
-        print('🔄 Auth token: ${await user.getIdToken()}');
-      }
-
-      // Wait a moment for auth state to propagate
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // Check if user document already exists
-      if (kDebugMode) {
-        print('🔄 Checking if user document exists...');
-      }
-      final existingDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (existingDoc.exists) {
-        if (kDebugMode) {
-          print('⚠️ User document already exists');
-        }
-        showError('Account already exists. Please try logging in.');
-        return;
-      }
-
-      // Driver Base64 Images Processing
-      String? licenseBase64;
-      String? birthCertBase64;
-
+      // 2️⃣ Only now process driver images / hash
+      String? licenseHash, birthCertHash;
       if (role == 'driver') {
-        // Alt contact validation
-        final primaryE164 = formatPhoneNumber(phoneController.text.trim());
-        final altE164 = formatPhoneNumber(altContactController.text.trim());
-        if (primaryE164 == altE164) {
-          showError('Alternate number cannot be the same as primary.');
-          return;
-        }
-
-        if (licenseImage == null || birthCertificateImage == null) {
-          showError('Both license and birth certificate images are required.');
-          return;
-        }
-
-        try {
-          if (kDebugMode) {
-            print('🔄 Generating hashes for driver documents...');
-          }
-
-          String hashFile(File file) {
-            final bytes = file.readAsBytesSync();
-            final digest = sha256.convert(
-              bytes,
-            ); // import 'package:crypto/crypto.dart';
-            return digest.toString().substring(0, 12); // short hash placeholder
-          }
-
-          licenseBase64 = hashFile(
-            licenseImage!,
-          ); // renamed variable can stay as-is
-          birthCertBase64 = hashFile(birthCertificateImage!);
-
-          if (kDebugMode) {
-            print('📄 License hash: $licenseBase64');
-            print('📄 Birth cert hash: $birthCertBase64');
-            print('✅ Driver documents hashed successfully');
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('❌ Document hashing error: $e');
-          }
-          showError('Failed to process images: $e');
-          return;
-        }
+        if (!validateDriverFields()) return;
+        licenseHash = _hashFile(licenseImage!);
+        birthCertHash = _hashFile(birthCertificateImage!);
       }
 
-      // Prepare Firestore document
-      final primaryLocal = phoneController.text.replaceAll(RegExp(r'\D'), '');
+      // 3️⃣ Prepare Firestore document
       final doc = <String, dynamic>{
         'uid': user.uid,
-        'phone': primaryLocal,
+        'phone': phoneController.text.replaceAll(RegExp(r'\D'), ''),
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': role == 'rider' ? true : false,
+        'verified': role == 'rider',
       };
 
       if (role == 'driver') {
-        final altLocal = formatPhoneNumber(
-          altContactController.text.trim(),
-        ).replaceFirst('+92', '0');
-
         doc.addAll({
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
-          'altContact': altLocal,
-          'licenseImage':
-              licenseBase64, // use licenseBase64 instead of licenseHash
-          'birthCertificateImage':
-              birthCertBase64, // use birthCertBase64 instead of birthCertHash
+          'altContact': formatPhoneNumber(
+            altContactController.text,
+          ).replaceFirst('+92', '0'),
+          'licenseImage': licenseHash,
+          'birthCertificateImage': birthCertHash,
           'documentsUploaded': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
         });
       }
 
-      if (kDebugMode) {
-        print('🔄 Writing to Firestore...');
-      }
-      if (kDebugMode) {
-        print(
-          '📄 Document size estimate: ${jsonEncode(doc).length} characters',
-        );
-      }
-      if (kDebugMode) {
-        print('🎯 Collection: users, Document ID: ${user.uid}');
-      }
+      // 4️⃣ Write to Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .set(doc);
 
-      // Try to write to Firestore with detailed error handling
-      try {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set(doc);
-
-        if (kDebugMode) {
-          print('✅ Firestore write successful');
-        }
-        showInfo('Registration completed successfully!');
-
-        if (!mounted) return;
-        await Future.delayed(const Duration(seconds: 1));
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/login');
-      } catch (firestoreError) {
-        if (kDebugMode) {
-          print('❌ Firestore write error: $firestoreError');
-        }
-
-        // Check auth state again
-        final currentUser = FirebaseAuth.instance.currentUser;
-        if (kDebugMode) {
-          print('🔍 Current user after error: ${currentUser?.uid}');
-        }
-        if (kDebugMode) {
-          print(
-            '🔍 Auth token after error: ${await currentUser?.getIdToken()}',
-          );
-        }
-
-        // Try to get more specific error info
-        if (firestoreError is FirebaseException) {
-          if (kDebugMode) {
-            print('🔍 Firebase error code: ${firestoreError.code}');
-          }
-          if (kDebugMode) {
-            print('🔍 Firebase error message: ${firestoreError.message}');
-          }
-          if (kDebugMode) {
-            print('🔍 Firebase error plugin: ${firestoreError.plugin}');
-          }
-        }
-
-        rethrow; // Re-throw to be caught by outer catch
-      }
-    } on FirebaseAuthException catch (e) {
-      if (kDebugMode) {
-        print('❌ Firebase Auth error: ${e.code} - ${e.message}');
-      }
-      showError('Auth error: ${e.message ?? 'Verification failed'}');
-    } on FirebaseException catch (e) {
-      if (kDebugMode) {
-        print('❌ Firebase error: ${e.code} - ${e.message}');
-      }
-      if (e.code == 'permission-denied') {
-        showError(
-          'Permission denied. Please check Firebase rules or try again.',
-        );
-      } else {
-        showError('Firebase error: ${e.message ?? 'Operation failed'}');
-      }
+      showInfo('Registration completed successfully!');
+      // ignore: use_build_context_synchronously
+      Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ General error: $e');
-      }
-      showError('Registration failed: $e');
+      showError('OTP verification / signup failed: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
+  }
+
+  String _hashFile(File file) {
+    final bytes = file.readAsBytesSync();
+    return sha256.convert(bytes).toString().substring(0, 12);
   }
 
   Future<File> _compressToJpeg(File input, {int quality = 60}) async {
