@@ -46,15 +46,17 @@ class DefaultFirebaseOptions {
     messagingSenderId: '278929890705',
     projectId: 'ridesharefyp-0022',
     authDomain: 'ridesharefyp-0022.firebaseapp.com',
+    databaseURL: 'https://ridesharefyp-0022-default-rtdb.firebaseio.com',
     storageBucket: 'ridesharefyp-0022.firebasestorage.app',
     measurementId: 'G-32WJN8QL8Y',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyAHrj_kBnHFI8BZ7-DlTSnBbW-lli50NTg',
-    appId: '1:278929890705:android:049186d5a0c4183d3ece30',
+    appId: '1:278929890705:android:8e2d35ad7ee60fe03ece30',
     messagingSenderId: '278929890705',
     projectId: 'ridesharefyp-0022',
+    databaseURL: 'https://ridesharefyp-0022-default-rtdb.firebaseio.com',
     storageBucket: 'ridesharefyp-0022.firebasestorage.app',
   );
 
@@ -64,7 +66,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '278929890705',
     projectId: 'ridesharefyp-0022',
     storageBucket: 'ridesharefyp-0022.firebasestorage.app',
-    iosBundleId: 'com.example.femdrive',
+    iosBundleId: 'com.example.FemDrive',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -73,7 +75,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '278929890705',
     projectId: 'ridesharefyp-0022',
     storageBucket: 'ridesharefyp-0022.firebasestorage.app',
-    iosBundleId: 'com.example.femdrive',
+    iosBundleId: 'com.example.FemDrive',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
@@ -82,6 +84,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '278929890705',
     projectId: 'ridesharefyp-0022',
     authDomain: 'ridesharefyp-0022.firebaseapp.com',
+    databaseURL: 'https://ridesharefyp-0022-default-rtdb.firebaseio.com',
     storageBucket: 'ridesharefyp-0022.firebasestorage.app',
     measurementId: 'G-46QGL761PR',
   );
