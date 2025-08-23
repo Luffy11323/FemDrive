@@ -6,6 +6,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 /// FemDrive – Production-grade signup with:
 /// - Rider & Driver roles
@@ -173,8 +176,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   bool validateDriverFields() {
     final missingFields = <String>[];
 
-    // Keep username validation in the form validator for both roles.
-
     if (carModelController.text.trim().isEmpty) {
       missingFields.add('Car Model');
     }
@@ -197,12 +198,21 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     if (missingFields.isNotEmpty) {
+      // quick, precise hint
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Please provide: ${missingFields.first}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+
+      // full list
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
           title: const Text("Incomplete Driver Details"),
           content: Text(
-            "Please provide the following information:\n\n${missingFields.map((f) => '• $f').join('\n')}",
+            "Please provide the following:\n\n${missingFields.map((f) => '• $f').join('\n')}",
           ),
           actions: [
             TextButton(
@@ -221,14 +231,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // Driver: hard stop here if missing anything (before any Firebase calls)
     if (role == 'driver' && !validateDriverFields()) {
-      return; // Prevent OTP if driver details are incomplete
+      return;
     }
 
     try {
       final formatted = formatPhoneNumber(phoneController.text.trim());
 
-      // Prevent duplicate registration by phone
       if (await phoneNumberExists(formatted)) {
         showError('This phone number is already registered.');
         return;
@@ -241,7 +251,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
-          // Instant auto-verification (Android)
           try {
             await FirebaseAuth.instance.signInWithCredential(credential);
             await confirmOtp(autoCredential: credential);
@@ -260,12 +269,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           startResendTimer();
           showInfo('OTP sent. Please check your messages.');
         },
-        codeAutoRetrievalTimeout: (id) {
-          verificationId = id;
-          if (mounted) {
-            showInfo('You can request a new OTP once the timer ends.');
-          }
-        },
+        codeAutoRetrievalTimeout: (id) => verificationId = id,
       );
     } catch (e) {
       showError('Unexpected error: $e');
@@ -276,11 +280,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (role == 'driver' && !validateDriverFields()) {
-      return; // Prevent confirmation if driver details invalid
+      return; // hard stop before any network call
     }
 
     setState(() => isSubmitting = true);
     try {
+      if (verificationId == null && autoCredential == null) {
+        showError('Verification not started. Please request OTP again.');
+        return;
+      }
+
       final otpCode = enteredOtp;
       final credential =
           autoCredential ??
@@ -298,41 +307,74 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         credential,
       );
       final user = userCred.user;
-      if (user == null) throw Exception('Sign-in failed');
+      if (user == null) {
+        showError('Sign-in failed. Try again.');
+        return;
+      }
 
-      // Upload documents for drivers (if any). Store URLs, not raw bytes.
+      // ---------------- Driver uploads (REQUIRED) ----------------
       String? licenseUrl;
       String? birthCertUrl;
+
       if (role == 'driver') {
-        final storage = FirebaseStorage.instance.ref(
+        // Alt contact must differ from primary
+        final primaryE164 = formatPhoneNumber(phoneController.text.trim());
+        final altE164 = formatPhoneNumber(altContactController.text.trim());
+        if (primaryE164 == altE164) {
+          showError('Alternate number cannot be the same as primary.');
+          return;
+        }
+
+        // Guard again (defensive)
+        if (licenseImage == null) {
+          showError('Driver license image is required.');
+          return;
+        }
+        if (birthCertificateImage == null) {
+          showError('Birth certificate image is required.');
+          return;
+        }
+
+        final folder = FirebaseStorage.instance.ref().child(
           'users/${user.uid}/driver-docs',
         );
-        final now = DateTime.now().millisecondsSinceEpoch;
 
-        if (licenseImage != null) {
-          final fileBytes = await licenseImage!.readAsBytes();
-          final task = await storage
-              .child('license_$now.jpg')
-              .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'));
-          licenseUrl = await task.ref.getDownloadURL();
+        final ts = DateTime.now().millisecondsSinceEpoch;
+
+        try {
+          // license
+          final licenseRef = folder.child('license_$ts.jpg');
+          final licenseTask = await licenseRef.putFile(
+            licenseImage!,
+            SettableMetadata(contentType: 'image/jpeg'),
+          );
+          licenseUrl = await licenseTask.ref.getDownloadURL();
+        } catch (e) {
+          showError('Failed to upload license. Please retake and try again.');
+          return;
         }
-        if (birthCertificateImage != null) {
-          final fileBytes = await birthCertificateImage!.readAsBytes();
-          final task = await storage
-              .child('birth_certificate_$now.jpg')
-              .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'));
-          birthCertUrl = await task.ref.getDownloadURL();
+
+        try {
+          // birth certificate
+          final birthRef = folder.child('birth_certificate_$ts.jpg');
+          final birthTask = await birthRef.putFile(
+            birthCertificateImage!,
+            SettableMetadata(contentType: 'image/jpeg'),
+          );
+          birthCertUrl = await birthTask.ref.getDownloadURL();
+        } catch (e) {
+          showError(
+            'Failed to upload birth certificate. Please retake and try again.',
+          );
+          return;
         }
       }
 
-      // Build Firestore user document
-      final primaryLocal = phoneController.text.replaceAll(
-        RegExp(r'\D'),
-        '',
-      ); // 03xxxxxxxxx
+      // ---------------- Firestore document ----------------
+      final primaryLocal = phoneController.text.replaceAll(RegExp(r'\D'), '');
       final doc = <String, dynamic>{
         'uid': user.uid,
-        'phone': primaryLocal,
+        'phone': primaryLocal, // store local 03xxxxxxxxx
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
@@ -340,21 +382,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       };
 
       if (role == 'driver') {
-        final altE164 = formatPhoneNumber(altContactController.text.trim());
-        final altLocal = altE164.replaceFirst('+92', '0');
-
-        final primaryE164 = formatPhoneNumber(phoneController.text.trim());
-        if (primaryE164 == altE164) {
-          showError('Alternate number cannot be the same as primary.');
-          return;
-        }
+        final altLocal = formatPhoneNumber(
+          altContactController.text.trim(),
+        ).replaceFirst('+92', '0');
 
         doc.addAll({
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
           'altContact': altLocal,
-          if (licenseUrl != null) 'licenseUrl': licenseUrl,
-          if (birthCertUrl != null) 'birthCertificateUrl': birthCertUrl,
+          'licenseUrl': licenseUrl, // guaranteed non-null here
+          'birthCertificateUrl': birthCertUrl, // guaranteed non-null here
         });
       }
 
@@ -374,6 +411,30 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
+  Future<File> _compressToJpeg(File input, {int quality = 75}) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final outPath = p.join(
+        dir.path,
+        "fd_${DateTime.now().millisecondsSinceEpoch}.jpg",
+      );
+
+      final XFile? result = await FlutterImageCompress.compressAndGetFile(
+        input.path,
+        outPath,
+        quality: quality,
+        format: CompressFormat.jpeg,
+        keepExif: false,
+      );
+
+      // Convert XFile to File
+      return result != null ? File(result.path) : input;
+    } catch (e) {
+      // fallback: return original file
+      return input;
+    }
+  }
+
   // ======== Camera capture (full-screen, preview, retake, use) ========
   Future<void> _captureDocument(bool isLicense) async {
     final file = await Navigator.push<File?>(
@@ -383,13 +444,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     if (file == null) return;
 
-    setState(() => isSubmitting = true); // show top progress bar
+    setState(() => isSubmitting = true);
     try {
+      // Compress to JPG for consistent uploads & smaller size
+      final compressed = await _compressToJpeg(file, quality: 75);
+
       setState(() {
         if (isLicense) {
-          licenseImage = file;
+          licenseImage = compressed;
         } else {
-          birthCertificateImage = file;
+          birthCertificateImage = compressed;
         }
       });
     } catch (e) {
