@@ -10,6 +10,7 @@ import 'package:sms_autofill/sms_autofill.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:crypto/crypto.dart';
 
 /// FemDrive – Production-grade signup with:
 /// - Rider & Driver roles
@@ -367,45 +368,30 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
         try {
           if (kDebugMode) {
-            print('🔄 Processing driver documents...');
-          }
-          showInfo('Processing license image...');
-
-          final licenseBytes = await licenseImage!.readAsBytes();
-          licenseBase64 = base64Encode(licenseBytes);
-          if (kDebugMode) {
-            print('📄 License Base64 size: ${licenseBase64.length} characters');
+            print('🔄 Generating hashes for driver documents...');
           }
 
-          if (licenseBase64.length > 800000) {
-            showError(
-              'License image is too large. Please retake with lower quality.',
-            );
-            return;
+          String hashFile(File file) {
+            final bytes = file.readAsBytesSync();
+            final digest = sha256.convert(
+              bytes,
+            ); // import 'package:crypto/crypto.dart';
+            return digest.toString().substring(0, 12); // short hash placeholder
           }
 
-          showInfo('Processing birth certificate image...');
-          final birthCertBytes = await birthCertificateImage!.readAsBytes();
-          birthCertBase64 = base64Encode(birthCertBytes);
-          if (kDebugMode) {
-            print(
-              '📄 Birth cert Base64 size: ${birthCertBase64.length} characters',
-            );
-          }
-
-          if (birthCertBase64.length > 800000) {
-            showError(
-              'Birth certificate image is too large. Please retake with lower quality.',
-            );
-            return;
-          }
+          licenseBase64 = hashFile(
+            licenseImage!,
+          ); // renamed variable can stay as-is
+          birthCertBase64 = hashFile(birthCertificateImage!);
 
           if (kDebugMode) {
-            print('✅ Driver documents processed successfully');
+            print('📄 License hash: $licenseBase64');
+            print('📄 Birth cert hash: $birthCertBase64');
+            print('✅ Driver documents hashed successfully');
           }
         } catch (e) {
           if (kDebugMode) {
-            print('❌ Document processing error: $e');
+            print('❌ Document hashing error: $e');
           }
           showError('Failed to process images: $e');
           return;
@@ -432,8 +418,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
           'altContact': altLocal,
-          'licenseImage': licenseBase64!,
-          'birthCertificateImage': birthCertBase64!,
+          'licenseImage':
+              licenseBase64, // use licenseBase64 instead of licenseHash
+          'birthCertificateImage':
+              birthCertBase64, // use birthCertBase64 instead of birthCertHash
           'documentsUploaded': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
         });
