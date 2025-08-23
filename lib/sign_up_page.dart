@@ -307,25 +307,26 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      // 2️⃣ Only now process driver images / hash
-      String? licenseHash, birthCertHash;
-      if (role == 'driver') {
-        if (!validateDriverFields()) return;
-        licenseHash = _hashFile(licenseImage!);
-        birthCertHash = _hashFile(birthCertificateImage!);
-      }
-
-      // 3️⃣ Prepare Firestore document
+      // 2️⃣ Prepare Firestore document
       final doc = <String, dynamic>{
         'uid': user.uid,
         'phone': phoneController.text.replaceAll(RegExp(r'\D'), ''),
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': role == 'rider',
+        'verified': true, // allow temporary access
+        'signupCompleted': false, // pending document verification
       };
 
+      String? licenseHash, birthCertHash;
+
       if (role == 'driver') {
+        if (!validateDriverFields()) return;
+
+        // Hash documents
+        licenseHash = _hashFile(licenseImage!);
+        birthCertHash = _hashFile(birthCertificateImage!);
+
         doc.addAll({
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
@@ -337,16 +338,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'documentsUploaded': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
         });
+
+        // Prompt user about admin review
+        showInfo('Documents uploaded. Waiting for admin approval.');
       }
 
-      // 4️⃣ Write to Firestore
+      // 3️⃣ Write to Firestore
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .set(doc);
 
-      showInfo('Registration completed successfully!');
-      // ignore: use_build_context_synchronously
+      // Optional: navigate to dashboard or login
       Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
       showError('OTP verification / signup failed: $e');
