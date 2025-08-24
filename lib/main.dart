@@ -43,11 +43,22 @@ class FemDriveApp extends StatefulWidget {
 
 class _FemDriveAppState extends State<FemDriveApp> {
   String? _lastKnownUid;
+  bool _isLoadingFCM = true; // NEW: spinner state
 
   @override
   void initState() {
     super.initState();
-    _setupFCM();
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    try {
+      await _setupFCM();
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingFCM = false); // hide loader
+      }
+    }
   }
 
   String? getSafeUid() {
@@ -63,25 +74,37 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   Future<void> _setupFCM() async {
     final fbm = FirebaseMessaging.instance;
+
+    // Request permission for notifications
     await fbm.requestPermission();
 
-    // Initial token setup
-    final token = await fbm.getToken();
     final uid = getSafeUid();
-    if (token != null && uid != null) {
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
-        'fcmToken': token,
-      });
+    if (uid == null) return; // exit if user not logged in
+
+    // Initial token setup
+    try {
+      final token = await fbm.getToken();
+      if (token != null) {
+        await FirebaseFirestore.instance.collection('users').doc(uid).set({
+          'fcmToken': token,
+        }, SetOptions(merge: true));
+      }
+    } catch (e) {
+      debugPrint('Error saving FCM token: $e');
     }
 
-    // Token refresh listener
+    // Listen for token refresh
     fbm.onTokenRefresh.listen((newToken) async {
       final currentUid = getSafeUid();
       if (currentUid != null) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(currentUid)
-            .update({'fcmToken': newToken});
+        try {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUid)
+              .set({'fcmToken': newToken}, SetOptions(merge: true));
+        } catch (e) {
+          debugPrint('Error updating refreshed FCM token: $e');
+        }
       }
     });
 
@@ -91,7 +114,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
       if (notif != null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${notif.title}: ${notif.body}'),
+            content: Text('${notif.title ?? ''}: ${notif.body ?? ''}'),
             backgroundColor: Colors.teal,
           ),
         );
@@ -102,11 +125,15 @@ class _FemDriveAppState extends State<FemDriveApp> {
     FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
 
     // App launch from notification
-    final initialMsg = await fbm.getInitialMessage();
-    if (initialMsg != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _handleNotificationNavigation(initialMsg);
-      });
+    try {
+      final initialMsg = await fbm.getInitialMessage();
+      if (initialMsg != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _handleNotificationNavigation(initialMsg);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error handling initial FCM message: $e');
     }
   }
 
@@ -145,26 +172,37 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      navigatorKey: navigatorKey,
-      title: 'FemDrive',
-      theme: femTheme,
-      debugShowCheckedModeBanner: false,
-      home: _buildInitialScreen(),
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/signup': (context) => const SignUpPage(),
-        '/dashboard': (context) => const RiderDashboardPage(),
-        '/driver-dashboard': (context) => const DriverDashboard(),
-        '/admin': (context) => const AdminDriverVerificationPage(),
-        '/profile': (context) => const ProfilePage(),
-        '/past-rides': (context) => const PastRidesPage(),
-        '/driver-ride-details': (context) {
-          final rideId = ModalRoute.of(context)?.settings.arguments as String?;
-          if (rideId == null) return const LoginPage(); // fallback
-          return details.DriverRideDetailsPage(rideId: rideId);
-        },
-      },
+    return Stack(
+      children: [
+        MaterialApp(
+          navigatorKey: navigatorKey,
+          title: 'FemDrive',
+          theme: femTheme,
+          debugShowCheckedModeBanner: false,
+          home: _buildInitialScreen(),
+          routes: {
+            '/login': (context) => const LoginPage(),
+            '/signup': (context) => const SignUpPage(),
+            '/dashboard': (context) => const RiderDashboardPage(),
+            '/driver-dashboard': (context) => const DriverDashboard(),
+            '/admin': (context) => const AdminDriverVerificationPage(),
+            '/profile': (context) => const ProfilePage(),
+            '/past-rides': (context) => const PastRidesPage(),
+            '/driver-ride-details': (context) {
+              final rideId =
+                  ModalRoute.of(context)?.settings.arguments as String?;
+              if (rideId == null) return const LoginPage(); // fallback
+              return details.DriverRideDetailsPage(rideId: rideId);
+            },
+          },
+        ),
+        if (_isLoadingFCM)
+          Container(
+            color: Colors.black45,
+            alignment: Alignment.center,
+            child: const CircularProgressIndicator(color: Colors.teal),
+          ),
+      ],
     );
   }
 
