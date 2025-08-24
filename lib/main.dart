@@ -172,37 +172,41 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        MaterialApp(
-          navigatorKey: navigatorKey,
-          title: 'FemDrive',
-          theme: femTheme,
-          debugShowCheckedModeBanner: false,
-          home: _buildInitialScreen(),
-          routes: {
-            '/login': (context) => const LoginPage(),
-            '/signup': (context) => const SignUpPage(),
-            '/dashboard': (context) => const RiderDashboardPage(),
-            '/driver-dashboard': (context) => const DriverDashboard(),
-            '/admin': (context) => const AdminDriverVerificationPage(),
-            '/profile': (context) => const ProfilePage(),
-            '/past-rides': (context) => const PastRidesPage(),
-            '/driver-ride-details': (context) {
-              final rideId =
-                  ModalRoute.of(context)?.settings.arguments as String?;
-              if (rideId == null) return const LoginPage(); // fallback
-              return details.DriverRideDetailsPage(rideId: rideId);
+    return Directionality(
+      textDirection: TextDirection.ltr, // or rtl if needed
+      child: Stack(
+        children: [
+          MaterialApp(
+            navigatorKey: navigatorKey,
+            title: 'FemDrive',
+            theme: femTheme,
+            debugShowCheckedModeBanner: false,
+            home: _buildInitialScreen(),
+            routes: {
+              '/login': (context) => const LoginPage(),
+              '/signup': (context) => const SignUpPage(),
+              '/dashboard': (context) => const RiderDashboardPage(),
+              '/driver-dashboard': (context) => const DriverDashboard(),
+              '/admin': (context) => const AdminDriverVerificationPage(),
+              '/profile': (context) => const ProfilePage(),
+              '/past-rides': (context) => const PastRidesPage(),
+              '/driver-ride-details': (context) {
+                final rideId =
+                    ModalRoute.of(context)?.settings.arguments as String?;
+                return rideId != null
+                    ? details.DriverRideDetailsPage(rideId: rideId)
+                    : const LoginPage();
+              },
             },
-          },
-        ),
-        if (_isLoadingFCM)
-          Container(
-            color: Colors.black45,
-            alignment: Alignment.center,
-            child: const CircularProgressIndicator(color: Colors.teal),
           ),
-      ],
+          if (_isLoadingFCM)
+            Container(
+              color: Colors.black45,
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(color: Colors.teal),
+            ),
+        ],
+      ),
     );
   }
 
