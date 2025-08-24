@@ -1,9 +1,11 @@
+// ignore_for_file: avoid_print, use_build_context_synchronously
+
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 
@@ -68,7 +70,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   final carTypeList = ['Ride X', 'Ride mini', 'Bike'];
 
   File? licenseImage, birthCertificateImage;
-  String? licenseBase64, birthCertBase64;
+  String? licenseUrl, birthCertUrl;
 
   bool isOtpSent = false;
   bool isSubmitting = false;
@@ -83,14 +85,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   @override
   void initState() {
     super.initState();
-
-    // Start listening for SMS autofill (Android)
     listenForCode();
   }
 
   @override
   void dispose() {
-    cancel(); // stop sms_autofill listener
+    cancel();
     phoneController.dispose();
     usernameController.dispose();
     carModelController.dispose();
@@ -99,7 +99,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     super.dispose();
   }
 
-  // ======== SMS AutoFill hook ========
   @override
   void codeUpdated() {
     final received = code ?? '';
@@ -113,7 +112,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  // ======== Helpers ========
   void startResendTimer() {
     setState(() {
       canResend = false;
@@ -154,16 +152,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
-  // ======== OTP logic ========
-  // ======== Firebase flows ========
   Future<void> sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (role == 'driver') {
       if (carModelController.text.trim().isEmpty ||
           altContactController.text.trim().isEmpty ||
-          licenseBase64 == null ||
-          birthCertBase64 == null) {
+          licenseUrl == null ||
+          birthCertUrl == null) {
         return showError('Please fill all driver details and capture images.');
       }
     }
@@ -182,7 +178,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
-          // Instant auto-verification (Android)
           await FirebaseAuth.instance.signInWithCredential(credential);
           await confirmOtp(autoCredential: credential);
         },
@@ -209,118 +204,142 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     setState(() => isSubmitting = true);
 
     try {
-      // OTP credential
-      final otpCode = enteredOtp;
-      final credential =
-          autoCredential ??
-          PhoneAuthProvider.credential(
-            verificationId: verificationId!,
-            smsCode: otpCode,
-          );
-
       if (autoCredential == null && enteredOtp.length != otpLength) {
         showError('Please enter the full OTP');
         return;
       }
 
-      // Sign in with OTP
+      if (verificationId == null && autoCredential == null) {
+        showError('Verification ID is missing. Please resend OTP.');
+        return;
+      }
+
+      final credential =
+          autoCredential ??
+          PhoneAuthProvider.credential(
+            verificationId: verificationId!,
+            smsCode: enteredOtp,
+          );
+
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
-
       final user = userCred.user;
-      if (user == null) throw Exception('Sign-in failed');
 
-      // Phone numbers
-      final primaryFormatted = formatPhoneNumber(phoneController.text.trim());
-      final digitsOnly = phoneController.text.replaceAll(RegExp(r'\D'), '');
-
-      if (role == 'driver') {
-        final altFormatted = formatPhoneNumber(
-          altContactController.text.trim(),
-        );
-        if (primaryFormatted == altFormatted) {
-          return showError('Alternate number cannot be the same as primary.');
-        }
+      if (user == null) {
+        showError('Authentication failed. Please try again.');
+        return;
       }
 
-      // Document to set
-      final doc = {
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      final existingDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (existingDoc.exists) {
+        await FirebaseAuth.instance.signOut();
+        showError('Account already exists. Please try logging in.');
+        return;
+      }
+
+      final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
+
+      final doc = <String, dynamic>{
         'uid': user.uid,
-        'phone': digitsOnly,
+        'phone': primaryDigits,
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': role == 'rider'
-            ? true
-            : true, // temporary true for driver to allow OTP
-        if (role == 'driver') ...{
-          'carType': selectedCarType,
-          'carModel': carModelController.text.trim(),
-          'altContact': altContactController.text.trim(),
-          'licenseBase64': licenseBase64,
-          'birthCertificateBase64': birthCertBase64,
-        },
+        'verified': role == 'rider',
       };
 
-      // Step 1: Save user document
+      if (role == 'driver') {
+        final altDigits = altContactController.text.replaceAll(
+          RegExp(r'\D'),
+          '',
+        );
+
+        doc.addAll({
+          'carType': selectedCarType,
+          'carModel': carModelController.text.trim(),
+          'altContact': altDigits,
+          'licenseUrl': licenseUrl!,
+          'birthCertificateUrl': birthCertUrl!,
+          'documentsUploaded': true,
+          'awaitingVerification': true,
+          'uploadTimestamp': FieldValue.serverTimestamp(),
+        });
+      }
+
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .set(doc);
 
-      // Step 2: If driver, mark verified false & awaiting confirmation
-      if (role == 'driver') {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .update({
-              'verified': false,
-              'awaitingConfirmation': true, // optional flag for admin approval
-            });
-      }
+      final message = role == 'driver'
+          ? 'Driver registration successful! Your account is pending verification.'
+          : 'Registration successful!';
 
-      if (mounted) Navigator.pushReplacementNamed(context, '/login');
-    } on FirebaseAuthException catch (e) {
-      showError(e.message ?? 'Verification failed');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.green),
+      );
+
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
-      showError('Verification failed: $e');
+      showError('Registration failed: $e');
     } finally {
-      if (mounted) setState(() => isSubmitting = false);
+      if (mounted) {
+        setState(() => isSubmitting = false);
+      }
     }
   }
 
-  // ======== Camera capture (full-screen, preview, retake, use) ========
   Future<void> _captureDocument(bool isLicense) async {
-    final file = await Navigator.push<File?>(
-      context,
-      MaterialPageRoute(builder: (_) => const FullScreenCamera()),
-    );
-
-    if (file == null) return;
-
-    setState(() => isSubmitting = true); // Show loading bar/spinner
     try {
-      final bytes = await file.readAsBytes();
-      final base64 = base64Encode(bytes);
+      final file = await Navigator.push<File?>(
+        context,
+        MaterialPageRoute(builder: (_) => const FullScreenCamera()),
+      );
+
+      if (file == null) return;
+      setState(() => isSubmitting = true);
+
+      final storageRef = FirebaseStorage.instance.ref().child(
+        "documents/${isLicense ? 'license' : 'birthCert'}_${DateTime.now().millisecondsSinceEpoch}.jpg",
+      );
+
+      await storageRef.putFile(file);
+      final downloadUrl = await storageRef.getDownloadURL();
 
       setState(() {
         if (isLicense) {
           licenseImage = file;
-          licenseBase64 = base64;
+          licenseUrl = downloadUrl;
         } else {
           birthCertificateImage = file;
-          birthCertBase64 = base64;
+          birthCertUrl = downloadUrl;
         }
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${isLicense ? 'License' : 'Birth certificate'} uploaded successfully!',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
-      showError('Failed to process image: $e');
+      showError('Failed to upload image: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
   }
 
-  // ======== UI ========
   @override
   Widget build(BuildContext context) {
     final fieldDecoration = const InputDecoration(
@@ -457,8 +476,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           )
                         : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
                   ),
-
-                  const SizedBox(height: 16),
                 ],
               ),
             ),
@@ -507,8 +524,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                   const SizedBox(width: 8),
                   Text(
                     isLicense
-                        ? "License selected"
-                        : "Birth certificate selected",
+                        ? "License uploaded"
+                        : "Birth certificate uploaded",
                     style: const TextStyle(color: Colors.grey),
                   ),
                 ],
@@ -528,7 +545,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 }
 
-// =================== Full-screen Camera ===================
 class FullScreenCamera extends StatefulWidget {
   const FullScreenCamera({super.key});
 
@@ -553,7 +569,7 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
       final camera = cameras.first;
       _controller = CameraController(
         camera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
       );
       await _controller!.initialize();
@@ -630,8 +646,11 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
                     children: [
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
+                          backgroundColor: Colors.red,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
                         ),
                         onPressed: () => setState(() => _capturedFile = null),
                         child: const Text("Retake"),
@@ -639,11 +658,15 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
                         ),
-                        onPressed: () =>
-                            Navigator.pop(context, File(_capturedFile!.path)),
-                        child: const Text("Use Photo"),
+                        onPressed: () {
+                          Navigator.pop(context, File(_capturedFile!.path));
+                        },
+                        child: const Text("Confirm"),
                       ),
                     ],
                   ),
@@ -652,9 +675,8 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
             ),
       floatingActionButton: _capturedFile == null
           ? FloatingActionButton(
-              backgroundColor: Colors.white,
               onPressed: _takePicture,
-              child: const Icon(Icons.camera_alt, color: Colors.black),
+              child: const Icon(Icons.camera),
             )
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,

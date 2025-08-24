@@ -34,6 +34,23 @@ void main() async {
   runApp(const ProviderScope(child: FemDriveApp()));
 }
 
+// Riverpod providers:
+
+/// Provides the current Firebase user (null if not logged in)
+final userProvider = StreamProvider<User?>(
+  (ref) => FirebaseAuth.instance.authStateChanges(),
+);
+
+/// Provides the Firestore user document snapshot for the current user
+final userDocProvider = StreamProvider<DocumentSnapshot?>((ref) {
+  final user = ref.watch(userProvider).asData?.value;
+  if (user == null) return const Stream.empty();
+  return FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .snapshots();
+});
+
 class FemDriveApp extends StatefulWidget {
   const FemDriveApp({super.key});
 
@@ -176,27 +193,31 @@ class _FemDriveAppState extends State<FemDriveApp> {
       textDirection: TextDirection.ltr, // or rtl if needed
       child: Stack(
         children: [
-          MaterialApp(
-            navigatorKey: navigatorKey,
-            title: 'FemDrive',
-            theme: femTheme,
-            debugShowCheckedModeBanner: false,
-            home: _buildInitialScreen(),
-            routes: {
-              '/login': (context) => const LoginPage(),
-              '/signup': (context) => const SignUpPage(),
-              '/dashboard': (context) => const RiderDashboardPage(),
-              '/driver-dashboard': (context) => const DriverDashboard(),
-              '/admin': (context) => const AdminDriverVerificationPage(),
-              '/profile': (context) => const ProfilePage(),
-              '/past-rides': (context) => const PastRidesPage(),
-              '/driver-ride-details': (context) {
-                final rideId =
-                    ModalRoute.of(context)?.settings.arguments as String?;
-                return rideId != null
-                    ? details.DriverRideDetailsPage(rideId: rideId)
-                    : const LoginPage();
-              },
+          Consumer(
+            builder: (context, ref, _) {
+              return MaterialApp(
+                navigatorKey: navigatorKey,
+                title: 'FemDrive',
+                theme: femTheme,
+                debugShowCheckedModeBanner: false,
+                home: InitialScreen(), // Use the new ConsumerWidget below
+                routes: {
+                  '/login': (context) => const LoginPage(),
+                  '/signup': (context) => const SignUpPage(),
+                  '/dashboard': (context) => const RiderDashboardPage(),
+                  '/driver-dashboard': (context) => const DriverDashboard(),
+                  '/admin': (context) => const AdminDriverVerificationPage(),
+                  '/profile': (context) => const ProfilePage(),
+                  '/past-rides': (context) => const PastRidesPage(),
+                  '/driver-ride-details': (context) {
+                    final rideId =
+                        ModalRoute.of(context)?.settings.arguments as String?;
+                    return rideId != null
+                        ? details.DriverRideDetailsPage(rideId: rideId)
+                        : const LoginPage();
+                  },
+                },
+              );
             },
           ),
           if (_isLoadingFCM)
@@ -209,44 +230,27 @@ class _FemDriveAppState extends State<FemDriveApp> {
       ),
     );
   }
+}
 
-  Widget _buildInitialScreen() {
-    return FutureBuilder<User?>(
-      future: Future.value(FirebaseAuth.instance.currentUser),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
+class InitialScreen extends ConsumerWidget {
+  const InitialScreen({super.key});
 
-        final uid = getSafeUid();
-        // ✅ FIX: More robust null checking
-        if (uid == null || FirebaseAuth.instance.currentUser == null) {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userAsync = ref.watch(userProvider);
+    return userAsync.when(
+      data: (user) {
+        if (user == null) {
           return const LoginPage();
         }
-
-        return FutureBuilder<DocumentSnapshot>(
-          future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
-          builder: (context, snap) {
-            if (!snap.hasData) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            // ✅ FIX: Handle document not existing after logout
-            if (!snap.data!.exists) {
-              // Clear the cached UID and show login
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _lastKnownUid = null;
-              });
+        final userDocAsync = ref.watch(userDocProvider);
+        return userDocAsync.when(
+          data: (doc) {
+            if (doc == null || !doc.exists) {
               return const LoginPage();
             }
-
-            final data = snap.data!.data() as Map<String, dynamic>;
+            final data = doc.data() as Map<String, dynamic>? ?? {};
             final role = data['role'];
-
             switch (role) {
               case 'admin':
                 return const AdminDriverVerificationPage();
@@ -258,8 +262,14 @@ class _FemDriveAppState extends State<FemDriveApp> {
                 return const LoginPage();
             }
           },
+          loading: () =>
+              const Scaffold(body: Center(child: CircularProgressIndicator())),
+          error: (_, _) => const LoginPage(),
         );
       },
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (_, _) => const LoginPage(),
     );
   }
 }
