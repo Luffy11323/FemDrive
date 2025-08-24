@@ -235,7 +235,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     // ✅ FIX: Don't create new FemDriveApp instance, just navigate to login
     // Let the existing app's auth state handling redirect to appropriate dashboard
     if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+    Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
   }
 
   void _showError(String msg) {

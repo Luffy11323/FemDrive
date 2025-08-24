@@ -241,35 +241,68 @@ class InitialScreen extends ConsumerWidget {
     return userAsync.when(
       data: (user) {
         if (user == null) {
+          debugPrint("🔐 No user authenticated, showing LoginPage");
           return const LoginPage();
         }
+
+        debugPrint("🔐 User authenticated: ${user.uid}");
         final userDocAsync = ref.watch(userDocProvider);
         return userDocAsync.when(
           data: (doc) {
             if (doc == null || !doc.exists) {
+              debugPrint("🔐 User doc doesn't exist, showing LoginPage");
               return const LoginPage();
             }
+
             final data = doc.data() as Map<String, dynamic>? ?? {};
             final role = data['role'];
+            final isVerified = data['verified'] == true;
+
+            debugPrint("🔐 User role: $role, verified: $isVerified");
+
             switch (role) {
               case 'admin':
+                debugPrint("🔐 Redirecting to AdminPage");
                 return const AdminDriverVerificationPage();
               case 'driver':
+                if (!isVerified) {
+                  debugPrint("🔐 Driver not verified, signing out");
+                  // Sign out unverified driver
+                  WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    await FirebaseAuth.instance.signOut();
+                  });
+                  return const LoginPage();
+                }
+                debugPrint("🔐 Redirecting to DriverDashboard");
                 return const DriverDashboard();
               case 'rider':
+                debugPrint("🔐 Redirecting to RiderDashboard");
                 return const RiderDashboardPage();
               default:
+                debugPrint("🔐 Unknown role: $role, showing LoginPage");
                 return const LoginPage();
             }
           },
-          loading: () =>
-              const Scaffold(body: Center(child: CircularProgressIndicator())),
-          error: (_, _) => const LoginPage(),
+          loading: () {
+            debugPrint("🔐 Loading user document...");
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          },
+          error: (error, stackTrace) {
+            debugPrint("🔐 Error loading user document: $error");
+            return const LoginPage();
+          },
         );
       },
-      loading: () =>
-          const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (_, _) => const LoginPage(),
+      loading: () {
+        debugPrint("🔐 Loading user authentication...");
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      },
+      error: (error, stackTrace) {
+        debugPrint("🔐 Authentication error: $error");
+        return const LoginPage();
+      },
     );
   }
 }
