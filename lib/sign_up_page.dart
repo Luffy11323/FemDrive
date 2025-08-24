@@ -2,12 +2,13 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -70,7 +71,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   final carTypeList = ['Ride X', 'Ride mini', 'Bike'];
 
   File? licenseImage, birthCertificateImage;
-  String? licenseUrl, birthCertUrl;
+  String? licenseBase64, birthCertBase64;
 
   bool isOtpSent = false;
   bool isSubmitting = false;
@@ -79,7 +80,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   int resendSeconds = 60;
   Timer? _resendTimer;
 
-  // OTP controllers & focus
   final int otpLength = 6;
 
   @override
@@ -138,11 +138,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Future<bool> phoneNumberExists(String phone) async {
     final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
     final snap = await FirebaseFirestore.instance
-        .collection('users')
-        .where('phone', isEqualTo: digitsOnly)
-        .limit(1)
+        .collection('phones')
+        .doc(digitsOnly)
         .get();
-    return snap.docs.isNotEmpty;
+    return snap.exists;
   }
 
   void showError(String msg) {
@@ -158,8 +157,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     if (role == 'driver') {
       if (carModelController.text.trim().isEmpty ||
           altContactController.text.trim().isEmpty ||
-          licenseUrl == null ||
-          birthCertUrl == null) {
+          licenseBase64 == null ||
+          birthCertBase64 == null) {
         return showError('Please fill all driver details and capture images.');
       }
     }
@@ -233,6 +232,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       await Future.delayed(const Duration(milliseconds: 500));
 
+      // ✅ Primary number digits first
+      final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
+
       final existingDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -244,7 +246,23 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
+      // Save primary phone
+      await FirebaseFirestore.instance
+          .collection('phones')
+          .doc(primaryDigits)
+          .set({'uid': user.uid, 'type': 'primary'});
+
+      // Save alt contact if driver
+      if (role == 'driver') {
+        final altDigits = altContactController.text.replaceAll(
+          RegExp(r'\D'),
+          '',
+        );
+        await FirebaseFirestore.instance
+            .collection('phones')
+            .doc(altDigits)
+            .set({'uid': user.uid, 'type': 'alt'});
+      }
 
       final doc = <String, dynamic>{
         'uid': user.uid,
@@ -265,8 +283,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
           'altContact': altDigits,
-          'licenseUrl': licenseUrl!,
-          'birthCertificateUrl': birthCertUrl!,
+          'licenseBase64': licenseBase64!,
+          'birthCertificateBase64': birthCertBase64!,
           'documentsUploaded': true,
           'awaitingVerification': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
@@ -308,33 +326,37 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (file == null) return;
       setState(() => isSubmitting = true);
 
-      final storageRef = FirebaseStorage.instance.ref().child(
-        "documents/${isLicense ? 'license' : 'birthCert'}_${DateTime.now().millisecondsSinceEpoch}.jpg",
+      // compress under 800 KB
+      final compressed = await FlutterImageCompress.compressWithFile(
+        file.absolute.path,
+        minWidth: 800,
+        minHeight: 800,
+        quality: 60,
       );
 
-      await storageRef.putFile(file);
-      final downloadUrl = await storageRef.getDownloadURL();
+      if (compressed == null) throw Exception("Image compression failed");
+      final base64Str = base64Encode(compressed);
 
       setState(() {
         if (isLicense) {
           licenseImage = file;
-          licenseUrl = downloadUrl;
+          licenseBase64 = base64Str;
         } else {
           birthCertificateImage = file;
-          birthCertUrl = downloadUrl;
+          birthCertBase64 = base64Str;
         }
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${isLicense ? 'License' : 'Birth certificate'} uploaded successfully!',
+            '${isLicense ? 'License' : 'Birth certificate'} captured successfully!',
           ),
           backgroundColor: Colors.green,
         ),
       );
     } catch (e) {
-      showError('Failed to upload image: $e');
+      showError('Failed to capture image: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
@@ -524,8 +546,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                   const SizedBox(width: 8),
                   Text(
                     isLicense
-                        ? "License uploaded"
-                        : "Birth certificate uploaded",
+                        ? "License captured"
+                        : "Birth certificate captured",
                     style: const TextStyle(color: Colors.grey),
                   ),
                 ],
@@ -647,10 +669,6 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
-                          ),
                         ),
                         onPressed: () => setState(() => _capturedFile = null),
                         child: const Text("Retake"),
@@ -658,15 +676,10 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
-                          ),
                         ),
-                        onPressed: () {
-                          Navigator.pop(context, File(_capturedFile!.path));
-                        },
-                        child: const Text("Confirm"),
+                        onPressed: () =>
+                            Navigator.pop(context, File(_capturedFile!.path)),
+                        child: const Text("Use Photo"),
                       ),
                     ],
                   ),
@@ -675,8 +688,9 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
             ),
       floatingActionButton: _capturedFile == null
           ? FloatingActionButton(
+              backgroundColor: Colors.white,
               onPressed: _takePicture,
-              child: const Icon(Icons.camera),
+              child: const Icon(Icons.camera_alt, color: Colors.black),
             )
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
