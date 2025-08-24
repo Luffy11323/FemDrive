@@ -1,9 +1,9 @@
 import 'dart:convert';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AdminDriverVerificationPage extends StatefulWidget {
@@ -39,11 +39,9 @@ class _AdminDriverVerificationPageState
         return;
       }
 
-      // Check both custom claims and Firestore document
       bool isAdminFromClaims = false;
       bool isAdminFromFirestore = false;
 
-      // Check custom claims first
       try {
         final token = await user.getIdTokenResult();
         isAdminFromClaims = token.claims?['admin'] == true;
@@ -53,7 +51,6 @@ class _AdminDriverVerificationPageState
         }
       }
 
-      // Check Firestore document
       try {
         final userDoc = await FirebaseFirestore.instance
             .collection('users')
@@ -76,7 +73,6 @@ class _AdminDriverVerificationPageState
         loading = false;
       });
 
-      // Debug information
       if (kDebugMode) {
         print('User UID: ${user.uid}');
       }
@@ -108,7 +104,6 @@ class _AdminDriverVerificationPageState
 
   Future<void> _logout() async {
     try {
-      // Show confirmation dialog
       final shouldLogout = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -121,7 +116,12 @@ class _AdminDriverVerificationPageState
             ),
             ElevatedButton(
               onPressed: () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               child: const Text('Logout'),
             ),
           ],
@@ -129,10 +129,7 @@ class _AdminDriverVerificationPageState
       );
 
       if (shouldLogout == true) {
-        // Sign out from Firebase
         await FirebaseAuth.instance.signOut();
-
-        // Navigate to login page and clear the navigation stack
         if (mounted) {
           Navigator.of(
             context,
@@ -167,7 +164,6 @@ class _AdminDriverVerificationPageState
           .doc(uid)
           .update(updates);
 
-      // Log the action
       await FirebaseFirestore.instance.collection('driverApprovals').add({
         'driverId': uid,
         'status': status,
@@ -239,7 +235,9 @@ class _AdminDriverVerificationPageState
           maxLines: 3,
           decoration: const InputDecoration(
             hintText: "Enter reason for rejection",
-            border: OutlineInputBorder(),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(12)),
+            ),
           ),
         ),
         actions: [
@@ -253,7 +251,12 @@ class _AdminDriverVerificationPageState
               Navigator.pop(context);
               updateDriverStatus(uid, 'rejected', reason: reason);
             },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
             child: const Text("Reject"),
           ),
         ],
@@ -263,26 +266,50 @@ class _AdminDriverVerificationPageState
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text('Checking admin permissions...'),
-            ],
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
         ),
-      );
-    }
-
-    if (!isAdmin) {
-      return Scaffold(
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+      ),
+      child: Scaffold(
         appBar: AppBar(
-          title: const Text('Access Denied'),
+          title: Text(
+            currentTab == 0
+                ? 'Driver Verifications'
+                : currentTab == 1
+                ? 'Driver Logs'
+                : 'Emergency Reports',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
           actions: [
+            if (currentUserData != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Chip(
+                  label: Text(
+                    currentUserData?['username'] ?? 'Admin',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  avatar: const Icon(Icons.person, size: 20),
+                ),
+              ),
             IconButton(
               onPressed: _logout,
               icon: const Icon(Icons.logout),
@@ -290,82 +317,93 @@ class _AdminDriverVerificationPageState
             ),
           ],
         ),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.lock_outline, size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              const Text(
-                'Access Denied: Admins Only',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Current Role: ${currentUserRole ?? 'Unknown'}',
-                style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _logout,
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                child: const Text('Logout'),
-              ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: checkAdminStatus,
-                child: const Text('Retry Permission Check'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          currentTab == 0
-              ? 'Driver Verifications'
-              : currentTab == 1
-              ? 'Driver Logs'
-              : 'Emergency Reports',
-        ),
-        actions: [
-          // Current user info
-          if (currentUserData != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Center(
-                child: Text(
-                  '${currentUserData?['username'] ?? 'Admin'}',
-                  style: const TextStyle(fontSize: 14),
+        body: loading
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Checking admin permissions...'),
+                  ],
                 ),
+              )
+            : !isAdmin
+            ? _buildAccessDeniedView()
+            : AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: currentTab == 0
+                    ? _buildPendingView()
+                    : currentTab == 1
+                    ? _buildLogsView()
+                    : _buildEmergencyLogsView(),
+              ),
+        bottomNavigationBar: isAdmin
+            ? NavigationBar(
+                selectedIndex: currentTab,
+                onDestinationSelected: (index) =>
+                    setState(() => currentTab = index),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.verified_user_outlined),
+                    selectedIcon: Icon(Icons.verified_user),
+                    label: 'Verifications',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.history_outlined),
+                    selectedIcon: Icon(Icons.history),
+                    label: 'Logs',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.warning_amber_outlined),
+                    selectedIcon: Icon(Icons.warning),
+                    label: 'Emergencies',
+                  ),
+                ],
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _buildAccessDeniedView() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.lock_outline,
+            size: 64,
+            color: Colors.red,
+          ).animate().fadeIn(duration: 600.ms),
+          const SizedBox(height: 16),
+          const Text(
+            'Access Denied: Admins Only',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Current Role: ${currentUserRole ?? 'Unknown'}',
+            style: const TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _logout,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
-          // Menu for switching tabs
-          PopupMenuButton<int>(
-            onSelected: (value) => setState(() => currentTab = value),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 0, child: Text('Verifications')),
-              PopupMenuItem(value: 1, child: Text('Logs')),
-              PopupMenuItem(value: 2, child: Text('Emergencies')),
-            ],
-            icon: const Icon(Icons.menu),
-          ),
-          // Logout button
-          IconButton(
-            onPressed: _logout,
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
+            child: const Text('Logout'),
+          ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: checkAdminStatus,
+            child: const Text('Retry Permission Check'),
           ),
         ],
       ),
-      body: currentTab == 0
-          ? _buildPendingView()
-          : currentTab == 1
-          ? _buildLogsView()
-          : _buildEmergencyLogsView(),
     );
   }
 
@@ -390,7 +428,7 @@ class _AdminDriverVerificationPageState
                   child: const Text('Retry'),
                 ),
               ],
-            ),
+            ).animate().fadeIn(duration: 600.ms),
           );
         }
 
@@ -400,28 +438,29 @@ class _AdminDriverVerificationPageState
 
         final drivers = snapshot.data!.docs;
         if (drivers.isEmpty) {
-          return const Center(
+          return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.check_circle, color: Colors.green, size: 48),
-                SizedBox(height: 16),
-                Text('No pending drivers'),
+                const Icon(Icons.check_circle, color: Colors.green, size: 48),
+                const SizedBox(height: 16),
+                const Text('No pending drivers'),
               ],
-            ),
+            ).animate().fadeIn(duration: 600.ms),
           );
         }
 
         return ListView.builder(
+          padding: const EdgeInsets.all(8),
           itemCount: drivers.length,
           itemBuilder: (context, index) {
             final doc = drivers[index];
             final data = doc.data() as Map<String, dynamic>;
 
             return Card(
-              margin: const EdgeInsets.all(12),
+              margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
               child: Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -430,25 +469,18 @@ class _AdminDriverVerificationPageState
                         Expanded(
                           child: Text(
                             'Username: ${data['username'] ?? 'N/A'}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text(
-                            'PENDING',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
+                        Chip(
+                          label: const Text('PENDING'),
+                          backgroundColor: Colors.orange,
+                          labelStyle: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
@@ -459,30 +491,41 @@ class _AdminDriverVerificationPageState
                     Text('Email: ${data['email'] ?? 'N/A'}'),
                     if (data.containsKey('rating'))
                       Text('Avg Rating: ${data['rating'].toStringAsFixed(1)}'),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
-                          child: TextButton.icon(
+                          child: OutlinedButton.icon(
                             onPressed: () =>
                                 showImageDialog(data['licenseUrl'], 'License'),
                             icon: const Icon(Icons.description),
                             label: const Text('View License'),
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: TextButton.icon(
+                          child: OutlinedButton.icon(
                             onPressed: () => showImageDialog(
                               data['birthCertificateUrl'],
                               'CNIC',
                             ),
                             icon: const Icon(Icons.badge),
                             label: const Text('View CNIC'),
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
@@ -497,7 +540,7 @@ class _AdminDriverVerificationPageState
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () => showRejectionDialog(doc.id),
@@ -514,6 +557,10 @@ class _AdminDriverVerificationPageState
                   ],
                 ),
               ),
+            ).animate().slideX(
+              begin: 0.1 * (index % 2 == 0 ? 1 : -1),
+              end: 0,
+              duration: 400.ms,
             );
           },
         );
@@ -542,7 +589,7 @@ class _AdminDriverVerificationPageState
                   child: const Text('Retry'),
                 ),
               ],
-            ),
+            ).animate().fadeIn(duration: 600.ms),
           );
         }
 
@@ -552,10 +599,13 @@ class _AdminDriverVerificationPageState
 
         final logs = snapshot.data!.docs;
         if (logs.isEmpty) {
-          return const Center(child: Text('No logs available'));
+          return const Center(
+            child: Text('No logs available'),
+          ).animate().fadeIn(duration: 600.ms);
         }
 
         return ListView.builder(
+          padding: const EdgeInsets.all(8),
           itemCount: logs.length,
           itemBuilder: (context, index) {
             final doc = logs[index].data() as Map<String, dynamic>;
@@ -567,7 +617,7 @@ class _AdminDriverVerificationPageState
                 : 'Unknown';
 
             return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
               child: ListTile(
                 leading: Icon(
                   status == 'approved' ? Icons.check_circle : Icons.cancel,
@@ -579,7 +629,7 @@ class _AdminDriverVerificationPageState
                 ),
                 isThreeLine: true,
               ),
-            );
+            ).animate().fadeIn(duration: 400.ms, delay: (100 * index).ms);
           },
         );
       },
@@ -607,7 +657,7 @@ class _AdminDriverVerificationPageState
                   child: const Text('Retry'),
                 ),
               ],
-            ),
+            ).animate().fadeIn(duration: 600.ms),
           );
         }
 
@@ -617,10 +667,13 @@ class _AdminDriverVerificationPageState
 
         final logs = snapshot.data!.docs;
         if (logs.isEmpty) {
-          return const Center(child: Text('No emergency reports found.'));
+          return const Center(
+            child: Text('No emergency reports found.'),
+          ).animate().fadeIn(duration: 600.ms);
         }
 
         return ListView.builder(
+          padding: const EdgeInsets.all(8),
           itemCount: logs.length,
           itemBuilder: (context, index) {
             final data = logs[index].data() as Map<String, dynamic>;
@@ -634,7 +687,7 @@ class _AdminDriverVerificationPageState
                 'Unknown';
 
             return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
               child: ListTile(
                 leading: const Icon(Icons.warning, color: Colors.red),
                 title: Text('Ride ID: ${data['rideId']}'),
@@ -645,7 +698,7 @@ class _AdminDriverVerificationPageState
                 ),
                 isThreeLine: true,
               ),
-            );
+            ).animate().fadeIn(duration: 400.ms, delay: (100 * index).ms);
           },
         );
       },

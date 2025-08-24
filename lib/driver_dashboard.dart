@@ -1,9 +1,6 @@
 // lib/driver/driver_dashboard.dart
 // Dashboard: Riverpod-first, no duplicate Firebase listeners, clean pending popup.
 
-// ignore: unnecessary_library_name
-library driver_dashboard;
-
 import 'dart:async';
 import 'dart:math';
 
@@ -16,6 +13,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -85,53 +83,63 @@ final pastRidesProvider =
 
 class EarningsSummaryWidget extends ConsumerWidget {
   const EarningsSummaryWidget({super.key});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final e = ref.watch(earningsProvider);
-    return e.when(
-      data: (s) => Padding(
+    return Card(
+      margin: const EdgeInsets.all(16),
+      child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                'Total Rides: ${s.totalRides}',
-                style: Theme.of(context).textTheme.titleMedium,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Total Rides: ${e.asData?.value.totalRides ?? 0}',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Total Earnings: \$${e.asData?.value.totalEarnings.toStringAsFixed(2) ?? '0.00'}',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ),
             ),
-            Expanded(
-              child: Text(
-                'Total Earnings: \$${s.totalEarnings.toStringAsFixed(2)}',
-                textAlign: TextAlign.end,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+            const Icon(
+              Icons.account_balance_wallet,
+              color: Colors.green,
+              size: 40,
             ),
           ],
         ),
       ),
-      loading: () => const Padding(
-        padding: EdgeInsets.all(16),
-        child: LinearProgressIndicator(),
-      ),
-      error: (e, _) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text('Earnings unavailable'),
-      ),
-    );
+    ).animate().fadeIn(duration: 400.ms);
   }
 }
 
 class PastRidesListWidget extends ConsumerWidget {
   const PastRidesListWidget({super.key});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final snap = ref.watch(pastRidesProvider);
     return snap.when(
       data: (qSnap) {
         if (qSnap.docs.isEmpty) {
-          return const Center(child: Text('No past rides yet.'));
+          return const Center(
+            child: Text('No past rides yet.'),
+          ).animate().fadeIn(duration: 400.ms);
         }
         return ListView.separated(
+          padding: const EdgeInsets.all(8),
           itemCount: qSnap.docs.length,
           separatorBuilder: (_, _) => const Divider(height: 1),
           itemBuilder: (ctx, i) {
@@ -143,32 +151,50 @@ class PastRidesListWidget extends ConsumerWidget {
                 ? '\$${fare.toStringAsFixed(2)}'
                 : '--';
             final dateStr = dt != null ? dt.toLocal().toString() : '-';
-            return ListTile(
-              dense: true,
-              title: Text('${raw['pickup'] ?? '-'} → ${raw['dropoff'] ?? '-'}'),
-              subtitle: Text('Fare: $fareStr • $dateStr'),
-              trailing: Text(
-                (raw['status'] ?? '').toString().toUpperCase(),
-                style: const TextStyle(fontWeight: FontWeight.w600),
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                dense: true,
+                title: Text(
+                  '${raw['pickup'] ?? '-'} → ${raw['dropoff'] ?? '-'}',
+                ),
+                subtitle: Text('Fare: $fareStr • $dateStr'),
+                trailing: Chip(
+                  label: Text(
+                    (raw['status'] ?? '').toString().toUpperCase(),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  backgroundColor: Colors.green.shade100,
+                ),
               ),
+            ).animate().slideX(
+              begin: 0.1 * (i % 2 == 0 ? 1 : -1),
+              end: 0,
+              duration: 400.ms,
+              delay: (100 * i).ms,
             );
           },
         );
       },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Failed to load past rides')),
+      loading: () => const Center(
+        child: CircularProgressIndicator(),
+      ).animate().fadeIn(duration: 400.ms),
+      error: (e, _) => Center(
+        child: Text('Failed to load past rides'),
+      ).animate().fadeIn(duration: 400.ms),
     );
   }
 }
 
 class IdleDashboard extends StatelessWidget {
   const IdleDashboard({super.key});
+
   @override
   Widget build(BuildContext context) {
     return Column(
-      children: const [
-        EarningsSummaryWidget(),
-        Expanded(child: PastRidesListWidget()),
+      children: [
+        const EarningsSummaryWidget(),
+        Expanded(child: const PastRidesListWidget()),
       ],
     );
   }
@@ -176,26 +202,44 @@ class IdleDashboard extends StatelessWidget {
 
 class RidePopupWidget extends ConsumerWidget {
   final PendingRequest request;
+
   const RidePopupWidget({super.key, required this.request});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('New Ride Request'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (request.pickupLabel != null) Text('From: ${request.pickupLabel}'),
-          if (request.dropoffLabel != null) Text('To: ${request.dropoffLabel}'),
+          if (request.pickupLabel != null)
+            Text(
+              'From: ${request.pickupLabel}',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+          if (request.dropoffLabel != null)
+            Text(
+              'To: ${request.dropoffLabel}',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
           Text(
             'Pickup: ${request.pickupLat.toStringAsFixed(4)}, ${request.pickupLng.toStringAsFixed(4)}',
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
           Text(
             'Dropoff: ${request.dropoffLat.toStringAsFixed(4)}, ${request.dropoffLng.toStringAsFixed(4)}',
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
           if (request.fare != null)
-            Text('Fare: \$${(request.fare as num).toStringAsFixed(2)}'),
+            Text(
+              'Fare: \$${(request.fare as num).toStringAsFixed(2)}',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
         ],
       ),
       actions: [
@@ -226,15 +270,22 @@ class RidePopupWidget extends ConsumerWidget {
               );
             }
           },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
           child: const Text('Accept'),
         ),
       ],
-    );
+    ).animate().scale(duration: 300.ms);
   }
 }
 
 class DriverDashboard extends ConsumerStatefulWidget {
   const DriverDashboard({super.key});
+
   @override
   ConsumerState<DriverDashboard> createState() => _DriverDashboardState();
 }
@@ -243,14 +294,13 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
   final _geoHasher = GeoHasher();
-  String? _driverGeoHashPrefix; // for proximity filtering
+  String? _driverGeoHashPrefix;
   final Set<String> _shownRequestIds = {};
 
   @override
   void initState() {
     super.initState();
 
-    // Existing connectivity listener
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
           results.contains(ConnectivityResult.mobile) ||
@@ -260,7 +310,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       }
     });
 
-    // ---------- VERIFIED AUTO-LOGOUT LISTENER ----------
     getDriverUid().then((uid) {
       if (uid == null) return;
       _fire.collection('users').doc(uid).snapshots().listen((snap) async {
@@ -269,12 +318,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         if (data == null) return;
         final isVerified = data['verified'] as bool? ?? true;
         if (!isVerified) {
-          // Stop tracking / online mode
           await DriverLocationService().goOffline();
-          // Sign out Firebase
           await _auth.signOut();
           if (!mounted) return;
-          // Navigate to root
           Navigator.of(context).popUntil((r) => r.isFirst);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('You have been logged out.')),
@@ -283,7 +329,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       });
     });
 
-    // Existing pending requests listener
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
         prev,
@@ -365,110 +410,228 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    final ride = ref.watch(driverDashboardProvider);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Driver Dashboard'),
-        actions: [
-          Row(
-            children: [
-              Text(_isOnline ? 'Online' : 'Offline'),
-              Switch(value: _isOnline, onChanged: _toggleOnline),
-            ],
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-        ],
-      ),
-      drawer: Drawer(
-        child: SafeArea(
-          child: Column(
-            children: [
-              UserAccountsDrawerHeader(
-                accountName: Text(_auth.currentUser?.displayName ?? ''),
-                accountEmail: Text(_auth.currentUser?.email ?? ''),
-                currentAccountPicture: const CircleAvatar(
-                  child: Icon(Icons.person),
-                ),
-              ),
-              const ListTile(
-                leading: Icon(Icons.account_balance_wallet),
-                title: Text('Earnings Summary'),
-              ),
-              const Divider(height: 1),
-              const Expanded(child: PastRidesListWidget()),
-              ListTile(
-                leading: const Icon(Icons.logout),
-                title: const Text('Logout'),
-                onTap: () async {
-                  await DriverLocationService().goOffline();
-                  await _auth.signOut();
-                  if (!mounted) return;
-                  // ignore: use_build_context_synchronously
-                  Navigator.of(context).popUntil((r) => r.isFirst);
-                },
-              ),
-            ],
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           ),
         ),
       ),
-      body: ride.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: ${e.toString()}')),
-        data: (doc) {
-          if (doc == null) return const IdleDashboard();
-
-          final data = doc.data();
-          if (data == null) {
-            return const Center(child: Text('Ride data unavailable.'));
-          }
-          final rideId = doc.id;
-
-          return GoogleMap(
-            initialCameraPosition: CameraPosition(
-              target: data['pickupLat'] is num && data['pickupLng'] is num
-                  ? LatLng(
-                      (data['pickupLat'] as num).toDouble(),
-                      (data['pickupLng'] as num).toDouble(),
-                    )
-                  : const LatLng(0, 0),
-              zoom: 14,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Driver Dashboard',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            Row(
+              children: [
+                Text(
+                  _isOnline ? 'Online' : 'Offline',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  value: _isOnline,
+                  onChanged: _toggleOnline,
+                  activeThumbColor: Colors.green,
+                ),
+              ],
             ),
-            markers: {
-              if (data['pickupLat'] is num && data['pickupLng'] is num)
-                Marker(
-                  markerId: const MarkerId('pickup'),
-                  position: LatLng(
+          ],
+        ),
+        drawer: Drawer(child: _buildDrawer()),
+        body: ref
+            .watch(driverDashboardProvider)
+            .when(
+              loading: () => const Center(
+                child: CircularProgressIndicator(),
+              ).animate().fadeIn(duration: 400.ms),
+              error: (e, _) => Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error, color: Colors.red, size: 48),
+                    const SizedBox(height: 16),
+                    Text('Error: ${e.toString()}'),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      onPressed: () => ref.invalidate(driverDashboardProvider),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ).animate().fadeIn(duration: 400.ms),
+              ),
+              data: (doc) => AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: doc == null
+                    ? const IdleDashboard(key: ValueKey('idle'))
+                    : _buildMapView(doc, doc.id),
+              ),
+            ),
+        floatingActionButton: ref
+            .watch(driverDashboardProvider)
+            .when(
+              data: (doc) => doc == null
+                  ? FloatingActionButton(
+                      onPressed: () => Scaffold.of(context).openDrawer(),
+                      tooltip: 'Menu',
+                      child: const Icon(Icons.menu),
+                    )
+                  : null,
+              loading: () => null,
+              error: (_, _) => null,
+            ),
+      ),
+    );
+  }
+
+  Widget _buildDrawer() {
+    return SafeArea(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          UserAccountsDrawerHeader(
+            accountName: Text(_auth.currentUser?.displayName ?? 'Driver'),
+            accountEmail: Text(_auth.currentUser?.email ?? 'No email'),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              child: const Icon(Icons.person, color: Colors.white),
+            ),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+            ),
+          ).animate().slideY(begin: -0.2, end: 0, duration: 400.ms),
+          const ListTile(
+            leading: Icon(Icons.account_balance_wallet),
+            title: Text('Earnings Summary'),
+            enabled: false,
+          ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('Logout'),
+            onTap: () async {
+              Navigator.pop(context); // Close drawer
+              await DriverLocationService().goOffline();
+              await _auth.signOut();
+              if (!mounted) return;
+              Navigator.of(context).popUntil((r) => r.isFirst);
+            },
+          ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapView(DocumentSnapshot doc, String rideId) {
+    final data = doc.data() as Map<String, dynamic>?;
+    if (data == null) {
+      return const Center(
+        child: Text('Ride data unavailable.'),
+      ).animate().fadeIn(duration: 400.ms);
+    }
+
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition: CameraPosition(
+            target: data['pickupLat'] is num && data['pickupLng'] is num
+                ? LatLng(
                     (data['pickupLat'] as num).toDouble(),
                     (data['pickupLng'] as num).toDouble(),
-                  ),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueAzure,
-                  ),
+                  )
+                : const LatLng(0, 0),
+            zoom: 14,
+          ),
+          markers: {
+            if (data['pickupLat'] is num && data['pickupLng'] is num)
+              Marker(
+                markerId: const MarkerId('pickup'),
+                position: LatLng(
+                  (data['pickupLat'] as num).toDouble(),
+                  (data['pickupLng'] as num).toDouble(),
                 ),
-              if (data['dropoffLat'] is num && data['dropoffLng'] is num)
-                Marker(
-                  markerId: const MarkerId('dropoff'),
-                  position: LatLng(
-                    (data['dropoffLat'] as num).toDouble(),
-                    (data['dropoffLng'] as num).toDouble(),
-                  ),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueGreen,
-                  ),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueAzure,
                 ),
-            },
-            myLocationEnabled: true,
-            myLocationButtonEnabled: true,
-            onTap: (_) {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => DriverRideDetailsPage(rideId: rideId),
+              ),
+            if (data['dropoffLat'] is num && data['dropoffLng'] is num)
+              Marker(
+                markerId: const MarkerId('dropoff'),
+                position: LatLng(
+                  (data['dropoffLat'] as num).toDouble(),
+                  (data['dropoffLng'] as num).toDouble(),
                 ),
-              );
-            },
-          );
-        },
-      ),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                ),
+              ),
+          },
+          myLocationEnabled: true,
+          myLocationButtonEnabled: true,
+          onTap: (_) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => DriverRideDetailsPage(rideId: rideId),
+              ),
+            );
+          },
+        ),
+        Positioned(
+          bottom: 16,
+          left: 16,
+          right: 16,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Ride: ${data['pickup'] ?? '-'} → ${data['dropoff'] ?? '-'}',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Fare: \$${data['fare'] is num ? (data['fare'] as num).toStringAsFixed(2) : '--'}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DriverRideDetailsPage(rideId: rideId),
+                      ),
+                    ),
+                    child: const Text('View Details'),
+                  ),
+                ],
+              ),
+            ),
+          ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+        ),
+      ],
     );
   }
 }

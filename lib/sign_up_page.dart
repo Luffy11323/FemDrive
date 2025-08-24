@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:camera/camera.dart';
@@ -43,17 +44,20 @@ class _OtpInputFieldState extends State<OtpInputField> {
       keyboardType: TextInputType.number,
       maxLength: widget.length,
       textAlign: TextAlign.center,
-      style: const TextStyle(letterSpacing: 30, fontSize: 20),
-      decoration: const InputDecoration(
-        border: OutlineInputBorder(),
+      style: const TextStyle(letterSpacing: 20, fontSize: 20),
+      decoration: InputDecoration(
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         counterText: "",
+        prefixIcon: const Icon(Icons.lock),
+        filled: true,
+        fillColor: Theme.of(context).colorScheme.surfaceContainer,
       ),
       onChanged: (value) {
         if (value.length == widget.length) {
           widget.onCompleted(value);
         }
       },
-    );
+    ).animate().fadeIn(duration: 400.ms);
   }
 }
 
@@ -146,9 +150,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   void showError(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   Future<void> sendOtp() async {
@@ -232,7 +241,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       await Future.delayed(const Duration(milliseconds: 500));
 
-      // ✅ Primary number digits first
       final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
 
       final existingDoc = await FirebaseFirestore.instance
@@ -246,13 +254,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      // Save primary phone
       await FirebaseFirestore.instance
           .collection('phones')
           .doc(primaryDigits)
           .set({'uid': user.uid, 'type': 'primary'});
 
-      // Save alt contact if driver
       if (role == 'driver') {
         final altDigits = altContactController.text.replaceAll(
           RegExp(r'\D'),
@@ -301,7 +307,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           : 'Registration successful!';
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), backgroundColor: Colors.green),
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.primary,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
       );
 
       await Future.delayed(const Duration(seconds: 1));
@@ -326,7 +339,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (file == null) return;
       setState(() => isSubmitting = true);
 
-      // compress under 800 KB
       final compressed = await FlutterImageCompress.compressWithFile(
         file.absolute.path,
         minWidth: 800,
@@ -352,7 +364,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           content: Text(
             '${isLicense ? 'License' : 'Birth certificate'} captured successfully!',
           ),
-          backgroundColor: Colors.green,
+          backgroundColor: Theme.of(context).colorScheme.primary,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
       );
     } catch (e) {
@@ -364,152 +380,253 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   @override
   Widget build(BuildContext context) {
-    final fieldDecoration = const InputDecoration(
-      labelStyle: TextStyle(height: 1.2),
-      border: OutlineInputBorder(),
-    );
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Sign Up - FemDrive')),
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Form(
-              key: _formKey,
-              child: ListView(
-                children: [
-                  TextFormField(
-                    controller: usernameController,
-                    decoration: fieldDecoration.copyWith(labelText: 'Username'),
-                    validator: (v) =>
-                        v == null || v.isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 15),
-                  TextFormField(
-                    controller: phoneController,
-                    decoration: fieldDecoration.copyWith(
-                      labelText: 'Phone (e.g. 0300-1234567)',
-                    ),
-                    keyboardType: TextInputType.phone,
-                    validator: (v) {
-                      if (v == null || v.isEmpty) return 'Required';
-                      try {
-                        formatPhoneNumber(v);
-                        return null;
-                      } catch (e) {
-                        return e.toString().replaceAll('Exception: ', '');
-                      }
-                    },
-                  ),
-                  if (isOtpSent) ...[
-                    const SizedBox(height: 15),
-                    _buildOtpFields(),
-                    const SizedBox(height: 10),
-                    canResend
-                        ? TextButton(
-                            onPressed: sendOtp,
-                            child: const Text('Resend OTP'),
-                          )
-                        : Text('Resend in $resendSeconds seconds'),
-                  ],
-                  const SizedBox(height: 15),
-                  DropdownButtonFormField<String>(
-                    initialValue: role,
-                    items: ['rider', 'driver']
-                        .map(
-                          (r) => DropdownMenuItem(
-                            value: r,
-                            child: Text(r.toUpperCase()),
-                          ),
-                        )
-                        .toList(),
-                    decoration: fieldDecoration.copyWith(
-                      labelText: 'Register as',
-                    ),
-                    onChanged: (v) => setState(() => role = v!),
-                  ),
-                  if (role == 'driver') ...[
-                    const SizedBox(height: 15),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedCarType,
-                      decoration: fieldDecoration.copyWith(
-                        labelText: 'Car Type',
-                      ),
-                      items: carTypeList
-                          .map(
-                            (t) => DropdownMenuItem(value: t, child: Text(t)),
-                          )
-                          .toList(),
-                      onChanged: (v) => setState(() => selectedCarType = v!),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      controller: carModelController,
-                      decoration: fieldDecoration.copyWith(
-                        labelText: 'Car Model',
-                      ),
-                      validator: (v) =>
-                          v == null || v.isEmpty ? 'Required' : null,
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      controller: altContactController,
-                      decoration: fieldDecoration.copyWith(
-                        labelText: 'Alternate Number',
-                      ),
-                      keyboardType: TextInputType.phone,
-                      validator: (v) {
-                        if (v == null || v.isEmpty) return 'Required';
-                        try {
-                          formatPhoneNumber(v);
-                          return null;
-                        } catch (e) {
-                          return e.toString().replaceAll('Exception: ', '');
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    _buildImageButton(true),
-                    const SizedBox(height: 10),
-                    _buildImageButton(false),
-                  ],
-                  const SizedBox(height: 25),
-                  ElevatedButton(
-                    onPressed: isSubmitting
-                        ? null
-                        : isOtpSent
-                        ? confirmOtp
-                        : sendOtp,
-                    child: isSubmitting
-                        ? Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Theme.of(context).colorScheme.surfaceContainer,
+        ),
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Sign Up - FemDrive',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          centerTitle: true,
+        ),
+        body: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: Form(
+                key: _formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Create your account',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ).animate().fadeIn(duration: 400.ms),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Fill in the details to sign up.',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+                      const SizedBox(height: 24),
+                      TextFormField(
+                        controller: usernameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Username',
+                          prefixIcon: Icon(Icons.person),
+                        ),
+                        validator: (v) =>
+                            v == null || v.isEmpty ? 'Required' : null,
+                      ).animate().slideX(begin: -0.1, end: 0, duration: 400.ms),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: phoneController,
+                        decoration: const InputDecoration(
+                          labelText: 'Phone (e.g. 0300-1234567)',
+                          prefixIcon: Icon(Icons.phone),
+                        ),
+                        keyboardType: TextInputType.phone,
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Required';
+                          try {
+                            formatPhoneNumber(v);
+                            return null;
+                          } catch (e) {
+                            return e.toString().replaceAll('Exception: ', '');
+                          }
+                        },
+                      ).animate().slideX(begin: 0.1, end: 0, duration: 400.ms),
+                      if (isOtpSent) ...[
+                        const SizedBox(height: 16),
+                        _buildOtpFields(),
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              canResend
+                                  ? 'Resend OTP'
+                                  : 'Resend in $resendSeconds seconds',
+                              style: TextStyle(
+                                color: canResend
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
                               ),
-                              SizedBox(width: 10),
-                              Text("Please wait..."),
-                            ],
-                          )
-                        : Text(isOtpSent ? 'Verify & Register' : 'Send OTP'),
+                            ),
+                            TextButton(
+                              onPressed: canResend ? sendOtp : null,
+                              child: const Text('Resend OTP'),
+                            ),
+                          ],
+                        ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                      ],
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        initialValue: role,
+                        items: ['rider', 'driver']
+                            .map(
+                              (r) => DropdownMenuItem(
+                                value: r,
+                                child: Text(r.toUpperCase()),
+                              ),
+                            )
+                            .toList(),
+                        decoration: const InputDecoration(
+                          labelText: 'Register as',
+                          prefixIcon: Icon(Icons.person_pin),
+                        ),
+                        onChanged: (v) => setState(() => role = v!),
+                      ).animate().slideX(
+                        begin: -0.1,
+                        end: 0,
+                        duration: 400.ms,
+                        delay: 100.ms,
+                      ),
+                      if (role == 'driver') ...[
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedCarType,
+                          decoration: const InputDecoration(
+                            labelText: 'Car Type',
+                            prefixIcon: Icon(Icons.directions_car),
+                          ),
+                          items: carTypeList
+                              .map(
+                                (t) =>
+                                    DropdownMenuItem(value: t, child: Text(t)),
+                              )
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => selectedCarType = v!),
+                        ).animate().slideX(
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 200.ms,
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: carModelController,
+                          decoration: const InputDecoration(
+                            labelText: 'Car Model',
+                            prefixIcon: Icon(Icons.car_rental),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ).animate().slideX(
+                          begin: -0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 300.ms,
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: altContactController,
+                          decoration: const InputDecoration(
+                            labelText: 'Alternate Number',
+                            prefixIcon: Icon(Icons.phone),
+                          ),
+                          keyboardType: TextInputType.phone,
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'Required';
+                            try {
+                              formatPhoneNumber(v);
+                              return null;
+                            } catch (e) {
+                              return e.toString().replaceAll('Exception: ', '');
+                            }
+                          },
+                        ).animate().slideX(
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 400.ms,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildImageButton(true),
+                        const SizedBox(height: 16),
+                        _buildImageButton(false),
+                      ],
+                      const SizedBox(height: 24),
+                      ElevatedButton(
+                        onPressed: isSubmitting
+                            ? null
+                            : isOtpSent
+                            ? confirmOtp
+                            : sendOtp,
+                        child: isSubmitting
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: const [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text("Please wait..."),
+                                ],
+                              )
+                            : Text(
+                                isOtpSent ? 'Verify & Register' : 'Send OTP',
+                              ),
+                      ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-          if (isSubmitting)
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: LinearProgressIndicator(minHeight: 3),
-            ),
-        ],
+            if (isSubmitting)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  minHeight: 4,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainer,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ).animate().fadeIn(duration: 300.ms),
+          ],
+        ),
       ),
     );
   }
@@ -533,9 +650,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 child: Image.file(file, height: 160, fit: BoxFit.cover),
-              ),
+              ).animate().fadeIn(duration: 400.ms),
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -548,10 +665,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                     isLicense
                         ? "License captured"
                         : "Birth certificate captured",
-                    style: const TextStyle(color: Colors.grey),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
-              ),
+              ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
             ],
           )
         else
@@ -561,7 +680,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             label: Text(
               isLicense ? "Capture License" : "Capture Birth Certificate",
             ),
-          ),
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
       ],
     );
   }
@@ -599,9 +721,16 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
       setState(() => _isCameraReady = true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Camera error: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      );
       Navigator.pop(context);
     }
   }
@@ -622,78 +751,119 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_isCameraReady) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: _capturedFile == null
-          ? Stack(
-              children: [
-                Positioned.fill(child: CameraPreview(_controller!)),
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 12,
-                  left: 12,
-                  child: IconButton(
-                    color: Colors.white,
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-              ],
-            )
-          : Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.file(File(_capturedFile!.path), fit: BoxFit.cover),
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 12,
-                  left: 12,
-                  child: IconButton(
-                    color: Colors.white,
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-                Positioned(
-                  bottom: 30,
-                  left: 0,
-                  right: 0,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        onPressed: () => setState(() => _capturedFile = null),
-                        child: const Text("Retake"),
-                      ),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                        ),
-                        onPressed: () =>
-                            Navigator.pop(context, File(_capturedFile!.path)),
-                        child: const Text("Use Photo"),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
             ),
-      floatingActionButton: _capturedFile == null
-          ? FloatingActionButton(
-              backgroundColor: Colors.white,
-              onPressed: _takePicture,
-              child: const Icon(Icons.camera_alt, color: Colors.black),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: _isCameraReady
+            ? _capturedFile == null
+                  ? Stack(
+                      children: [
+                        Positioned.fill(
+                          child: CameraPreview(
+                            _controller!,
+                          ).animate().fadeIn(duration: 400.ms),
+                        ),
+                        Positioned(
+                          top: MediaQuery.of(context).padding.top + 12,
+                          left: 12,
+                          child: IconButton(
+                            color: Colors.white,
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                            tooltip: 'Close',
+                          ),
+                        ),
+                      ],
+                    )
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(_capturedFile!.path),
+                          fit: BoxFit.cover,
+                        ).animate().fadeIn(duration: 400.ms),
+                        Positioned(
+                          top: MediaQuery.of(context).padding.top + 12,
+                          left: 12,
+                          child: IconButton(
+                            color: Colors.white,
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                            tooltip: 'Close',
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 30,
+                          left: 16,
+                          right: 16,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.error,
+                                ),
+                                onPressed: () =>
+                                    setState(() => _capturedFile = null),
+                                child: const Text("Retake"),
+                              ).animate().slideY(
+                                begin: 0.2,
+                                end: 0,
+                                duration: 400.ms,
+                                delay: 100.ms,
+                              ),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
+                                ),
+                                onPressed: () => Navigator.pop(
+                                  context,
+                                  File(_capturedFile!.path),
+                                ),
+                                child: const Text("Use Photo"),
+                              ).animate().slideY(
+                                begin: 0.2,
+                                end: 0,
+                                duration: 400.ms,
+                                delay: 200.ms,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+            : const Center(
+                child: CircularProgressIndicator(),
+              ).animate().fadeIn(duration: 400.ms),
+        floatingActionButton: _capturedFile == null && _isCameraReady
+            ? FloatingActionButton(
+                backgroundColor: Colors.white,
+                onPressed: _takePicture,
+                tooltip: 'Capture Photo',
+                child: const Icon(Icons.camera_alt, color: Colors.black),
+              ).animate().scale(duration: 300.ms)
+            : null,
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      ),
     );
   }
 }

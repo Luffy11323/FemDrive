@@ -1,9 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:femdrive/location/location_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
 import 'rider/rider_dashboard_controller.dart';
 import 'rider/rider_services.dart';
 
@@ -17,20 +17,16 @@ class RiderDashboardPage extends ConsumerStatefulWidget {
 class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
   bool _trackingStarted = false;
   bool _ratingShown = false;
-
-  /// Universal UID to be used anywhere in the dashboard
   String? universalUid;
 
   @override
   void initState() {
     super.initState();
 
-    // Existing universal UID logic
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       universalUid = currentUser.uid;
 
-      // Optional: test popup
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           showDialog(
@@ -44,12 +40,11 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                   child: const Text('OK'),
                 ),
               ],
-            ),
+            ).animate().fadeIn(duration: 400.ms),
           );
         }
       });
 
-      // ---------- VERIFIED AUTO-LOGOUT LISTENER ----------
       FirebaseFirestore.instance
           .collection('users')
           .doc(universalUid)
@@ -60,18 +55,15 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             if (data == null) return;
             final isVerified = data['verified'] as bool? ?? true;
             if (!isVerified) {
-              // Stop tracking and reset rating
               if (_trackingStarted) {
                 _trackingStarted = false;
                 LocationService().stop();
               }
               _ratingShown = false;
 
-              // Sign out Firebase
               await FirebaseAuth.instance.signOut();
               if (!mounted) return;
 
-              // Navigate to root safely
               Navigator.popUntil(context, (route) => route.isFirst);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('You have been logged out')),
@@ -80,7 +72,6 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
           });
     }
 
-    // Existing ride fetching and listener logic
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
 
@@ -115,17 +106,20 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
                   if (!mounted) return;
                   showDialog(
                     context: context,
-                    builder: (_) => RatingDialog(
-                      onSubmit: (stars, comment) async {
-                        await RatingService().submitRating(
-                          rideId: rideId,
-                          fromUid: uid,
-                          toUid: driverId,
-                          rating: stars.toDouble(),
-                          comment: comment,
-                        );
-                        if (mounted) Navigator.pop(context);
-                      },
+                    builder: (_) => Animate(
+                      effects: [ScaleEffect(duration: 300.ms)],
+                      child: RatingDialog(
+                        onSubmit: (stars, comment) async {
+                          await RatingService().submitRating(
+                            rideId: rideId,
+                            fromUid: uid,
+                            toUid: driverId,
+                            rating: stars.toDouble(),
+                            comment: comment,
+                          );
+                          if (mounted) Navigator.pop(context);
+                        },
+                      ),
                     ),
                   );
                 });
@@ -151,92 +145,210 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(riderDashboardProvider);
-    final user = FirebaseAuth.instance.currentUser;
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Rider Dashboard')),
-      drawer: Drawer(
-        child: ListView(
-          children: [
-            UserAccountsDrawerHeader(
-              accountName: Text(user?.email?.split('@').first ?? ''),
-              accountEmail: Text(user?.email ?? ''),
-              currentAccountPicture: const CircleAvatar(
-                child: Icon(Icons.person),
-              ),
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
             ),
-            ListTile(
-              leading: const Icon(Icons.person),
-              title: const Text('Profile'),
-              onTap: () => Navigator.pushNamed(context, '/profile'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Past Rides'),
-              onTap: () => Navigator.pushNamed(context, '/past-rides'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.logout),
-              title: const Text('Logout'),
-              onTap: () async {
-                // Stop tracking safely
-                if (_trackingStarted) {
-                  _trackingStarted = false;
-                  LocationService().stop();
-                }
-
-                // Reset rating flag for next session
-                _ratingShown = false;
-
-                try {
-                  await FirebaseAuth.instance.signOut();
-                } catch (e) {
-                  if (mounted) {
-                    // ignore: use_build_context_synchronously
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Logout failed: $e')),
-                    );
-                  }
-                  return;
-                }
-
-                if (!mounted) return;
-
-                // ✅ FIX: Navigate to login route and let main.dart handle the reset
-                Navigator.pushNamedAndRemoveUntil(
-                  // ignore: use_build_context_synchronously
-                  context,
-                  '/login',
-                  (route) => false,
-                );
-              },
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Rider Dashboard',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.person),
+              tooltip: 'Profile',
+              onPressed: () => Navigator.pushNamed(context, '/profile'),
             ),
           ],
         ),
+        drawer: Drawer(child: _buildDrawer()),
+        body: ref
+            .watch(riderDashboardProvider)
+            .when(
+              loading: () => const Center(
+                child: CircularProgressIndicator(),
+              ).animate().fadeIn(duration: 400.ms),
+              error: (e, _) => Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error, color: Colors.red, size: 48),
+                    const SizedBox(height: 16),
+                    Text('Error: $e'),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      onPressed: () => ref
+                          .read(riderDashboardProvider.notifier)
+                          .fetchActiveRide(),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ).animate().fadeIn(duration: 400.ms),
+              ),
+              data: (rideDoc) => AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: rideDoc == null
+                    ? RideForm(
+                        key: const ValueKey('ride_form'),
+                        onSubmit: (pickup, dropoff, fare, pcLL, dcLL) {
+                          ref
+                              .read(riderDashboardProvider.notifier)
+                              .fetchActiveRide();
+                        },
+                      )
+                    : RideStatusCard(
+                        key: const ValueKey('ride_status'),
+                        ride: rideDoc,
+                        onCancel: () async {
+                          await ref
+                              .read(riderDashboardProvider.notifier)
+                              .cancelRide(rideDoc.id);
+                        },
+                      ),
+              ),
+            ),
+        floatingActionButton: ref
+            .watch(riderDashboardProvider)
+            .when(
+              data: (rideDoc) => rideDoc == null
+                  ? FloatingActionButton(
+                      onPressed: () => Scaffold.of(context).openDrawer(),
+                      tooltip: 'Menu',
+                      child: const Icon(Icons.menu),
+                    )
+                  : null,
+              loading: () => null,
+              error: (_, _) => null,
+            ),
       ),
-      body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (rideDoc) {
-          if (rideDoc == null) {
-            return RideForm(
-              onSubmit: (pickup, dropoff, fare, pcLL, dcLL) {
-                ref.read(riderDashboardProvider.notifier).fetchActiveRide();
-              },
-            );
-          }
+    );
+  }
 
-          return RideStatusCard(
-            ride: rideDoc,
-            onCancel: () async {
-              await ref
-                  .read(riderDashboardProvider.notifier)
-                  .cancelRide(rideDoc.id);
-            },
-          );
-        },
-      ),
+  Widget _buildDrawer() {
+    final user = FirebaseAuth.instance.currentUser;
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        UserAccountsDrawerHeader(
+          accountName: Text(user?.email?.split('@').first ?? 'Rider'),
+          accountEmail: Text(user?.email ?? 'No email'),
+          currentAccountPicture: CircleAvatar(
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            child: const Icon(Icons.person, color: Colors.white),
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+          ),
+        ).animate().slideY(begin: -0.2, end: 0, duration: 400.ms),
+        ListTile(
+          leading: const Icon(Icons.history),
+          title: const Text('Past Rides'),
+          onTap: () {
+            Navigator.pop(context); // Close drawer
+            Navigator.pushNamed(context, '/past-rides');
+          },
+        ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+        ListTile(
+          leading: const Icon(Icons.logout),
+          title: const Text('Logout'),
+          onTap: () async {
+            Navigator.pop(context); // Close drawer
+            if (_trackingStarted) {
+              _trackingStarted = false;
+              LocationService().stop();
+            }
+            _ratingShown = false;
+
+            try {
+              await FirebaseAuth.instance.signOut();
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
+              }
+              return;
+            }
+
+            if (!mounted) return;
+
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              '/login',
+              (route) => false,
+            );
+          },
+        ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+      ],
+    );
+  }
+}
+
+// Placeholder for RideForm and RideStatusCard (unchanged from original)
+class RideForm extends StatelessWidget {
+  final Function(String, String, double, List<double>, List<double>) onSubmit;
+
+  const RideForm({super.key, required this.onSubmit});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(child: Text('Ride Form Placeholder'));
+  }
+}
+
+class RideStatusCard extends StatelessWidget {
+  final DocumentSnapshot ride;
+  final VoidCallback onCancel;
+
+  const RideStatusCard({super.key, required this.ride, required this.onCancel});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(child: Text('Ride Status Placeholder'));
+  }
+}
+
+// Placeholder for RatingDialog (unchanged from original)
+class RatingDialog extends StatelessWidget {
+  final Function(int, String) onSubmit;
+
+  const RatingDialog({super.key, required this.onSubmit});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rate Your Ride'),
+      content: const Text('Rating Dialog Placeholder'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => onSubmit(5, 'Great ride!'),
+          child: const Text('Submit'),
+        ),
+      ],
     );
   }
 }

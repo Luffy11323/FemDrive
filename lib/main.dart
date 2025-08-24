@@ -1,6 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,7 +61,7 @@ class FemDriveApp extends StatefulWidget {
 
 class _FemDriveAppState extends State<FemDriveApp> {
   String? _lastKnownUid;
-  bool _isLoadingFCM = true; // NEW: spinner state
+  bool _isLoadingFCM = true;
 
   @override
   void initState() {
@@ -73,7 +74,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
       await _setupFCM();
     } finally {
       if (mounted) {
-        setState(() => _isLoadingFCM = false); // hide loader
+        setState(() => _isLoadingFCM = false);
       }
     }
   }
@@ -83,7 +84,6 @@ class _FemDriveAppState extends State<FemDriveApp> {
     if (uid != null) {
       _lastKnownUid = uid;
     } else {
-      // If no current user, clear the cached UID
       _lastKnownUid = null;
     }
     return uid ?? _lastKnownUid;
@@ -92,13 +92,11 @@ class _FemDriveAppState extends State<FemDriveApp> {
   Future<void> _setupFCM() async {
     final fbm = FirebaseMessaging.instance;
 
-    // Request permission for notifications
     await fbm.requestPermission();
 
     final uid = getSafeUid();
-    if (uid == null) return; // exit if user not logged in
+    if (uid == null) return;
 
-    // Initial token setup
     try {
       final token = await fbm.getToken();
       if (token != null) {
@@ -110,7 +108,6 @@ class _FemDriveAppState extends State<FemDriveApp> {
       debugPrint('Error saving FCM token: $e');
     }
 
-    // Listen for token refresh
     fbm.onTokenRefresh.listen((newToken) async {
       final currentUid = getSafeUid();
       if (currentUid != null) {
@@ -125,23 +122,24 @@ class _FemDriveAppState extends State<FemDriveApp> {
       }
     });
 
-    // Foreground messages
     FirebaseMessaging.onMessage.listen((msg) {
       final notif = msg.notification;
       if (notif != null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${notif.title ?? ''}: ${notif.body ?? ''}'),
-            backgroundColor: Colors.teal,
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         );
       }
     });
 
-    // Background tap
     FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
 
-    // App launch from notification
     try {
       final initialMsg = await fbm.getInitialMessage();
       if (initialMsg != null) {
@@ -189,45 +187,59 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.ltr, // or rtl if needed
-      child: Stack(
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      title: 'FemDrive',
+      theme: femLightTheme,
+      darkTheme: femDarkTheme,
+      themeMode: ThemeMode.system,
+      debugShowCheckedModeBanner: false,
+      home: Stack(
         children: [
-          Consumer(
-            builder: (context, ref, _) {
-              return MaterialApp(
-                navigatorKey: navigatorKey,
-                title: 'FemDrive',
-                theme: femTheme,
-                debugShowCheckedModeBanner: false,
-                home: InitialScreen(), // Use the new ConsumerWidget below
-                routes: {
-                  '/login': (context) => const LoginPage(),
-                  '/signup': (context) => const SignUpPage(),
-                  '/dashboard': (context) => const RiderDashboardPage(),
-                  '/driver-dashboard': (context) => const DriverDashboard(),
-                  '/admin': (context) => const AdminDriverVerificationPage(),
-                  '/profile': (context) => const ProfilePage(),
-                  '/past-rides': (context) => const PastRidesPage(),
-                  '/driver-ride-details': (context) {
-                    final rideId =
-                        ModalRoute.of(context)?.settings.arguments as String?;
-                    return rideId != null
-                        ? details.DriverRideDetailsPage(rideId: rideId)
-                        : const LoginPage();
-                  },
-                },
-              );
-            },
-          ),
+          const InitialScreen(),
           if (_isLoadingFCM)
             Container(
-              color: Colors.black45,
-              alignment: Alignment.center,
-              child: const CircularProgressIndicator(color: Colors.teal),
-            ),
+              // ignore: deprecated_member_use
+              color: Colors.black.withOpacity(0.5),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Theme.of(context).colorScheme.primary,
+                      ),
+                    ).animate().fadeIn(duration: 400.ms).scale(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Initializing FemDrive...',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                  ],
+                ),
+              ),
+            ).animate().fadeIn(duration: 400.ms),
         ],
       ),
+      routes: {
+        '/login': (context) => const LoginPage(),
+        '/signup': (context) => const SignUpPage(),
+        '/dashboard': (context) => const RiderDashboardPage(),
+        '/driver-dashboard': (context) => const DriverDashboard(),
+        '/admin': (context) => const AdminDriverVerificationPage(),
+        '/profile': (context) => const ProfilePage(),
+        '/past-rides': (context) => const PastRidesPage(),
+        '/driver-ride-details': (context) {
+          final rideId = ModalRoute.of(context)?.settings.arguments as String?;
+          return rideId != null
+              ? details.DriverRideDetailsPage(rideId: rideId)
+              : const LoginPage();
+        },
+      },
     );
   }
 }
@@ -267,7 +279,6 @@ class InitialScreen extends ConsumerWidget {
               case 'driver':
                 if (!isVerified) {
                   debugPrint("🔐 Driver not verified, signing out");
-                  // Sign out unverified driver
                   WidgetsBinding.instance.addPostFrameCallback((_) async {
                     await FirebaseAuth.instance.signOut();
                   });
@@ -285,8 +296,28 @@ class InitialScreen extends ConsumerWidget {
           },
           loading: () {
             debugPrint("🔐 Loading user document...");
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+            return Scaffold(
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Theme.of(context).colorScheme.primary,
+                      ),
+                    ).animate().fadeIn(duration: 400.ms).scale(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Loading your account...',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                  ],
+                ),
+              ),
             );
           },
           error: (error, stackTrace) {
@@ -297,7 +328,29 @@ class InitialScreen extends ConsumerWidget {
       },
       loading: () {
         debugPrint("🔐 Loading user authentication...");
-        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        return Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
+                ).animate().fadeIn(duration: 400.ms).scale(),
+                const SizedBox(height: 16),
+                Text(
+                  'Authenticating...',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+              ],
+            ),
+          ),
+        );
       },
       error: (error, stackTrace) {
         debugPrint("🔐 Authentication error: $error");

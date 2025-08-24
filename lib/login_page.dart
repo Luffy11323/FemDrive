@@ -1,10 +1,9 @@
 import 'dart:async';
-// ignore: unused_import
-import 'package:femdrive/main.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter/services.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 
 /// Same hyphen formatting as signup page
@@ -123,7 +122,6 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
     }
   }
 
-  /// ✅ Confirmation dialog before sending OTP
   Future<bool> _confirmPhoneNumber(String formattedPhone) async {
     return await showDialog<bool>(
           context: context,
@@ -140,6 +138,12 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
               ),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
                 child: const Text("Yes"),
               ),
             ],
@@ -166,7 +170,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
         phoneNumber: formattedPhone,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential cred) async {
-          await verifyOtp(autoCredential: cred); // ✅ unified flow
+          await verifyOtp(autoCredential: cred);
         },
         verificationFailed: (FirebaseAuthException e) {
           _showError(_mapFirebaseError(e.code, e.message));
@@ -176,7 +180,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
             verificationId = id;
             otpSent = true;
           });
-          startTimer(); // ✅ unified resend flow
+          startTimer();
         },
         codeAutoRetrievalTimeout: (String id) => verificationId = id,
       );
@@ -232,101 +236,159 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       return _showError("Your account is pending admin approval.");
     }
 
-    // ✅ FIX: Don't create new FemDriveApp instance, just navigate to login
-    // Let the existing app's auth state handling redirect to appropriate dashboard
     if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
   }
 
   void _showError(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final fieldDecoration = const InputDecoration(
-      labelStyle: TextStyle(height: 1.2),
-      border: OutlineInputBorder(),
-    );
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Login - FemDrive')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: phoneController,
-                decoration: fieldDecoration.copyWith(
-                  labelText: 'Phone (e.g. 0300-1234567)',
-                ),
-                keyboardType: TextInputType.phone,
-                inputFormatters: [PhoneNumberHyphenFormatter()],
-                validator: _validatePakistaniPhone,
-                enabled: !otpSent,
-              ),
-              if (otpSent) ...[
-                const SizedBox(height: 15),
-                TextFormField(
-                  controller: otpController,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  decoration: const InputDecoration(
-                    labelText: "Enter OTP",
-                    counterText: "",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: enableResend ? sendOtp : null,
-                  child: Text(
-                    enableResend
-                        ? "Resend OTP"
-                        : "Resend in $secondsRemaining sec",
-                  ),
-                ),
-              ],
-              const SizedBox(height: 25),
-              ElevatedButton(
-                onPressed: loading
-                    ? null
-                    : otpSent
-                    ? verifyOtp
-                    : sendOtp,
-                child: loading
-                    ? Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
-                              ),
-                            ),
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Theme.of(context).colorScheme.surfaceContainer,
+        ),
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Login - FemDrive',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          centerTitle: true,
+        ),
+        body: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Sign in to your account',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ).animate().fadeIn(duration: 400.ms),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Enter your phone number to receive an OTP.',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+                  const SizedBox(height: 24),
+                  TextFormField(
+                    controller: phoneController,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone (e.g. 0300-1234567)',
+                      prefixIcon: Icon(Icons.phone),
+                    ),
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [PhoneNumberHyphenFormatter()],
+                    validator: _validatePakistaniPhone,
+                    enabled: !otpSent,
+                  ).animate().slideX(begin: -0.1, end: 0, duration: 400.ms),
+                  if (otpSent) ...[
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: otpController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      decoration: const InputDecoration(
+                        labelText: 'Enter OTP',
+                        prefixIcon: Icon(Icons.lock),
+                        counterText: '',
+                      ),
+                    ).animate().slideX(begin: 0.1, end: 0, duration: 400.ms),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          enableResend
+                              ? 'Resend OTP'
+                              : 'Resend in $secondsRemaining sec',
+                          style: TextStyle(
+                            color: enableResend
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                           ),
-                          SizedBox(width: 12),
-                          Text(otpSent ? 'Verifying...' : 'Sending...'),
-                        ],
-                      )
-                    : Text(otpSent ? 'Verify OTP' : 'Send OTP'),
+                        ),
+                        TextButton(
+                          onPressed: enableResend ? sendOtp : null,
+                          child: const Text('Resend OTP'),
+                        ),
+                      ],
+                    ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                  ],
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: loading
+                        ? null
+                        : otpSent
+                        ? verifyOtp
+                        : sendOtp,
+                    child: loading
+                        ? Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(otpSent ? 'Verifying...' : 'Sending...'),
+                            ],
+                          )
+                        : Text(otpSent ? 'Verify OTP' : 'Send OTP'),
+                  ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: TextButton(
+                      onPressed: () => Navigator.pushNamed(context, '/signup'),
+                      child: const Text("Don't have an account? Sign Up"),
+                    ).animate().fadeIn(duration: 400.ms, delay: 300.ms),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              TextButton(
-                onPressed: () => Navigator.pushNamed(context, '/signup'),
-                child: const Text("Don't have an account? Sign Up"),
-              ),
-            ],
+            ),
           ),
         ),
       ),
