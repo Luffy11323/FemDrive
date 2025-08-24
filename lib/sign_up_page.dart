@@ -244,26 +244,50 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     setState(() => isSubmitting = true);
+
     try {
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
+
+        // Auto verification (instant / test OTP)
         verificationCompleted: (PhoneAuthCredential credential) async {
-          // Auto-verification (test or real)
-          await FirebaseAuth.instance.signInWithCredential(credential);
-          await confirmOtp(autoCredential: credential);
+          debugPrint('verificationCompleted: $credential');
+          // Mark OTP UI as visible if auto-verification triggered first
+          if (!isOtpSent && mounted) setState(() => isOtpSent = true);
+
+          try {
+            final userCred = await FirebaseAuth.instance.signInWithCredential(
+              credential,
+            );
+            debugPrint('Auto-signed in UID: ${userCred.user?.uid}');
+            await confirmOtp(autoCredential: credential);
+          } catch (e) {
+            showError('Auto-verification failed: $e');
+          }
         },
-        verificationFailed: (e) =>
-            showError(e.message ?? 'Verification failed.'),
-        codeSent: (id, _) {
-          setState(() {
-            verificationId = id;
-            isOtpSent = true;
-          });
+
+        verificationFailed: (e) {
+          debugPrint('verificationFailed: ${e.code} - ${e.message}');
+          showError(e.message ?? 'Verification failed.');
+        },
+
+        codeSent: (id, token) {
+          debugPrint('codeSent callback: $id');
+          if (mounted) {
+            setState(() {
+              verificationId = id;
+              isOtpSent = true;
+            });
+          }
           startResendTimer();
           showInfo('OTP sent. Please check your messages.');
         },
-        codeAutoRetrievalTimeout: (id) => verificationId = id,
+
+        codeAutoRetrievalTimeout: (id) {
+          debugPrint('codeAutoRetrievalTimeout: $id');
+          verificationId = id;
+        },
       );
     } catch (e) {
       showError('Unexpected error: $e');
@@ -276,6 +300,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   // Replace the existing confirmOtp method with this enhanced version
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
+    if (!_formKey.currentState!.validate()) return;
+    if (role == 'driver' && !validateDriverFields()) return;
+
     setState(() => isSubmitting = true);
 
     try {
@@ -291,12 +318,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             smsCode: enteredOtp,
           );
 
+      // Ensure manual OTP is full-length
       if (autoCredential == null && enteredOtp.length != otpLength) {
         showError('Please enter the full OTP.');
         return;
       }
 
-      // 1️⃣ Sign in the user
+      // 1️⃣ Sign in the user (Firebase Auth)
       final userCred = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
@@ -307,26 +335,26 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      // 2️⃣ Prepare Firestore document
+      debugPrint('✅ Firebase Auth UID: ${user.uid}');
+
+      // 2️⃣ Process driver images & hashes after successful Auth
+      String? licenseHash, birthCertHash;
+      if (role == 'driver') {
+        licenseHash = _hashFile(licenseImage!);
+        birthCertHash = _hashFile(birthCertificateImage!);
+      }
+
+      // 3️⃣ Prepare Firestore document
       final doc = <String, dynamic>{
         'uid': user.uid,
         'phone': phoneController.text.replaceAll(RegExp(r'\D'), ''),
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': true, // allow temporary access
-        'signupCompleted': false, // pending document verification
+        'verified': role == 'rider', // riders auto-verified
       };
 
-      String? licenseHash, birthCertHash;
-
       if (role == 'driver') {
-        if (!validateDriverFields()) return;
-
-        // Hash documents
-        licenseHash = _hashFile(licenseImage!);
-        birthCertHash = _hashFile(birthCertificateImage!);
-
         doc.addAll({
           'carType': selectedCarType,
           'carModel': carModelController.text.trim(),
@@ -337,21 +365,22 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'birthCertificateImage': birthCertHash,
           'documentsUploaded': true,
           'uploadTimestamp': FieldValue.serverTimestamp(),
+          'verified': true, // temporarily mark true to allow initial signin
+          'awaitingConfirmation': true, // flag for admin approval
         });
-
-        // Prompt user about admin review
-        showInfo('Documents uploaded. Waiting for admin approval.');
       }
 
-      // 3️⃣ Write to Firestore
+      // 4️⃣ Write to Firestore
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .set(doc);
 
-      // Optional: navigate to dashboard or login
+      showInfo('Registration completed successfully!');
+      if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
+      debugPrint('❌ confirmOtp error: $e');
       showError('OTP verification / signup failed: $e');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
