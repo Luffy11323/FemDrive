@@ -54,6 +54,11 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   void initState() {
     super.initState();
     listenForCode();
+    FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (kDebugMode) {
+        print('Auth state changed: ${user?.uid}');
+      }
+    });
   }
 
   @override

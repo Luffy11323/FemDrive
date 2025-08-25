@@ -226,6 +226,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
         ],
       ),
       routes: {
+        '/': (context) => const InitialScreen(),
         '/login': (context) => const LoginPage(),
         '/signup': (context) => const SignUpPage(),
         '/dashboard': (context) => const RiderDashboardPage(),
