@@ -217,27 +217,49 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   }
 
   Future<void> _handlePostLogin() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return _showError("User not found.");
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      print('Current user: ${user?.uid}'); // Debug: Check auth state
+      if (user == null) {
+        print('Error: No authenticated user found');
+        return _showError("User not found. Please try again.");
+      }
 
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .get();
+      // Wait briefly to ensure Firestore sync for new users
+      await Future.delayed(const Duration(milliseconds: 500));
 
-    if (!doc.exists) return _showError("User profile not found.");
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      print(
+        'Firestore doc exists: ${doc.exists}, Data: ${doc.data()}',
+      ); // Debug: Verify document
 
-    final data = doc.data()!;
-    final role = data['role'];
-    final isVerified = data['verified'] == true;
+      if (!doc.exists) {
+        print('Error: User document not found');
+        return _showError("User profile not found. Please sign up again.");
+      }
 
-    if (role == 'driver' && !isVerified) {
-      await FirebaseAuth.instance.signOut();
-      return _showError("Your account is pending admin approval.");
+      final data = doc.data()!;
+      final role = data['role'] as String? ?? 'rider'; // Default to 'rider'
+      final isVerified = data['verified'] as bool? ?? true; // Default to true
+      print(
+        'User role: $role, Verified: $isVerified',
+      ); // Debug: Log role and verification
+
+      if (role == 'driver' && !isVerified) {
+        print('Driver not verified, signing out');
+        await FirebaseAuth.instance.signOut();
+        return _showError("Your account is pending admin approval.");
+      }
+
+      // Let InitialScreen handle navigation
+      print('Login successful, relying on InitialScreen for routing');
+    } catch (e, stackTrace) {
+      print('Error in _handlePostLogin: $e\n$stackTrace');
+      _showError("Login failed: $e");
     }
-
-    if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
   }
 
   void _showError(String msg) {
