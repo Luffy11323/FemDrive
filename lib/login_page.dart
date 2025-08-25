@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter/services.dart';
@@ -219,9 +220,13 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   Future<void> _handlePostLogin() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      print('Current user: ${user?.uid}'); // Debug: Check auth state
+      if (kDebugMode) {
+        print('Current user: ${user?.uid}');
+      } // Debug: Check auth state
       if (user == null) {
-        print('Error: No authenticated user found');
+        if (kDebugMode) {
+          print('Error: No authenticated user found');
+        }
         return _showError("User not found. Please try again.");
       }
 
@@ -232,32 +237,40 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
           .collection('users')
           .doc(user.uid)
           .get();
-      print(
-        'Firestore doc exists: ${doc.exists}, Data: ${doc.data()}',
-      ); // Debug: Verify document
+      if (kDebugMode) {
+        print('Firestore doc exists: ${doc.exists}, Data: ${doc.data()}');
+      } // Debug: Verify document
 
       if (!doc.exists) {
-        print('Error: User document not found');
+        if (kDebugMode) {
+          print('Error: User document not found');
+        }
         return _showError("User profile not found. Please sign up again.");
       }
 
       final data = doc.data()!;
       final role = data['role'] as String? ?? 'rider'; // Default to 'rider'
       final isVerified = data['verified'] as bool? ?? true; // Default to true
-      print(
-        'User role: $role, Verified: $isVerified',
-      ); // Debug: Log role and verification
+      if (kDebugMode) {
+        print('User role: $role, Verified: $isVerified');
+      } // Debug: Log role and verification
 
       if (role == 'driver' && !isVerified) {
-        print('Driver not verified, signing out');
+        if (kDebugMode) {
+          print('Driver not verified, signing out');
+        }
         await FirebaseAuth.instance.signOut();
         return _showError("Your account is pending admin approval.");
       }
 
       // Let InitialScreen handle navigation
-      print('Login successful, relying on InitialScreen for routing');
+      if (kDebugMode) {
+        print('Login successful, relying on InitialScreen for routing');
+      }
     } catch (e, stackTrace) {
-      print('Error in _handlePostLogin: $e\n$stackTrace');
+      if (kDebugMode) {
+        print('Error in _handlePostLogin: $e\n$stackTrace');
+      }
       _showError("Login failed: $e");
     }
   }
