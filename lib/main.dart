@@ -99,15 +99,14 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
     try {
       final token = await fbm.getToken();
-      if (token != null) {
-        await FirebaseFirestore.instance.collection('users').doc(uid).set({
-          'fcmToken': token,
-        }, SetOptions(merge: true));
-      }
-    } catch (e) {
-      debugPrint('Error saving FCM token: $e');
+      debugPrint("FCM Token: $token");
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'fcmToken': token,
+      }, SetOptions(merge: true));
+      debugPrint("FCM setup completed");
+    } catch (e, stack) {
+      debugPrint("FCM setup failed: $e\n$stack");
     }
-
     fbm.onTokenRefresh.listen((newToken) async {
       final currentUid = getSafeUid();
       if (currentUid != null) {

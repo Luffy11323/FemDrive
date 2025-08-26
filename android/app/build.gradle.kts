@@ -70,4 +70,13 @@ flutter {
 dependencies {
     // Required for Java 8+ API desugaring
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // Firebase BOM for version alignment
+    implementation platform('com.google.firebase:firebase-bom:33.1.1')
+
+    // Core Firebase SDKs you use
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.google.firebase:firebase-storage'
 }
