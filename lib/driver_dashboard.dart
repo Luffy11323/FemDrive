@@ -328,44 +328,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         }
       });
     });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
-        prev,
-        next,
-      ) async {
-        final list = next.asData?.value ?? const <PendingRequest>[];
-        if (list.isEmpty) return;
-
-        await _ensureDriverHashPrefix();
-
-        for (final req in list) {
-          if (_shownRequestIds.contains(req.rideId)) continue;
-          final prefix = _driverGeoHashPrefix;
-          bool isNearby = true;
-          if (prefix != null && prefix.isNotEmpty) {
-            try {
-              final ph = _geoHasher.encode(
-                req.pickupLat,
-                req.pickupLng,
-                precision: GeoCfg.popupProximityPrecision,
-              );
-              final checkLen = min(prefix.length, 4);
-              isNearby = ph.startsWith(prefix.substring(0, checkLen));
-            } catch (_) {}
-          }
-
-          if (isNearby && mounted) {
-            _shownRequestIds.add(req.rideId);
-            showDialog(
-              context: context,
-              builder: (_) => RidePopupWidget(request: req),
-            );
-            break;
-          }
-        }
-      });
-    });
   }
 
   Future<void> _ensureDriverHashPrefix() async {
@@ -410,6 +372,43 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
+      prev,
+      next,
+    ) async {
+      final list = next.asData?.value ?? const <PendingRequest>[];
+      if (list.isEmpty) return;
+
+      await _ensureDriverHashPrefix();
+
+      for (final req in list) {
+        if (_shownRequestIds.contains(req.rideId)) continue;
+        final prefix = _driverGeoHashPrefix;
+        bool isNearby = true;
+        if (prefix != null && prefix.isNotEmpty) {
+          try {
+            final ph = _geoHasher.encode(
+              req.pickupLat,
+              req.pickupLng,
+              precision: GeoCfg.popupProximityPrecision,
+            );
+            final checkLen = min(prefix.length, 4);
+            isNearby = ph.startsWith(prefix.substring(0, checkLen));
+          } catch (_) {}
+        }
+
+        if (isNearby && mounted) {
+          _shownRequestIds.add(req.rideId);
+          showDialog(
+            // ignore: use_build_context_synchronously
+            context: context,
+            builder: (_) => RidePopupWidget(request: req),
+          );
+          break;
+        }
+      }
+    });
+
     return Theme(
       data: ThemeData(
         useMaterial3: true,
