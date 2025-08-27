@@ -100,9 +100,12 @@ class _FemDriveAppState extends State<FemDriveApp> {
     try {
       final token = await fbm.getToken();
       debugPrint("FCM Token: $token");
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({
-        'fcmToken': token,
-      }, SetOptions(merge: true));
+      if (token != null) {
+        await FirebaseFirestore.instance.collection('users').doc(uid).set({
+          'fcmToken': token,
+        }, SetOptions(merge: true));
+      }
+
       debugPrint("FCM setup completed");
     } catch (e, stack) {
       debugPrint("FCM setup failed: $e\n$stack");
