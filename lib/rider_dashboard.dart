@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'rider/rider_dashboard_controller.dart';
-import 'rider/rider_services.dart';
+import '/rider/rider_dashboard_controller.dart';
+import '/rider/rider_services.dart';
+import 'package:flutter/foundation.dart';
 
 class RiderDashboardPage extends ConsumerStatefulWidget {
   const RiderDashboardPage({super.key});
@@ -26,24 +27,9 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       universalUid = currentUser.uid;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: const Text('Logged-in UID'),
-              content: Text('Your UID is: $universalUid'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
-                ),
-              ],
-            ).animate().fadeIn(duration: 400.ms),
-          );
-        }
-      });
+      if (kDebugMode) {
+        print('RiderDashboard: Initialized with UID: $universalUid');
+      }
 
       FirebaseFirestore.instance
           .collection('users')
@@ -52,94 +38,49 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
           .listen((snap) async {
             if (!mounted) return;
             final data = snap.data();
-            if (data == null) return;
+            if (data == null) {
+              if (kDebugMode) {
+                print(
+                  'RiderDashboard: User document not found for UID: $universalUid',
+                );
+              }
+              return;
+            }
             final isVerified = data['verified'] as bool? ?? true;
             if (!isVerified) {
               if (_trackingStarted) {
                 _trackingStarted = false;
-                LocationService().stop();
+                await LocationService().stop();
               }
               _ratingShown = false;
 
               await FirebaseAuth.instance.signOut();
+              ref.read(riderDashboardProvider.notifier).clearCachedUid();
               if (!mounted) return;
 
-              Navigator.popUntil(context, (route) => route.isFirst);
+              Navigator.pushNamedAndRemoveUntil(
+                context,
+                '/login',
+                (route) => false,
+              );
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('You have been logged out')),
+                const SnackBar(
+                  content: Text('Logged out due to unverified status'),
+                ),
               );
             }
           });
+    } else {
+      if (kDebugMode) {
+        print('RiderDashboard: No authenticated user found');
+      }
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (kDebugMode) {
+        print('RiderDashboard: Fetching active ride');
+      }
       ref.read(riderDashboardProvider.notifier).fetchActiveRide();
-
-      ref.listen<AsyncValue<DocumentSnapshot?>>(riderDashboardProvider, (
-        prev,
-        next,
-      ) {
-        next.whenOrNull(
-          data: (rideDoc) async {
-            if (rideDoc == null) {
-              _trackingStarted = false;
-              _ratingShown = false;
-              return;
-            }
-
-            final data = rideDoc.data() as Map<String, dynamic>;
-            final status = data['status'];
-            final driverId = data['driverId'];
-            final rideId = rideDoc.id;
-            final uid = universalUid ?? FirebaseAuth.instance.currentUser?.uid;
-
-            if (status == 'completed' && !_ratingShown && driverId != null) {
-              _ratingShown = true;
-
-              final exists = await RatingService().hasAlreadyRated(
-                rideId,
-                uid!,
-              );
-
-              if (!exists && mounted) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  showDialog(
-                    context: context,
-                    builder: (_) => Animate(
-                      effects: [ScaleEffect(duration: 300.ms)],
-                      child: RatingDialog(
-                        onSubmit: (stars, comment) async {
-                          await RatingService().submitRating(
-                            rideId: rideId,
-                            fromUid: uid,
-                            toUid: driverId,
-                            rating: stars.toDouble(),
-                            comment: comment,
-                          );
-                          if (mounted) Navigator.pop(context);
-                        },
-                      ),
-                    ),
-                  );
-                });
-              }
-            }
-
-            if ((status == 'accepted' || status == 'in_progress') &&
-                !_trackingStarted) {
-              _trackingStarted = true;
-              LocationService().startTracking('rider', rideId);
-            }
-
-            if ((status == 'completed' || status == 'cancelled') &&
-                _trackingStarted) {
-              _trackingStarted = false;
-              LocationService().stop();
-            }
-          },
-        );
-      });
     });
   }
 
@@ -188,44 +129,88 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
               loading: () => const Center(
                 child: CircularProgressIndicator(),
               ).animate().fadeIn(duration: 400.ms),
-              error: (e, _) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error, color: Colors.red, size: 48),
-                    const SizedBox(height: 16),
-                    Text('Error: $e'),
-                    const SizedBox(height: 16),
-                    OutlinedButton(
-                      onPressed: () => ref
-                          .read(riderDashboardProvider.notifier)
-                          .fetchActiveRide(),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ).animate().fadeIn(duration: 400.ms),
-              ),
-              data: (rideDoc) => AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: rideDoc == null
-                    ? RideForm(
-                        key: const ValueKey('ride_form'),
-                        onSubmit: (pickup, dropoff, fare, pcLL, dcLL) {
+              error: (e, _) {
+                if (kDebugMode) {
+                  print('RiderDashboard: Error loading ride: $e');
+                }
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error, color: Colors.red, size: 48),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Failed to load ride: $e',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton(
+                        onPressed: () {
+                          if (kDebugMode) {
+                            print('RiderDashboard: Retrying fetchActiveRide');
+                          }
                           ref
                               .read(riderDashboardProvider.notifier)
                               .fetchActiveRide();
                         },
-                      )
-                    : RideStatusCard(
-                        key: const ValueKey('ride_status'),
-                        ride: rideDoc,
-                        onCancel: () async {
-                          await ref
-                              .read(riderDashboardProvider.notifier)
-                              .cancelRide(rideDoc.id);
-                        },
+                        child: const Text('Retry'),
                       ),
-              ),
+                    ],
+                  ).animate().fadeIn(duration: 400.ms),
+                );
+              },
+              data: (rideDoc) {
+                if (kDebugMode) {
+                  print('RiderDashboard: Ride data: ${rideDoc?.data()}');
+                }
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _handleRideStatus(rideDoc);
+                });
+                return AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: rideDoc == null
+                      ? RideForm(
+                          key: const ValueKey('ride_form'),
+                          onSubmit:
+                              (
+                                pickup,
+                                dropoff,
+                                fare,
+                                pickupLL,
+                                dropoffLL,
+                                rideType,
+                                note,
+                              ) {
+                                ref
+                                    .read(riderDashboardProvider.notifier)
+                                    .createRide(
+                                      pickup,
+                                      dropoff,
+                                      fare,
+                                      GeoPoint(
+                                        pickupLL.latitude,
+                                        pickupLL.longitude,
+                                      ),
+                                      GeoPoint(
+                                        dropoffLL.latitude,
+                                        dropoffLL.longitude,
+                                      ),
+                                      rideType: rideType,
+                                      note: note,
+                                    );
+                              },
+                        )
+                      : RideStatusCard(
+                          key: const ValueKey('ride_status'),
+                          ride: rideDoc,
+                          onCancel: () async {
+                            await ref
+                                .read(riderDashboardProvider.notifier)
+                                .cancelRide(rideDoc.id);
+                          },
+                        ),
+                );
+              },
             ),
         floatingActionButton: ref
             .watch(riderDashboardProvider)
@@ -242,6 +227,81 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
             ),
       ),
     );
+  }
+
+  void _handleRideStatus(DocumentSnapshot? rideDoc) async {
+    if (rideDoc == null) {
+      if (_trackingStarted) {
+        _trackingStarted = false;
+        await LocationService().stop();
+      }
+      _ratingShown = false;
+      return;
+    }
+
+    final data = rideDoc.data() as Map<String, dynamic>;
+    final status = data['status'];
+    final driverId = data['driverId'];
+    final rideId = rideDoc.id;
+    final uid = universalUid ?? FirebaseAuth.instance.currentUser?.uid;
+
+    if (status == 'completed' && !_ratingShown && driverId != null) {
+      _ratingShown = true;
+      final exists = await RatingService().hasAlreadyRated(rideId, uid!);
+      if (!exists && mounted) {
+        showDialog(
+          context: context,
+          builder: (_) => Animate(
+            effects: [ScaleEffect(duration: 300.ms)],
+            child: RatingDialog(
+              onSubmit: (stars, comment) async {
+                try {
+                  await RatingService().submitRating(
+                    rideId: rideId,
+                    fromUid: uid,
+                    toUid: driverId,
+                    rating: stars.toDouble(),
+                    comment: comment,
+                  );
+                  if (mounted) Navigator.pop(context);
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to submit rating: $e')),
+                    );
+                  }
+                }
+              },
+            ),
+          ),
+        );
+      }
+    }
+
+    if ((status == 'accepted' || status == 'in_progress') &&
+        !_trackingStarted) {
+      _trackingStarted = true;
+      try {
+        await LocationService().startTracking('rider', rideId);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to start tracking: $e')),
+          );
+        }
+      }
+    }
+
+    if ((status == 'completed' || status == 'cancelled') && _trackingStarted) {
+      _trackingStarted = false;
+      try {
+        await LocationService().stop();
+      } catch (e) {
+        if (kDebugMode) {
+          print('RiderDashboard: Failed to stop tracking: $e');
+        }
+      }
+    }
   }
 
   Widget _buildDrawer() {
@@ -264,7 +324,7 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
           leading: const Icon(Icons.history),
           title: const Text('Past Rides'),
           onTap: () {
-            Navigator.pop(context); // Close drawer
+            Navigator.pop(context);
             Navigator.pushNamed(context, '/past-rides');
           },
         ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
@@ -272,82 +332,32 @@ class _RiderDashboardPageState extends ConsumerState<RiderDashboardPage> {
           leading: const Icon(Icons.logout),
           title: const Text('Logout'),
           onTap: () async {
-            Navigator.pop(context); // Close drawer
+            Navigator.pop(context);
             if (_trackingStarted) {
               _trackingStarted = false;
-              LocationService().stop();
+              await LocationService().stop();
             }
             _ratingShown = false;
 
             try {
               await FirebaseAuth.instance.signOut();
+              ref.read(riderDashboardProvider.notifier).clearCachedUid();
+              if (mounted) {
+                Navigator.pushNamedAndRemoveUntil(
+                  context,
+                  '/login',
+                  (route) => false,
+                );
+              }
             } catch (e) {
               if (mounted) {
                 ScaffoldMessenger.of(
                   context,
                 ).showSnackBar(SnackBar(content: Text('Logout failed: $e')));
               }
-              return;
             }
-
-            if (!mounted) return;
-
-            Navigator.pushNamedAndRemoveUntil(
-              context,
-              '/login',
-              (route) => false,
-            );
           },
         ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-      ],
-    );
-  }
-}
-
-// Placeholder for RideForm and RideStatusCard (unchanged from original)
-class RideForm extends StatelessWidget {
-  final Function(String, String, double, List<double>, List<double>) onSubmit;
-
-  const RideForm({super.key, required this.onSubmit});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text('Ride Form Placeholder'));
-  }
-}
-
-class RideStatusCard extends StatelessWidget {
-  final DocumentSnapshot ride;
-  final VoidCallback onCancel;
-
-  const RideStatusCard({super.key, required this.ride, required this.onCancel});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text('Ride Status Placeholder'));
-  }
-}
-
-// Placeholder for RatingDialog (unchanged from original)
-class RatingDialog extends StatelessWidget {
-  final Function(int, String) onSubmit;
-
-  const RatingDialog({super.key, required this.onSubmit});
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Rate Your Ride'),
-      content: const Text('Rating Dialog Placeholder'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () => onSubmit(5, 'Great ride!'),
-          child: const Text('Submit'),
-        ),
       ],
     );
   }

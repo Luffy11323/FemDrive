@@ -1,11 +1,7 @@
-// lib/driver/driver_ride_details_page.dart
-// Ride details screen: uses the shared provider/service; dedicated cancel provider.
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'driver_services.dart';
 
 class RideStrings {
@@ -54,16 +50,60 @@ class DriverRideDetailsPage extends ConsumerWidget {
         final isCompleted = data['status'] == RideStatus.completed;
 
         return Scaffold(
-          appBar: AppBar(title: const Text(RideStrings.inProgress)),
-          body: DriverMapWidget(
-            rideData: {...data, 'rideId': rideId},
-            onMapCreated: (_) {},
-            onStatusChange: (newStatus) {
-              ref
-                  .read(driverDashboardProvider.notifier)
-                  .updateStatus(rideId, newStatus);
-            },
-            onComplete: () => _showCompletionDialog(context, rideId),
+          appBar: AppBar(
+            title: Text(
+              'Ride: ${data['status']?.toString().toUpperCase() ?? 'IN PROGRESS'}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          body: Column(
+            children: [
+              Expanded(
+                child: DriverMapWidget(
+                  rideData: {...data, 'rideId': rideId},
+                  onMapCreated: (_) {},
+                  onStatusChange: (newStatus) {
+                    ref
+                        .read(driverDashboardProvider.notifier)
+                        .updateStatus(rideId, newStatus);
+                  },
+                  onComplete: () => _showCompletionDialog(
+                    context,
+                    rideId,
+                    data['riderId'] as String?,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'From: ${data['pickup'] ?? '-'}',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                        Text(
+                          'To: ${data['dropoff'] ?? '-'}',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                        Text(
+                          'Fare: \$${data['fare'] is num ? (data['fare'] as num).toStringAsFixed(2) : '--'}',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                        Text(
+                          'Rider: ${data['riderId'] ?? '-'}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
           floatingActionButton: isCompleted
               ? null
@@ -73,7 +113,11 @@ class DriverRideDetailsPage extends ConsumerWidget {
     );
   }
 
-  void _showCompletionDialog(BuildContext context, String rideId) {
+  void _showCompletionDialog(
+    BuildContext context,
+    String rideId,
+    String? riderId,
+  ) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -94,6 +138,7 @@ class DriverRideDetailsPage extends ConsumerWidget {
                 context: context,
                 builder: (_) => FeedbackDialog(
                   rideId: rideId,
+                  riderId: riderId,
                   onSubmitted: () {
                     Navigator.of(context).popUntil((r) => r.isFirst);
                   },
@@ -108,7 +153,120 @@ class DriverRideDetailsPage extends ConsumerWidget {
   }
 }
 
-/// Cancel ride provider with proper async state (scoped per rideId)
+class FeedbackDialog extends StatefulWidget {
+  final String rideId;
+  final String? riderId;
+  final VoidCallback onSubmitted;
+
+  const FeedbackDialog({
+    super.key,
+    required this.rideId,
+    required this.onSubmitted,
+    this.riderId,
+  });
+
+  @override
+  State<FeedbackDialog> createState() => _FeedbackDialogState();
+}
+
+class _FeedbackDialogState extends State<FeedbackDialog> {
+  final TextEditingController comment = TextEditingController();
+  double rating = 4;
+  bool isSubmitting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rate This Ride'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Slider(
+            min: 1,
+            max: 5,
+            divisions: 4,
+            value: rating,
+            onChanged: (v) => setState(() => rating = v),
+            label: rating.toString(),
+          ),
+          TextField(
+            controller: comment,
+            decoration: const InputDecoration(labelText: 'Comments'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: isSubmitting
+              ? null
+              : () async {
+                  if (comment.text.trim().isEmpty) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please enter a comment')),
+                      );
+                    }
+                    return;
+                  }
+
+                  setState(() => isSubmitting = true);
+                  try {
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) {
+                      throw FirebaseAuthException(
+                        code: 'no-user',
+                        message: 'No authenticated user.',
+                      );
+                    }
+                    await FirebaseFirestore.instance
+                        .collection(AppPaths.ratingsCollection)
+                        .add({
+                          'rideId': widget.rideId,
+                          'fromUid': user.uid,
+                          'toUid': widget.riderId ?? '',
+                          'rating': rating,
+                          'comment': comment.text.trim(),
+                          'createdAt': FieldValue.serverTimestamp(),
+                        });
+
+                    if (!mounted) return;
+                    // ignore: use_build_context_synchronously
+                    Navigator.of(context).pop();
+                    widget.onSubmitted();
+                    if (mounted) {
+                      // ignore: use_build_context_synchronously
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Thank you for your feedback!'),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      // ignore: use_build_context_synchronously
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to submit feedback: $e'),
+                        ),
+                      );
+                    }
+                  } finally {
+                    if (mounted) setState(() => isSubmitting = false);
+                  }
+                },
+          child: isSubmitting
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(),
+                )
+              : const Text('Submit'),
+        ),
+      ],
+    );
+  }
+}
+
 final cancelRideProvider =
     AutoDisposeAsyncNotifierProviderFamily<_CancelRideNotifier, void, String>(
       _CancelRideNotifier.new,
@@ -116,16 +274,13 @@ final cancelRideProvider =
 
 class _CancelRideNotifier extends AutoDisposeFamilyAsyncNotifier<void, String> {
   @override
-  Future<void> build(String rideId) async {
-    // no-op
-  }
+  Future<void> build(String rideId) async {}
 
   Future<void> cancel(String rideId) async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(
       () => ref.read(driverDashboardProvider.notifier).cancelRide(rideId),
     );
-    // dashboard provider auto-streams; no need to force refresh here.
   }
 }
 

@@ -1,6 +1,3 @@
-// lib/driver/driver_dashboard.dart
-// Dashboard: Riverpod-first, no duplicate Firebase listeners, clean pending popup.
-
 import 'dart:async';
 import 'dart:math';
 
@@ -18,7 +15,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
-/// Earnings + past rides (kept here as they are dashboard-only)
 class EarningsSummary {
   final int totalRides;
   final double totalEarnings;
@@ -32,8 +28,7 @@ final _auth = FirebaseAuth.instance;
 final _fire = FirebaseFirestore.instance;
 final _rtdb = FirebaseDatabase.instance.ref();
 
-/// ---------- UID MECHANISM UPDATED ----------
-String? universalUid; // will hold the driver UID globally
+String? universalUid;
 
 Future<String?> getDriverUid() async {
   if (universalUid != null) return universalUid;
@@ -45,7 +40,6 @@ Future<String?> getDriverUid() async {
   return null;
 }
 
-/// ---------- Providers using universal UID ----------
 final earningsProvider = FutureProvider.autoDispose<EarningsSummary>((
   ref,
 ) async {
@@ -76,7 +70,6 @@ final pastRidesProvider =
       yield* _fire
           .collection(AppPaths.ridesCollection)
           .where('driverId', isEqualTo: uid)
-          .where('status', isEqualTo: RideStatus.completed)
           .orderBy('completedAt', descending: true)
           .snapshots();
     });
@@ -151,6 +144,7 @@ class PastRidesListWidget extends ConsumerWidget {
                 ? '\$${fare.toStringAsFixed(2)}'
                 : '--';
             final dateStr = dt != null ? dt.toLocal().toString() : '-';
+            final status = (raw['status'] ?? '').toString().toUpperCase();
             return Card(
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
@@ -161,10 +155,12 @@ class PastRidesListWidget extends ConsumerWidget {
                 subtitle: Text('Fare: $fareStr • $dateStr'),
                 trailing: Chip(
                   label: Text(
-                    (raw['status'] ?? '').toString().toUpperCase(),
+                    status,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  backgroundColor: Colors.green.shade100,
+                  backgroundColor: status == RideStatus.cancelled
+                      ? Colors.red.shade100
+                      : Colors.green.shade100,
                 ),
               ),
             ).animate().slideX(
@@ -200,13 +196,41 @@ class IdleDashboard extends StatelessWidget {
   }
 }
 
-class RidePopupWidget extends ConsumerWidget {
+class RidePopupWidget extends ConsumerStatefulWidget {
   final PendingRequest request;
 
   const RidePopupWidget({super.key, required this.request});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RidePopupWidget> createState() => _RidePopupWidgetState();
+}
+
+class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
+  late TextEditingController fareController;
+  bool isSubmitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    fareController = TextEditingController(
+      text: widget.request.fare?.toStringAsFixed(2) ?? '',
+    );
+    if (kDebugMode) {
+      print("RidePopupWidget initState called");
+    } // DEBUG PRINT
+  }
+
+  @override
+  void dispose() {
+    fareController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (kDebugMode) {
+      print("RidePopupWidget build called");
+    } // DEBUG PRINT
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('New Ride Request'),
@@ -214,69 +238,98 @@ class RidePopupWidget extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (request.pickupLabel != null)
-            Text(
-              'From: ${request.pickupLabel}',
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-          if (request.dropoffLabel != null)
-            Text(
-              'To: ${request.dropoffLabel}',
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
+          if (widget.request.pickupLabel != null)
+            Text('From: ${widget.request.pickupLabel}'),
+          if (widget.request.dropoffLabel != null)
+            Text('To: ${widget.request.dropoffLabel}'),
           Text(
-            'Pickup: ${request.pickupLat.toStringAsFixed(4)}, ${request.pickupLng.toStringAsFixed(4)}',
-            style: Theme.of(context).textTheme.bodyMedium,
+            'Pickup: ${widget.request.pickupLat.toStringAsFixed(4)}, ${widget.request.pickupLng.toStringAsFixed(4)}',
           ),
           Text(
-            'Dropoff: ${request.dropoffLat.toStringAsFixed(4)}, ${request.dropoffLng.toStringAsFixed(4)}',
-            style: Theme.of(context).textTheme.bodyMedium,
+            'Dropoff: ${widget.request.dropoffLat.toStringAsFixed(4)}, ${widget.request.dropoffLng.toStringAsFixed(4)}',
           ),
-          if (request.fare != null)
+          if (widget.request.fare != null)
             Text(
-              'Fare: \$${(request.fare as num).toStringAsFixed(2)}',
+              'Suggested Fare: \$${widget.request.fare!.toStringAsFixed(2)}',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: Theme.of(context).colorScheme.primary,
               ),
             ),
+          TextField(
+            controller: fareController,
+            decoration: const InputDecoration(
+              labelText: 'Counter Fare (optional)',
+            ),
+            keyboardType: TextInputType.number,
+          ),
         ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () {
+            if (kDebugMode) {
+              print("Ride Declined");
+            }
+            Navigator.of(context).pop();
+          },
           child: const Text('Decline'),
         ),
         ElevatedButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(driverDashboardProvider.notifier)
-                  .acceptRide(request.rideId, context: request);
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text('Accept failed: $e')));
-              }
-              return;
-            }
-            if (context.mounted) {
-              Navigator.of(context).pop();
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => DriverRideDetailsPage(rideId: request.rideId),
-                ),
-              );
-            }
-          },
+          onPressed: isSubmitting
+              ? null
+              : () async {
+                  setState(() => isSubmitting = true);
+                  try {
+                    if (kDebugMode) {
+                      print("Accept button pressed");
+                    }
+                    final newFare = double.tryParse(fareController.text);
+                    if (newFare != null && newFare != widget.request.fare) {
+                      await ref
+                          .read(driverDashboardProvider.notifier)
+                          .proposeCounterFare(widget.request.rideId, newFare);
+                    } else {
+                      await ref
+                          .read(driverDashboardProvider.notifier)
+                          .acceptRide(widget.request.rideId);
+                      await DriverLocationService().startOnlineMode(
+                        rideId: widget.request.rideId,
+                      );
+                    }
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => DriverRideDetailsPage(
+                            rideId: widget.request.rideId,
+                          ),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Action failed: $e')),
+                      );
+                    }
+                  } finally {
+                    if (mounted) setState(() => isSubmitting = false);
+                  }
+                },
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
           ),
-          child: const Text('Accept'),
+          child: isSubmitting
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(),
+                )
+              : const Text('Accept'),
         ),
       ],
     ).animate().scale(duration: 300.ms);
@@ -296,6 +349,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   final _geoHasher = GeoHasher();
   String? _driverGeoHashPrefix;
   final Set<String> _shownRequestIds = {};
+  StreamSubscription<List<PendingRequest>>? _pendingSub;
 
   @override
   void initState() {
@@ -334,6 +388,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         prev,
         next,
       ) async {
+        if (!_isOnline) return;
         final list = next.asData?.value ?? const <PendingRequest>[];
         if (list.isEmpty) return;
 
@@ -395,6 +450,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void dispose() {
     _connSub.cancel();
+    _pendingSub?.cancel();
     super.dispose();
   }
 
@@ -402,9 +458,10 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     setState(() => _isOnline = v);
     if (v) {
       await DriverLocationService().startOnlineMode();
-      await _ensureDriverHashPrefix();
     } else {
       await DriverLocationService().goOffline();
+
+      _shownRequestIds.clear();
     }
   }
 
@@ -527,7 +584,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
             leading: const Icon(Icons.logout),
             title: const Text('Logout'),
             onTap: () async {
-              Navigator.pop(context); // Close drawer
+              Navigator.pop(context);
               await DriverLocationService().goOffline();
               await _auth.signOut();
               if (!mounted) return;
@@ -582,6 +639,17 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                   BitmapDescriptor.hueGreen,
                 ),
               ),
+            if (data['driverLat'] is num && data['driverLng'] is num)
+              Marker(
+                markerId: const MarkerId('driver'),
+                position: LatLng(
+                  (data['driverLat'] as num).toDouble(),
+                  (data['driverLng'] as num).toDouble(),
+                ),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed,
+                ),
+              ),
           },
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
@@ -613,6 +681,10 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                         const SizedBox(height: 8),
                         Text(
                           'Fare: \$${data['fare'] is num ? (data['fare'] as num).toStringAsFixed(2) : '--'}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        Text(
+                          'Status: ${data['status']?.toString().toUpperCase() ?? '-'}',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ],
