@@ -1,20 +1,22 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:logger/logger.dart';
 import 'rider_services.dart';
-import 'package:flutter/foundation.dart';
 
 final riderDashboardProvider =
     StateNotifierProvider<
       RiderDashboardController,
-      AsyncValue<DocumentSnapshot?>
+      AsyncValue<Map<String, dynamic>?>
     >((ref) => RiderDashboardController()..fetchActiveRide());
 
 class RiderDashboardController
-    extends StateNotifier<AsyncValue<DocumentSnapshot?>> {
+    extends StateNotifier<AsyncValue<Map<String, dynamic>?>> {
   RiderDashboardController() : super(const AsyncLoading());
-
   final fire = FirebaseFirestore.instance;
+  final rtdb = FirebaseDatabase.instance;
+  final _logger = Logger();
 
   String? _lastUid;
   String? get uid {
@@ -23,52 +25,35 @@ class RiderDashboardController
     return current ?? _lastUid;
   }
 
-  Stream<DocumentSnapshot?> get rideStream {
+  Stream<Map<String, dynamic>?> get rideStream {
     final currentUid = uid;
     if (currentUid == null) {
-      if (kDebugMode) {
-        print('RiderDashboardController: No UID, returning empty stream');
-      }
+      _logger.w('No UID, returning empty stream');
       return const Stream.empty();
     }
-
-    return fire
-        .collection('rides')
-        .where('riderId', isEqualTo: currentUid)
-        .where('status', whereIn: ['pending', 'accepted', 'in_progress'])
-        .orderBy('createdAt', descending: false)
-        .limit(1)
-        .snapshots()
-        .map((s) {
-          if (kDebugMode) {
-            print(
-              'RiderDashboardController: Ride stream updated, docs: ${s.docs.length}',
-            );
-          }
-          return s.docs.isNotEmpty ? s.docs.first : null;
-        });
+    return rtdb.ref('rides').child(currentUid).onValue.map((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      _logger.d('Ride stream updated: $data');
+      return data != null ? Map<String, dynamic>.from(data) : null;
+    });
   }
 
   void fetchActiveRide() {
     final currentUid = uid;
     if (currentUid == null) {
-      if (kDebugMode) {
-        print('RiderDashboardController: No UID, setting state to null');
-      }
+      _logger.w('No UID, setting state to null');
       state = const AsyncData(null);
       return;
     }
 
     state = const AsyncLoading();
     rideStream.listen(
-      (doc) {
-        state = AsyncData(doc);
+      (data) {
+        state = AsyncData(data);
       },
       onError: (err, stack) {
         state = AsyncError(err, stack);
-        if (kDebugMode) {
-          print('RiderDashboardController: Error in ride stream: $err');
-        }
+        _logger.e('Error in ride stream: $err', stackTrace: stack);
       },
     );
   }
@@ -76,9 +61,7 @@ class RiderDashboardController
   void clearCachedUid() {
     _lastUid = null;
     state = const AsyncData(null);
-    if (kDebugMode) {
-      print('RiderDashboardController: Cleared cached UID');
-    }
+    _logger.i('Cleared cached UID');
   }
 
   Future<void> createRide(
@@ -94,23 +77,6 @@ class RiderDashboardController
     if (currentUid == null) throw Exception('User not logged in');
 
     try {
-      final docRef = await fire.collection('rides').add({
-        'riderId': currentUid,
-        'pickup': pickup,
-        'dropoff': dropoff,
-        'pickupLat': pickupLocation.latitude,
-        'pickupLng': pickupLocation.longitude,
-        'dropoffLat': dropoffLocation.latitude,
-        'dropoffLng': dropoffLocation.longitude,
-        'fare': fare,
-        'rideType': rideType,
-        'note': note,
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      final newRide = await docRef.get();
-      state = AsyncData(newRide);
       await RideService().requestRide({
         'pickup': pickup,
         'dropoff': dropoff,
@@ -122,11 +88,22 @@ class RiderDashboardController
         'rideType': rideType,
         'note': note,
       });
+      state = AsyncData({
+        'pickup': pickup,
+        'dropoff': dropoff,
+        'pickupLat': pickupLocation.latitude,
+        'pickupLng': pickupLocation.longitude,
+        'dropoffLat': dropoffLocation.latitude,
+        'dropoffLng': dropoffLocation.longitude,
+        'fare': fare,
+        'rideType': rideType,
+        'note': note,
+        'status': 'pending',
+      });
     } catch (e, st) {
       state = AsyncError(e, st);
-      if (kDebugMode) {
-        print('RiderDashboardController: Failed to create ride: $e');
-      }
+      _logger.e('Failed to create ride: $e', stackTrace: st);
+      throw Exception('Unable to create ride: $e');
     }
   }
 
@@ -139,9 +116,8 @@ class RiderDashboardController
       fetchActiveRide();
     } catch (e, st) {
       state = AsyncError(e, st);
-      if (kDebugMode) {
-        print('RiderDashboardController: Failed to cancel ride: $e');
-      }
+      _logger.e('Failed to cancel ride: $e', stackTrace: st);
+      throw Exception('Unable to cancel ride: $e');
     }
   }
 
@@ -162,9 +138,8 @@ class RiderDashboardController
       fetchActiveRide();
     } catch (e, st) {
       state = AsyncError(e, st);
-      if (kDebugMode) {
-        print('RiderDashboardController: Failed to handle counter-fare: $e');
-      }
+      _logger.e('Failed to handle counter-fare: $e', stackTrace: st);
+      throw Exception('Unable to handle counter-fare: $e');
     }
   }
 }

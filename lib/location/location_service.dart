@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
+import 'package:femdrive/driver/driver_services.dart';
 
 class LocationService {
   StreamSubscription<Position>? _positionSub;
@@ -27,9 +29,7 @@ class LocationService {
             _logLocation(role, rideId, position);
           },
           onError: (e) {
-            if (kDebugMode) {
-              print('Location tracking error: $e');
-            }
+            if (kDebugMode) print('Location tracking error: $e');
           },
         );
   }
@@ -37,23 +37,29 @@ class LocationService {
   Future<void> stop() async {
     await _positionSub?.cancel();
     _positionSub = null;
-    if (kDebugMode) {
-      print('Location tracking stopped');
-    }
+    if (kDebugMode) print('Location tracking stopped');
   }
 
-  Future<bool> _checkPermission() async {
+  Future<bool> _checkPermission({Function()? onPermissionDenied}) async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
+      await Geolocator.openLocationSettings();
       return false;
     }
 
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        onPermissionDenied?.call();
+        return false;
+      }
     }
-    return permission == LocationPermission.whileInUse ||
-        permission == LocationPermission.always;
+    if (permission == LocationPermission.deniedForever) {
+      await Geolocator.openAppSettings();
+      return false;
+    }
+    return true;
   }
 
   Future<void> _updateLiveLocation(
@@ -62,16 +68,16 @@ class LocationService {
     Position pos,
   ) async {
     try {
-      final doc = FirebaseFirestore.instance.collection('rides').doc(rideId);
-      await doc.update({
+      final ref = FirebaseDatabase.instance.ref(
+        '${AppPaths.ridesCollection}/$rideId',
+      );
+      await ref.update({
         '${role}Lat': pos.latitude,
         '${role}Lng': pos.longitude,
-        '${role}Ts': FieldValue.serverTimestamp(),
+        '${role}Ts': ServerValue.timestamp,
       });
     } catch (e) {
-      if (kDebugMode) {
-        print('Error updating live location: $e');
-      }
+      if (kDebugMode) print('Error updating live location: $e');
     }
   }
 
@@ -79,18 +85,16 @@ class LocationService {
     try {
       final subcollection = role == 'driver' ? 'locations' : 'riderLocations';
       await FirebaseFirestore.instance
-          .collection('rides')
+          .collection(AppPaths.ridesCollection)
           .doc(rideId)
           .collection(subcollection)
           .add({
-            'lat': pos.latitude,
-            'lng': pos.longitude,
-            'ts': FieldValue.serverTimestamp(),
+            AppFields.lat: pos.latitude,
+            AppFields.lng: pos.longitude,
+            AppFields.timestamp: FieldValue.serverTimestamp(),
           });
     } catch (e) {
-      if (kDebugMode) {
-        print('Error logging location: $e');
-      }
+      if (kDebugMode) print('Error logging location: $e');
     }
   }
 }

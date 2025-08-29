@@ -19,13 +19,37 @@ class RideStrings {
   static const errorGeneric = 'Something went wrong. Please try again.';
 }
 
-class DriverRideDetailsPage extends ConsumerWidget {
+final riderInfoProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>?, String>((ref, riderId) async {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(riderId)
+          .get();
+      return snap.data();
+    });
+final _auth = FirebaseAuth.instance;
+
+class DriverRideDetailsPage extends ConsumerStatefulWidget {
   final String rideId;
 
   const DriverRideDetailsPage({super.key, required this.rideId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DriverRideDetailsPage> createState() =>
+      _DriverRideDetailsPageState();
+}
+
+class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
+  final _messageController = TextEditingController();
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(driverDashboardProvider);
 
     return state.when(
@@ -38,7 +62,7 @@ class DriverRideDetailsPage extends ConsumerWidget {
         return Scaffold(body: Center(child: Text(errorMessage)));
       },
       data: (doc) {
-        if (doc == null || doc.id != rideId) {
+        if (doc == null || doc.id != widget.rideId) {
           return const Scaffold(body: Center(child: Text(RideStrings.noRide)));
         }
 
@@ -47,12 +71,17 @@ class DriverRideDetailsPage extends ConsumerWidget {
           return const Scaffold(body: Center(child: Text(RideStrings.noRide)));
         }
 
-        final isCompleted = data['status'] == RideStatus.completed;
+        final riderId = data[AppFields.riderId] as String?;
+        final riderInfo = riderId != null
+            ? ref.watch(riderInfoProvider(riderId))
+            : const AsyncValue.data(null);
+
+        final isCompleted = data[AppFields.status] == RideStatus.completed;
 
         return Scaffold(
           appBar: AppBar(
             title: Text(
-              'Ride: ${data['status']?.toString().toUpperCase() ?? 'IN PROGRESS'}',
+              'Ride: ${data[AppFields.status]?.toString().toUpperCase() ?? 'IN PROGRESS'}',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -60,18 +89,15 @@ class DriverRideDetailsPage extends ConsumerWidget {
             children: [
               Expanded(
                 child: DriverMapWidget(
-                  rideData: {...data, 'rideId': rideId},
+                  rideData: {...data, 'rideId': widget.rideId},
                   onMapCreated: (_) {},
                   onStatusChange: (newStatus) {
                     ref
                         .read(driverDashboardProvider.notifier)
-                        .updateStatus(rideId, newStatus);
+                        .updateStatus(widget.rideId, newStatus);
                   },
-                  onComplete: () => _showCompletionDialog(
-                    context,
-                    rideId,
-                    data['riderId'] as String?,
-                  ),
+                  onComplete: () =>
+                      _showCompletionDialog(context, widget.rideId, riderId),
                 ),
               ),
               Padding(
@@ -83,33 +109,104 @@ class DriverRideDetailsPage extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'From: ${data['pickup'] ?? '-'}',
+                          'From: ${data[AppFields.pickup] ?? '-'}',
                           style: Theme.of(context).textTheme.bodyLarge,
                         ),
                         Text(
-                          'To: ${data['dropoff'] ?? '-'}',
+                          'To: ${data[AppFields.dropoff] ?? '-'}',
                           style: Theme.of(context).textTheme.bodyLarge,
                         ),
                         Text(
-                          'Fare: \$${data['fare'] is num ? (data['fare'] as num).toStringAsFixed(2) : '--'}',
+                          'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
                           style: Theme.of(context).textTheme.bodyLarge,
                         ),
-                        Text(
-                          'Rider: ${data['riderId'] ?? '-'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        riderInfo.when(
+                          data: (info) => Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Rider Name: ${info?[AppFields.username] ?? '-'}',
+                              ),
+                              Text(
+                                'Rider Phone: ${info?[AppFields.phone] ?? '-'}',
+                              ),
+                            ],
+                          ),
+                          loading: () => const CircularProgressIndicator(),
+                          error: (e, _) =>
+                              Text('Failed to load rider info: $e'),
                         ),
                       ],
                     ),
                   ),
                 ),
               ),
+              if (!isCompleted) _buildMessagingSection(),
             ],
           ),
           floatingActionButton: isCompleted
               ? null
-              : _CancelRideButton(rideId: rideId),
+              : _CancelRideButton(rideId: widget.rideId),
         );
       },
+    );
+  }
+
+  Widget _buildMessagingSection() {
+    final messages = ref.watch(messagesProvider(widget.rideId));
+    return Expanded(
+      child: Column(
+        children: [
+          Expanded(
+            child: messages.when(
+              data: (list) => ListView.builder(
+                itemCount: list.length,
+                itemBuilder: (ctx, i) {
+                  final msg = list[i];
+                  return ListTile(
+                    title: Text(msg[AppFields.text]),
+                    subtitle: Text(
+                      msg[AppFields.senderId] == _auth.currentUser?.uid
+                          ? 'You'
+                          : 'Rider',
+                    ),
+                  );
+                },
+              ),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) =>
+                  Center(child: Text('Failed to load messages: $e')),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    decoration: const InputDecoration(labelText: 'Message'),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: () {
+                    if (_messageController.text.trim().isNotEmpty) {
+                      ref
+                          .read(driverDashboardProvider.notifier)
+                          .sendMessage(
+                            widget.rideId,
+                            _messageController.text.trim(),
+                          );
+                      _messageController.clear();
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -138,7 +235,6 @@ class DriverRideDetailsPage extends ConsumerWidget {
                 context: context,
                 builder: (_) => FeedbackDialog(
                   rideId: rideId,
-                  riderId: riderId,
                   onSubmitted: () {
                     Navigator.of(context).popUntil((r) => r.isFirst);
                   },
@@ -153,119 +249,10 @@ class DriverRideDetailsPage extends ConsumerWidget {
   }
 }
 
-class FeedbackDialog extends StatefulWidget {
-  final String rideId;
-  final String? riderId;
-  final VoidCallback onSubmitted;
-
-  const FeedbackDialog({
-    super.key,
-    required this.rideId,
-    required this.onSubmitted,
-    this.riderId,
-  });
-
-  @override
-  State<FeedbackDialog> createState() => _FeedbackDialogState();
-}
-
-class _FeedbackDialogState extends State<FeedbackDialog> {
-  final TextEditingController comment = TextEditingController();
-  double rating = 4;
-  bool isSubmitting = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Rate This Ride'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Slider(
-            min: 1,
-            max: 5,
-            divisions: 4,
-            value: rating,
-            onChanged: (v) => setState(() => rating = v),
-            label: rating.toString(),
-          ),
-          TextField(
-            controller: comment,
-            decoration: const InputDecoration(labelText: 'Comments'),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: isSubmitting
-              ? null
-              : () async {
-                  if (comment.text.trim().isEmpty) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Please enter a comment')),
-                      );
-                    }
-                    return;
-                  }
-
-                  setState(() => isSubmitting = true);
-                  try {
-                    final user = FirebaseAuth.instance.currentUser;
-                    if (user == null) {
-                      throw FirebaseAuthException(
-                        code: 'no-user',
-                        message: 'No authenticated user.',
-                      );
-                    }
-                    await FirebaseFirestore.instance
-                        .collection(AppPaths.ratingsCollection)
-                        .add({
-                          'rideId': widget.rideId,
-                          'fromUid': user.uid,
-                          'toUid': widget.riderId ?? '',
-                          'rating': rating,
-                          'comment': comment.text.trim(),
-                          'createdAt': FieldValue.serverTimestamp(),
-                        });
-
-                    if (!mounted) return;
-                    // ignore: use_build_context_synchronously
-                    Navigator.of(context).pop();
-                    widget.onSubmitted();
-                    if (mounted) {
-                      // ignore: use_build_context_synchronously
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Thank you for your feedback!'),
-                        ),
-                      );
-                    }
-                  } catch (e) {
-                    if (mounted) {
-                      // ignore: use_build_context_synchronously
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Failed to submit feedback: $e'),
-                        ),
-                      );
-                    }
-                  } finally {
-                    if (mounted) setState(() => isSubmitting = false);
-                  }
-                },
-          child: isSubmitting
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(),
-                )
-              : const Text('Submit'),
-        ),
-      ],
-    );
-  }
-}
+final messagesProvider =
+    StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
+      return DriverService().listenMessages(rideId);
+    });
 
 final cancelRideProvider =
     AutoDisposeAsyncNotifierProviderFamily<_CancelRideNotifier, void, String>(

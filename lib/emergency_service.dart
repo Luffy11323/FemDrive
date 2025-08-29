@@ -1,11 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'driver/driver_services.dart';
 
 class EmergencyService {
   static final _fire = FirebaseFirestore.instance;
-  static final _rtdb = FirebaseDatabase.instance;
+  static final _rtdb = FirebaseDatabase.instance.ref();
 
   static Future<void> sendEmergency({
     required String rideId,
@@ -13,32 +12,24 @@ class EmergencyService {
     required String otherUid,
   }) async {
     try {
-      // ✅ Mark user as unverified
-      await _fire.collection('users').doc(otherUid).update({'verified': false});
-
-      // ✅ Cancel the ride in Firestore
-      await _fire.collection('rides').doc(rideId).update({
-        'status': 'cancelled',
-        'emergencyTriggered': true,
+      await _fire.collection('users').doc(otherUid).update({
+        AppFields.verified: false,
       });
+      await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
+        AppFields.status: RideStatus.cancelled,
+        AppFields.emergencyTriggered: true,
+      });
+      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
 
-      // ✅ Remove from RTDB if exists
-      await _rtdb.ref('rides_pending/$rideId').remove();
-
-      // ✅ Notify backend via REST API
-      final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/emergency'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'rideId': rideId,
-          'reportedBy': currentUid,
-          'otherUid': otherUid,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        throw Exception('Backend error: ${response.body}');
-      }
+      // Notify admin via RTDB
+      await _rtdb.child('${AppPaths.notifications}/admin').push().set({
+        AppFields.type: 'emergency',
+        AppFields.rideId: rideId,
+        AppFields.reportedBy: currentUid,
+        AppFields.otherUid: otherUid,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     } catch (e) {
       throw Exception('Failed to send emergency: $e');
     }

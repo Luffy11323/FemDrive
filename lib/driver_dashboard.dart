@@ -6,6 +6,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dart_geohash/dart_geohash.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/driver/driver_ride_details_page.dart';
+import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/location/directions_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -47,17 +49,72 @@ final earningsProvider = FutureProvider.autoDispose<EarningsSummary>((
   if (uid == null) {
     return const EarningsSummary(totalRides: 0, totalEarnings: 0);
   }
+  final today = DateTime.now();
+  final startOfDay = DateTime(today.year, today.month, today.day);
   final q = await _fire
       .collection(AppPaths.ridesCollection)
-      .where('driverId', isEqualTo: uid)
-      .where('status', isEqualTo: RideStatus.completed)
+      .where(AppFields.driverId, isEqualTo: uid)
+      .where(AppFields.status, isEqualTo: RideStatus.completed)
+      .where(
+        AppFields.completedAt,
+        isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+      )
       .get();
 
   double total = 0;
   for (final d in q.docs) {
-    total += (d.data()['fare'] as num?)?.toDouble() ?? 0.0;
+    total += (d.data()[AppFields.fare] as num?)?.toDouble() ?? 0.0;
   }
   return EarningsSummary(totalRides: q.docs.length, totalEarnings: total);
+});
+
+final totalEarningsProvider = FutureProvider.autoDispose<EarningsSummary>((
+  ref,
+) async {
+  final uid = await getDriverUid();
+  if (uid == null) {
+    return const EarningsSummary(totalRides: 0, totalEarnings: 0);
+  }
+  final q = await _fire
+      .collection(AppPaths.ridesCollection)
+      .where(AppFields.driverId, isEqualTo: uid)
+      .where(AppFields.status, isEqualTo: RideStatus.completed)
+      .get();
+
+  double total = 0;
+  for (final d in q.docs) {
+    total += (d.data()[AppFields.fare] as num?)?.toDouble() ?? 0.0;
+  }
+  return EarningsSummary(totalRides: q.docs.length, totalEarnings: total);
+});
+
+final weeklyEarningsProvider = FutureProvider.autoDispose<Map<String, double>>((
+  ref,
+) async {
+  final uid = await getDriverUid();
+  if (uid == null) return {};
+  final now = DateTime.now();
+  final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+  final q = await _fire
+      .collection(AppPaths.ridesCollection)
+      .where(AppFields.driverId, isEqualTo: uid)
+      .where(AppFields.status, isEqualTo: RideStatus.completed)
+      .where(
+        AppFields.completedAt,
+        isGreaterThanOrEqualTo: Timestamp.fromDate(startOfWeek),
+      )
+      .get();
+
+  final weekly = <String, double>{};
+  for (final d in q.docs) {
+    final ts = d.data()[AppFields.completedAt] as Timestamp?;
+    if (ts != null) {
+      final date = ts.toDate().toString().split(' ')[0];
+      weekly[date] =
+          (weekly[date] ?? 0) + (d.data()[AppFields.fare] as num?)!.toDouble();
+    }
+  }
+  return weekly;
 });
 
 final pastRidesProvider =
@@ -69,10 +126,19 @@ final pastRidesProvider =
 
       yield* _fire
           .collection(AppPaths.ridesCollection)
-          .where('driverId', isEqualTo: uid)
-          .orderBy('completedAt', descending: true)
+          .where(AppFields.driverId, isEqualTo: uid)
+          .orderBy(AppFields.completedAt, descending: true)
           .snapshots();
     });
+
+final faresConfigProvider = FutureProvider<Map<String, double>>((ref) async {
+  final snap = await _fire.collection('config').doc('fares').get();
+  final data = snap.data();
+  return {
+    'base': data?['base']?.toDouble() ?? 5.0,
+    'perKm': data?['perKm']?.toDouble() ?? 1.0,
+  };
+});
 
 class EarningsSummaryWidget extends ConsumerWidget {
   const EarningsSummaryWidget({super.key});
@@ -91,14 +157,14 @@ class EarningsSummaryWidget extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Total Rides: ${e.asData?.value.totalRides ?? 0}',
+                    'Today\'s Rides: ${e.asData?.value.totalRides ?? 0}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Total Earnings: \$${e.asData?.value.totalEarnings.toStringAsFixed(2) ?? '0.00'}',
+                    'Today\'s Earnings: \$${e.asData?.value.totalEarnings.toStringAsFixed(2) ?? '0.00'}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -137,20 +203,22 @@ class PastRidesListWidget extends ConsumerWidget {
           separatorBuilder: (_, _) => const Divider(height: 1),
           itemBuilder: (ctx, i) {
             final raw = qSnap.docs[i].data();
-            final fare = (raw['fare'] as num?)?.toDouble();
-            final ts = raw['completedAt'] as Timestamp?;
+            final fare = (raw[AppFields.fare] as num?)?.toDouble();
+            final ts = raw[AppFields.completedAt] as Timestamp?;
             final dt = ts?.toDate();
             final fareStr = fare != null
                 ? '\$${fare.toStringAsFixed(2)}'
                 : '--';
             final dateStr = dt != null ? dt.toLocal().toString() : '-';
-            final status = (raw['status'] ?? '').toString().toUpperCase();
+            final status = (raw[AppFields.status] ?? '')
+                .toString()
+                .toUpperCase();
             return Card(
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
                 dense: true,
                 title: Text(
-                  '${raw['pickup'] ?? '-'} → ${raw['dropoff'] ?? '-'}',
+                  '${raw[AppFields.pickup] ?? '-'} → ${raw[AppFields.dropoff] ?? '-'}',
                 ),
                 subtitle: Text('Fare: $fareStr • $dateStr'),
                 trailing: Chip(
@@ -176,22 +244,262 @@ class PastRidesListWidget extends ConsumerWidget {
         child: CircularProgressIndicator(),
       ).animate().fadeIn(duration: 400.ms),
       error: (e, _) => Center(
-        child: Text('Failed to load past rides'),
+        child: Text('Failed to load past rides: $e'),
       ).animate().fadeIn(duration: 400.ms),
     );
   }
 }
 
-class IdleDashboard extends StatelessWidget {
-  const IdleDashboard({super.key});
+class EarningsPage extends ConsumerWidget {
+  const EarningsPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final totalEarnings = ref.watch(totalEarningsProvider);
+    final weekly = ref.watch(weeklyEarningsProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Earnings & Payouts')),
+      body: totalEarnings.when(
+        data: (summary) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Total Rides: ${summary.totalRides}',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Total Earnings: \$${summary.totalEarnings.toStringAsFixed(2)}',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Weekly Breakdown',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              weekly.when(
+                data: (map) => Table(
+                  border: TableBorder.all(),
+                  children: map.entries
+                      .map(
+                        (e) => TableRow(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text(e.key),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text('\$${e.value.toStringAsFixed(2)}'),
+                            ),
+                          ],
+                        ),
+                      )
+                      .toList(),
+                ),
+                loading: () => const CircularProgressIndicator(),
+                error: (e, _) => Text('Failed to load weekly earnings: $e'),
+              ),
+              const SizedBox(height: 16),
+              Expanded(child: const PastRidesListWidget()),
+            ],
+          ),
+        ),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Failed to load earnings: $e')),
+      ),
+    );
+  }
+}
+
+final driverProfileProvider =
+    StreamProvider<DocumentSnapshot<Map<String, dynamic>>>((ref) async* {
+      final uid = await getDriverUid();
+      if (uid == null) return;
+      yield* _fire.collection('users').doc(uid).snapshots();
+    });
+
+class ProfilePage extends ConsumerStatefulWidget {
+  const ProfilePage({super.key});
+
+  @override
+  ConsumerState<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends ConsumerState<ProfilePage> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController;
+  late TextEditingController _phoneController;
+  late TextEditingController _vehicleController;
+  bool _isEditing = false;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController();
+    _phoneController = TextEditingController();
+    _vehicleController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _vehicleController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const EarningsSummaryWidget(),
-        Expanded(child: const PastRidesListWidget()),
-      ],
+    final profile = ref.watch(driverProfileProvider);
+    return profile.when(
+      data: (doc) {
+        final data = doc.data() ?? {};
+        if (!_isEditing) {
+          _nameController.text = data[AppFields.username] ?? '';
+          _phoneController.text = data[AppFields.phone] ?? '';
+          _vehicleController.text = data['vehicle'] ?? '';
+        }
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Profile'),
+            actions: [
+              IconButton(
+                icon: Icon(_isEditing ? Icons.save : Icons.edit),
+                onPressed: _isSaving
+                    ? null
+                    : () {
+                        if (_isEditing) {
+                          _saveProfile(doc.id);
+                        } else {
+                          setState(() => _isEditing = true);
+                        }
+                      },
+              ),
+            ],
+          ),
+          body: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: 'Name'),
+                    enabled: _isEditing,
+                    validator: (value) =>
+                        value?.isEmpty == true ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _phoneController,
+                    decoration: const InputDecoration(labelText: 'Phone'),
+                    enabled: _isEditing,
+                    validator: (value) =>
+                        value?.isEmpty == true ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _vehicleController,
+                    decoration: const InputDecoration(
+                      labelText: 'Vehicle Info',
+                    ),
+                    enabled: _isEditing,
+                  ),
+                  if (_isSaving) const CircularProgressIndicator(),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('Failed to load profile: $e')),
+    );
+  }
+
+  Future<void> _saveProfile(String uid) async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
+    try {
+      await _fire.collection('users').doc(uid).update({
+        AppFields.username: _nameController.text.trim(),
+        AppFields.phone: _phoneController.text.trim(),
+        'vehicle': _vehicleController.text.trim(),
+      });
+      setState(() => _isEditing = false);
+      ScaffoldMessenger.of(
+        // ignore: use_build_context_synchronously
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile updated')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        // ignore: use_build_context_synchronously
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+    } finally {
+      setState(() => _isSaving = false);
+    }
+  }
+}
+
+class EmergencyPage extends ConsumerWidget {
+  const EmergencyPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeRide = ref.watch(driverDashboardProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Emergency')),
+      body: activeRide.when(
+        data: (doc) => doc != null
+            ? Center(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () async {
+                    final rideId = doc.id;
+                    final currentUid = await getDriverUid();
+                    final riderId = doc.data()?[AppFields.riderId];
+                    if (currentUid != null && riderId != null) {
+                      try {
+                        await EmergencyService.sendEmergency(
+                          rideId: rideId,
+                          currentUid: currentUid,
+                          otherUid: riderId,
+                        );
+                        // ignore: use_build_context_synchronously
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Emergency sent')),
+                        );
+                      } catch (e) {
+                        ScaffoldMessenger.of(
+                          // ignore: use_build_context_synchronously
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                      }
+                    }
+                  },
+                  child: const Text('Send Emergency Alert'),
+                ),
+              )
+            : const Center(child: Text('No active ride for emergency')),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Error: $e')),
+      ),
     );
   }
 }
@@ -208,6 +516,8 @@ class RidePopupWidget extends ConsumerStatefulWidget {
 class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
   late TextEditingController fareController;
   bool isSubmitting = false;
+  double? estimatedDistance;
+  String? errorMessage;
 
   @override
   void initState() {
@@ -215,9 +525,19 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
     fareController = TextEditingController(
       text: widget.request.fare?.toStringAsFixed(2) ?? '',
     );
-    if (kDebugMode) {
-      print("RidePopupWidget initState called");
-    } // DEBUG PRINT
+    _fetchEstimatedDistance();
+  }
+
+  Future<void> _fetchEstimatedDistance() async {
+    try {
+      estimatedDistance = await DirectionsService.getDistance(
+        LatLng(widget.request.pickupLat, widget.request.pickupLng),
+        LatLng(widget.request.dropoffLat, widget.request.dropoffLng),
+      );
+      setState(() {});
+    } catch (e) {
+      setState(() => errorMessage = 'Failed to calculate distance: $e');
+    }
   }
 
   @override
@@ -228,9 +548,6 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (kDebugMode) {
-      print("RidePopupWidget build called");
-    } // DEBUG PRINT
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('New Ride Request'),
@@ -248,6 +565,8 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
           Text(
             'Dropoff: ${widget.request.dropoffLat.toStringAsFixed(4)}, ${widget.request.dropoffLng.toStringAsFixed(4)}',
           ),
+          if (estimatedDistance != null)
+            Text('Distance: ${estimatedDistance!.toStringAsFixed(2)} km'),
           if (widget.request.fare != null)
             Text(
               'Suggested Fare: \$${widget.request.fare!.toStringAsFixed(2)}',
@@ -263,14 +582,24 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
             ),
             keyboardType: TextInputType.number,
           ),
+          if (errorMessage != null)
+            Text(errorMessage!, style: const TextStyle(color: Colors.red)),
         ],
       ),
       actions: [
         TextButton(
-          onPressed: () {
-            if (kDebugMode) {
-              print("Ride Declined");
+          onPressed: () async {
+            try {
+              await ref
+                  .read(driverDashboardProvider.notifier)
+                  .declineRide(widget.request.rideId);
+            } catch (e) {
+              ScaffoldMessenger.of(
+                // ignore: use_build_context_synchronously
+                context,
+              ).showSnackBar(SnackBar(content: Text('Failed to decline: $e')));
             }
+            // ignore: use_build_context_synchronously
             Navigator.of(context).pop();
           },
           child: const Text('Decline'),
@@ -281,9 +610,6 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
               : () async {
                   setState(() => isSubmitting = true);
                   try {
-                    if (kDebugMode) {
-                      print("Accept button pressed");
-                    }
                     final newFare = double.tryParse(fareController.text);
                     if (newFare != null && newFare != widget.request.fare) {
                       await ref
@@ -350,11 +676,16 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   String? _driverGeoHashPrefix;
   final Set<String> _shownRequestIds = {};
   StreamSubscription<List<PendingRequest>>? _pendingSub;
+  GoogleMapController? _mapController;
+  Position? _currentPosition;
+  Timer? _locationUpdateTimer;
+  final bool _mapError = false;
+  final String _mapErrorMessage = '';
+  int _selectedIndex = 0;
 
   @override
   void initState() {
     super.initState();
-
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
           results.contains(ConnectivityResult.mobile) ||
@@ -370,7 +701,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         if (!mounted) return;
         final data = snap.data();
         if (data == null) return;
-        final isVerified = data['verified'] as bool? ?? true;
+        final isVerified = data[AppFields.verified] as bool? ?? true;
         if (!isVerified) {
           await DriverLocationService().goOffline();
           await _auth.signOut();
@@ -382,6 +713,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         }
       });
     });
+
+    _startLocationUpdates();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
@@ -432,7 +765,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       final snap = await _rtdb
           .child(AppPaths.driversOnline)
           .child(uid)
-          .child('geohash')
+          .child(AppFields.geohash)
           .get();
       if (snap.exists && snap.value is String) {
         _driverGeoHashPrefix = (snap.value as String).substring(0, 5);
@@ -447,10 +780,48 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     } catch (_) {}
   }
 
+  void _startLocationUpdates() {
+    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 1), (
+      timer,
+    ) async {
+      if (!_isOnline) return;
+      try {
+        final pos = await Geolocator.getCurrentPosition();
+        setState(() {
+          _currentPosition = pos;
+        });
+        final uid = await getDriverUid();
+        if (uid != null) {
+          await _rtdb.child(AppPaths.driversOnline).child(uid).update({
+            AppFields.lat: pos.latitude,
+            AppFields.lng: pos.longitude,
+            AppFields.geohash: _geoHasher.encode(
+              pos.latitude,
+              pos.longitude,
+              precision: GeoCfg.driverHashPrecision,
+            ),
+            AppFields.updatedAt: ServerValue.timestamp,
+          });
+        }
+        if (_mapController != null && _currentPosition != null) {
+          _mapController!.animateCamera(
+            CameraUpdate.newLatLng(
+              LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+            ),
+          );
+        }
+      } catch (e) {
+        if (kDebugMode) print('Location update failed: $e');
+      }
+    });
+  }
+
   @override
   void dispose() {
     _connSub.cancel();
     _pendingSub?.cancel();
+    _locationUpdateTimer?.cancel();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -460,35 +831,26 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       await DriverLocationService().startOnlineMode();
     } else {
       await DriverLocationService().goOffline();
-
       _shownRequestIds.clear();
     }
   }
 
+  void _onItemTapped(int index) {
+    setState(() => _selectedIndex = index);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      _buildHomePage(),
+      const PastRidesListWidget(),
+      const EarningsPage(),
+      const ProfilePage(),
+      const EmergencyPage(),
+    ];
+
     return Theme(
-      data: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Theme.of(context).brightness,
-        ),
-        cardTheme: CardThemeData(
-          elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          ),
-        ),
-      ),
+      data: Theme.of(context),
       child: Scaffold(
         appBar: AppBar(
           title: const Text(
@@ -506,54 +868,34 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                 Switch(
                   value: _isOnline,
                   onChanged: _toggleOnline,
-                  activeThumbColor: Colors.green,
+                  activeThumbColor: Theme.of(context).colorScheme.primary,
                 ),
               ],
             ),
           ],
         ),
         drawer: Drawer(child: _buildDrawer()),
-        body: ref
-            .watch(driverDashboardProvider)
-            .when(
-              loading: () => const Center(
-                child: CircularProgressIndicator(),
-              ).animate().fadeIn(duration: 400.ms),
-              error: (e, _) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error, color: Colors.red, size: 48),
-                    const SizedBox(height: 16),
-                    Text('Error: ${e.toString()}'),
-                    const SizedBox(height: 16),
-                    OutlinedButton(
-                      onPressed: () => ref.invalidate(driverDashboardProvider),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ).animate().fadeIn(duration: 400.ms),
-              ),
-              data: (doc) => AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: doc == null
-                    ? const IdleDashboard(key: ValueKey('idle'))
-                    : _buildMapView(doc, doc.id),
-              ),
+        body: pages[_selectedIndex],
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: _onItemTapped,
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
+            NavigationDestination(
+              icon: Icon(Icons.history),
+              label: 'Past Rides',
             ),
-        floatingActionButton: ref
-            .watch(driverDashboardProvider)
-            .when(
-              data: (doc) => doc == null
-                  ? FloatingActionButton(
-                      onPressed: () => Scaffold.of(context).openDrawer(),
-                      tooltip: 'Menu',
-                      child: const Icon(Icons.menu),
-                    )
-                  : null,
-              loading: () => null,
-              error: (_, _) => null,
+            NavigationDestination(
+              icon: Icon(Icons.account_balance_wallet),
+              label: 'Earnings',
             ),
+            NavigationDestination(icon: Icon(Icons.person), label: 'Profile'),
+            NavigationDestination(
+              icon: Icon(Icons.emergency),
+              label: 'Emergency',
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -574,12 +916,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
               color: Theme.of(context).colorScheme.primaryContainer,
             ),
           ).animate().slideY(begin: -0.2, end: 0, duration: 400.ms),
-          const ListTile(
-            leading: Icon(Icons.account_balance_wallet),
-            title: Text('Earnings Summary'),
-            enabled: false,
-          ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
-          const Divider(height: 1),
           ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('Logout'),
@@ -596,7 +932,108 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     );
   }
 
-  Widget _buildMapView(DocumentSnapshot doc, String rideId) {
+  Widget _buildHomePage() {
+    return ref
+        .watch(driverDashboardProvider)
+        .when(
+          loading: () => const Center(
+            child: CircularProgressIndicator(),
+          ).animate().fadeIn(duration: 400.ms),
+          error: (e, _) => Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error, color: Colors.red, size: 48),
+                const SizedBox(height: 16),
+                Text('Error: $e'),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: () => ref.invalidate(driverDashboardProvider),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ).animate().fadeIn(duration: 400.ms),
+          data: (doc) =>
+              doc == null ? _buildIdleHome() : _buildActiveRide(doc, doc.id),
+        );
+  }
+
+  Widget _buildIdleHome() {
+    return Column(
+      children: [
+        if (_isOnline)
+          Expanded(
+            child: _mapError
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.map, color: Colors.red, size: 48),
+                        const SizedBox(height: 16),
+                        Text(
+                          _mapErrorMessage,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  )
+                : GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: _currentPosition != null
+                          ? LatLng(
+                              _currentPosition!.latitude,
+                              _currentPosition!.longitude,
+                            )
+                          : const LatLng(0, 0),
+                      zoom: 14,
+                    ),
+                    markers: {
+                      if (_currentPosition != null)
+                        Marker(
+                          markerId: const MarkerId('driver'),
+                          position: LatLng(
+                            _currentPosition!.latitude,
+                            _currentPosition!.longitude,
+                          ),
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                            BitmapDescriptor.hueRed,
+                          ),
+                        ),
+                    },
+                    myLocationEnabled: true,
+                    myLocationButtonEnabled: true,
+                    onMapCreated: (controller) {
+                      _mapController = controller;
+                      if (_currentPosition != null) {
+                        controller.animateCamera(
+                          CameraUpdate.newLatLng(
+                            LatLng(
+                              _currentPosition!.latitude,
+                              _currentPosition!.longitude,
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+          ),
+        if (!_isOnline)
+          const Expanded(
+            child: Center(
+              child: Text(
+                'Go online to view your location and receive ride requests.',
+              ),
+            ),
+          ),
+        if (ref.watch(driverDashboardProvider).asData?.value == null)
+          const EarningsSummaryWidget(),
+      ],
+    );
+  }
+
+  Widget _buildActiveRide(DocumentSnapshot doc, String rideId) {
     final data = doc.data() as Map<String, dynamic>?;
     if (data == null) {
       return const Center(
@@ -606,61 +1043,71 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
     return Stack(
       children: [
-        GoogleMap(
-          initialCameraPosition: CameraPosition(
-            target: data['pickupLat'] is num && data['pickupLng'] is num
-                ? LatLng(
-                    (data['pickupLat'] as num).toDouble(),
-                    (data['pickupLng'] as num).toDouble(),
-                  )
-                : const LatLng(0, 0),
-            zoom: 14,
-          ),
-          markers: {
-            if (data['pickupLat'] is num && data['pickupLng'] is num)
-              Marker(
-                markerId: const MarkerId('pickup'),
-                position: LatLng(
-                  (data['pickupLat'] as num).toDouble(),
-                  (data['pickupLng'] as num).toDouble(),
+        _mapError
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.map, color: Colors.red, size: 48),
+                    const SizedBox(height: 16),
+                    Text(
+                      _mapErrorMessage,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueAzure,
+              )
+            : GoogleMap(
+                initialCameraPosition: CameraPosition(
+                  target: LatLng(
+                    (data[AppFields.pickupLat] as num).toDouble(),
+                    (data[AppFields.pickupLng] as num).toDouble(),
+                  ),
+                  zoom: 14,
+                ),
+                markers: {
+                  Marker(
+                    markerId: const MarkerId('pickup'),
+                    position: LatLng(
+                      (data[AppFields.pickupLat] as num).toDouble(),
+                      (data[AppFields.pickupLng] as num).toDouble(),
+                    ),
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueAzure,
+                    ),
+                  ),
+                  Marker(
+                    markerId: const MarkerId('dropoff'),
+                    position: LatLng(
+                      (data[AppFields.dropoffLat] as num).toDouble(),
+                      (data[AppFields.dropoffLng] as num).toDouble(),
+                    ),
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueGreen,
+                    ),
+                  ),
+                  if (_currentPosition != null)
+                    Marker(
+                      markerId: const MarkerId('driver'),
+                      position: LatLng(
+                        _currentPosition!.latitude,
+                        _currentPosition!.longitude,
+                      ),
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueRed,
+                      ),
+                    ),
+                },
+                myLocationEnabled: true,
+                myLocationButtonEnabled: true,
+                onMapCreated: (controller) => _mapController = controller,
+                onTap: (_) => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DriverRideDetailsPage(rideId: rideId),
+                  ),
                 ),
               ),
-            if (data['dropoffLat'] is num && data['dropoffLng'] is num)
-              Marker(
-                markerId: const MarkerId('dropoff'),
-                position: LatLng(
-                  (data['dropoffLat'] as num).toDouble(),
-                  (data['dropoffLng'] as num).toDouble(),
-                ),
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueGreen,
-                ),
-              ),
-            if (data['driverLat'] is num && data['driverLng'] is num)
-              Marker(
-                markerId: const MarkerId('driver'),
-                position: LatLng(
-                  (data['driverLat'] as num).toDouble(),
-                  (data['driverLng'] as num).toDouble(),
-                ),
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueRed,
-                ),
-              ),
-          },
-          myLocationEnabled: true,
-          myLocationButtonEnabled: true,
-          onTap: (_) {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => DriverRideDetailsPage(rideId: rideId),
-              ),
-            );
-          },
-        ),
         Positioned(
           bottom: 16,
           left: 16,
@@ -675,16 +1122,16 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Ride: ${data['pickup'] ?? '-'} → ${data['dropoff'] ?? '-'}',
+                          'Ride: ${data[AppFields.pickup] ?? '-'} → ${data[AppFields.dropoff] ?? '-'}',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Fare: \$${data['fare'] is num ? (data['fare'] as num).toStringAsFixed(2) : '--'}',
+                          'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         Text(
-                          'Status: ${data['status']?.toString().toUpperCase() ?? '-'}',
+                          'Status: ${data[AppFields.status]?.toString().toUpperCase() ?? '-'}',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ],

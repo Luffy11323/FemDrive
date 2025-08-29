@@ -15,8 +15,6 @@ import 'driver_dashboard.dart';
 import 'rider_dashboard.dart';
 import 'admin.dart';
 import 'rider/rider_services.dart';
-// ignore: unused_import
-import 'driver/driver_services.dart';
 import 'driver/driver_ride_details_page.dart' as details;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();

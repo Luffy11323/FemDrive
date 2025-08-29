@@ -1,17 +1,20 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
 
 class DirectionsService {
   static const _apiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 
-  static Future<Map<String, dynamic>?> getRoute(LatLng from, LatLng to) async {
+  static Future<Map<String, dynamic>?> getRoute(
+    LatLng from,
+    LatLng to, {
+    required String role,
+  }) async {
     try {
       final url =
           'https://maps.googleapis.com/maps/api/directions/json?origin=${from.latitude},${from.longitude}&destination=${to.latitude},${to.longitude}&key=$_apiKey';
-
       final res = await http.get(Uri.parse(url));
 
       if (res.statusCode != 200) {
@@ -33,10 +36,31 @@ class DirectionsService {
 
       return {'polyline': points, 'eta': duration};
     } catch (e) {
-      if (kDebugMode) {
-        print('DirectionsService: Error fetching route: $e');
+      if (kDebugMode) print('DirectionsService: Error fetching route: $e');
+      return null; // Return null on error to handle gracefully
+    }
+  }
+
+  static Future<double> getDistance(LatLng from, LatLng to) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/directions/json?origin=${from.latitude},${from.longitude}&destination=${to.latitude},${to.longitude}&key=$_apiKey';
+      final res = await http.get(Uri.parse(url));
+
+      if (res.statusCode != 200) {
+        throw Exception('Failed to fetch distance: ${res.statusCode}');
       }
-      throw Exception('Failed to fetch route: $e');
+
+      final data = jsonDecode(res.body);
+      if ((data['routes'] as List).isEmpty) {
+        throw Exception('No routes found');
+      }
+
+      final leg = data['routes'][0]['legs'][0];
+      return (leg['distance']['value'] as int) / 1000.0; // km
+    } catch (e) {
+      if (kDebugMode) print('DirectionsService: Error fetching distance: $e');
+      return 0.0; // Default on error
     }
   }
 }

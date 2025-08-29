@@ -1,27 +1,26 @@
 import 'dart:io';
-import 'package:flutter/material.dart';
+
+import 'package:femdrive/main.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 import 'rider_dashboard_controller.dart';
 // ignore: unused_import
 import 'rider_services.dart';
-import 'package:flutter/foundation.dart';
-
-final GlobalKey<NavigatorState> riderNavigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseRiderBackgroundHandler(RemoteMessage message) async {
   await RiderNotificationService.instance.initialize();
   await RiderNotificationService.instance._show(message);
-  RiderNotificationService.instance._route(message.data);
 }
 
 class RiderNotificationService {
   RiderNotificationService._();
   static final instance = RiderNotificationService._();
-
   final _flutterLocal = FlutterLocalNotificationsPlugin();
+  final _logger = Logger();
 
   Future<void> initialize() async {
     FirebaseMessaging.onBackgroundMessage(_firebaseRiderBackgroundHandler);
@@ -37,15 +36,14 @@ class RiderNotificationService {
       await _flutterLocal.initialize(
         const InitializationSettings(android: androidInit, iOS: iosInit),
         onDidReceiveNotificationResponse: (NotificationResponse response) {
-          _route({'screen': response.payload});
+          _route(response.payload);
         },
       );
     } catch (e) {
-      if (kDebugMode) {
-        print(
-          'NotificationService: Failed to initialize local notifications: $e',
-        );
-      }
+      _logger.e('Failed to initialize local notifications: $e');
+      ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
+        SnackBar(content: Text('Failed to initialize notifications: $e')),
+      );
     }
 
     FirebaseMessaging.onMessage.listen((msg) {
@@ -54,7 +52,7 @@ class RiderNotificationService {
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((msg) {
-      _route(msg.data);
+      _route(msg.data['screen']);
     });
   }
 
@@ -80,9 +78,10 @@ class RiderNotificationService {
         payload: msg.data['screen'],
       );
     } catch (e) {
-      if (kDebugMode) {
-        print('NotificationService: Failed to show notification: $e');
-      }
+      _logger.e('Failed to show notification: $e');
+      ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
+        SnackBar(content: Text('Failed to show notification: $e')),
+      );
     }
   }
 
@@ -94,11 +93,9 @@ class RiderNotificationService {
         ? double.tryParse(msg.data['counterFare'])
         : null;
 
-    final context = riderNavigatorKey.currentContext;
+    final context = navigatorKey.currentContext;
     if (context == null) {
-      if (kDebugMode) {
-        print('NotificationService: No context available for in-app UI');
-      }
+      _logger.w('No context available for in-app UI');
       return;
     }
 
@@ -115,7 +112,7 @@ class RiderNotificationService {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
-          backgroundColor: Colors.blueAccent,
+          backgroundColor: Theme.of(context).colorScheme.primary,
           duration: const Duration(seconds: 3),
         ),
       );
@@ -156,18 +153,11 @@ class RiderNotificationService {
     }
   }
 
-  void _route(Map<String, dynamic>? data) {
-    if (data == null) return;
-    final screen = data['screen'];
-    final rideId = data['rideId'];
-
-    if ((screen == 'ride_status' || screen == 'counter_fare') &&
-        rideId != null) {
-      riderNavigatorKey.currentState?.pushNamed('/dashboard');
+  void _route(String? screen) {
+    if (screen == 'ride_status' || screen == 'counter_fare') {
+      navigatorKey.currentState?.pushNamed('/dashboard');
     } else {
-      if (kDebugMode) {
-        print('NotificationService: Unknown screen route: $screen');
-      }
+      _logger.w('Unknown screen route: $screen');
     }
   }
 
@@ -175,9 +165,7 @@ class RiderNotificationService {
     try {
       return await FirebaseMessaging.instance.getToken();
     } catch (e) {
-      if (kDebugMode) {
-        print('NotificationService: Failed to get FCM token: $e');
-      }
+      _logger.e('Failed to get FCM token: $e');
       return null;
     }
   }
@@ -206,7 +194,13 @@ class CounterFareDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(onPressed: onReject, child: const Text('Reject')),
-        ElevatedButton(onPressed: onAccept, child: const Text('Accept')),
+        ElevatedButton(
+          onPressed: onAccept,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+          child: const Text('Accept'),
+        ),
       ],
     );
   }

@@ -8,8 +8,9 @@ class NearbyDriversService {
 
   Future<List<Map<String, dynamic>>> fetchNearbyDrivers(
     LatLng center,
-    double radiusKm,
-  ) async {
+    double radiusKm, {
+    required String rideType,
+  }) async {
     try {
       final snapshot = await _fire
           .collection('users')

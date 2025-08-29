@@ -1,10 +1,8 @@
-// ignore_for_file: use_build_context_synchronously
-
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:femdrive/driver_dashboard.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -13,15 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dart_geohash/dart_geohash.dart';
-import 'package:http/http.dart' as http;
 import 'package:async/async.dart';
 
 import 'package:femdrive/location/directions_service.dart';
 import 'package:femdrive/emergency_service.dart';
 
-/// ------------------------------
-/// Constants
-/// ------------------------------
 class AppPaths {
   static const driversOnline = 'drivers_online';
   static const ridesPendingA = 'rides_pending';
@@ -30,6 +24,51 @@ class AppPaths {
   static const ratingsCollection = 'ratings';
   static const locationsCollection = 'locations';
   static const driverLocations = 'driverLocations';
+  static const notifications = 'notifications';
+  static const messages = 'messages';
+}
+
+class AppFields {
+  static const uid = 'uid';
+  static const lat = 'lat';
+  static const lng = 'lng';
+  static const geohash = 'geohash';
+  static const updatedAt = 'updatedAt';
+  static const status = 'status';
+  static const fare = 'fare';
+  static const driverId = 'driverId';
+  static const riderId = 'riderId';
+  static const pickup = 'pickup';
+  static const dropoff = 'dropoff';
+  static const pickupLat = 'pickupLat';
+  static const pickupLng = 'pickupLng';
+  static const dropoffLat = 'dropoffLat';
+  static const dropoffLng = 'dropoffLng';
+  static const driverLat = 'driverLat';
+  static const driverLng = 'driverLng';
+  static const riderLat = 'riderLat';
+  static const riderLng = 'riderLng';
+  static const acceptedAt = 'acceptedAt';
+  static const arrivingAt = 'arrivingAt';
+  static const startedAt = 'startedAt';
+  static const completedAt = 'completedAt';
+  static const cancelledAt = 'cancelledAt';
+  static const rating = 'rating';
+  static const comment = 'comment';
+  static const verified = 'verified';
+  static const username = 'username';
+  static const phone = 'phone';
+  static const fcmToken = 'fcmToken';
+  static const senderId = 'senderId';
+  static const text = 'text';
+  static const timestamp = 'timestamp';
+  static const type = 'type';
+  static const emergencyTriggered = 'emergencyTriggered';
+  static const paymentStatus = 'paymentStatus';
+  static const finalFare = 'finalFare';
+  static const rideId = 'rideId'; // Added to resolve the error
+  static const reportedBy = 'reportedBy'; // Added to resolve the error
+  static const otherUid = 'otherUid';
 }
 
 class RideStatus {
@@ -46,9 +85,6 @@ class GeoCfg {
   static const popupProximityPrecision = 5;
 }
 
-/// ------------------------------
-/// Models
-/// ------------------------------
 class PendingRequest {
   final String rideId;
   final String? pickupLabel;
@@ -75,13 +111,13 @@ class PendingRequest {
   factory PendingRequest.fromMap(String id, Map<String, dynamic> map) {
     return PendingRequest(
       rideId: id,
-      pickupLabel: map['pickup']?.toString(),
-      dropoffLabel: map['dropoff']?.toString(),
-      pickupLat: (map['pickupLat'] as num?)?.toDouble() ?? 0,
-      pickupLng: (map['pickupLng'] as num?)?.toDouble() ?? 0,
-      dropoffLat: (map['dropoffLat'] as num?)?.toDouble() ?? 0,
-      dropoffLng: (map['dropoffLng'] as num?)?.toDouble() ?? 0,
-      fare: (map['fare'] as num?),
+      pickupLabel: map[AppFields.pickup]?.toString(),
+      dropoffLabel: map[AppFields.dropoff]?.toString(),
+      pickupLat: (map[AppFields.pickupLat] as num?)?.toDouble() ?? 0,
+      pickupLng: (map[AppFields.pickupLng] as num?)?.toDouble() ?? 0,
+      dropoffLat: (map[AppFields.dropoffLat] as num?)?.toDouble() ?? 0,
+      dropoffLng: (map[AppFields.dropoffLng] as num?)?.toDouble() ?? 0,
+      fare: (map[AppFields.fare] as num?),
       raw: Map<String, dynamic>.from(map),
     );
   }
@@ -90,9 +126,6 @@ class PendingRequest {
   LatLng get dropoffPos => LatLng(dropoffLat, dropoffLng);
 }
 
-/// ------------------------------
-/// Driver Location Service
-/// ------------------------------
 class DriverLocationService {
   StreamSubscription<Position>? _positionSub;
   final _rtdb = FirebaseDatabase.instance.ref();
@@ -134,39 +167,35 @@ class DriverLocationService {
               precision: GeoCfg.driverHashPrecision,
             );
             try {
-              // Update drivers_online for ride request matching
               await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
-                'uid': uid,
-                'lat': pos.latitude,
-                'lng': pos.longitude,
-                'geohash': hash,
-                'updatedAt': ServerValue.timestamp,
+                AppFields.uid: uid,
+                AppFields.lat: pos.latitude,
+                AppFields.lng: pos.longitude,
+                AppFields.geohash: hash,
+                AppFields.updatedAt: ServerValue.timestamp,
               });
 
-              // Update driverLocations for rider dashboard
               await _firestore
                   .collection('users')
                   .doc(uid)
                   .collection(AppPaths.driverLocations)
                   .doc(DateTime.now().toIso8601String())
                   .set({
-                    'latitude': pos.latitude,
-                    'longitude': pos.longitude,
-                    'timestamp': FieldValue.serverTimestamp(),
-                    'status': 'available',
+                    AppFields.lat: pos.latitude,
+                    AppFields.lng: pos.longitude,
+                    AppFields.timestamp: FieldValue.serverTimestamp(),
+                    AppFields.status: 'available',
                   });
 
-              // Update active ride with driver location
               if (_activeRideId != null) {
                 await _firestore
                     .collection(AppPaths.ridesCollection)
                     .doc(_activeRideId)
                     .update({
-                      'driverLat': pos.latitude,
-                      'driverLng': pos.longitude,
+                      AppFields.driverLat: pos.latitude,
+                      AppFields.driverLng: pos.longitude,
                     });
 
-                // Log historical location
                 await _firestore
                     .collection(AppPaths.locationsCollection)
                     .doc(_activeRideId)
@@ -175,9 +204,9 @@ class DriverLocationService {
                     .collection('positions')
                     .doc(DateTime.now().toIso8601String())
                     .set({
-                      'latitude': pos.latitude,
-                      'longitude': pos.longitude,
-                      'timestamp': FieldValue.serverTimestamp(),
+                      AppFields.lat: pos.latitude,
+                      AppFields.lng: pos.longitude,
+                      AppFields.timestamp: FieldValue.serverTimestamp(),
                     });
               }
             } catch (e) {
@@ -211,10 +240,10 @@ class DriverLocationService {
           .collection(AppPaths.driverLocations)
           .doc(DateTime.now().toIso8601String())
           .set({
-            'latitude': 0.0,
-            'longitude': 0.0,
-            'timestamp': FieldValue.serverTimestamp(),
-            'status': 'offline',
+            AppFields.lat: 0.0,
+            AppFields.lng: 0.0,
+            AppFields.timestamp: FieldValue.serverTimestamp(),
+            AppFields.status: 'offline',
           });
     } catch (e) {
       debugPrint('[Location] Remove failed: $e');
@@ -231,9 +260,6 @@ class DriverLocationService {
   }
 }
 
-/// ------------------------------
-/// Core Driver Service
-/// ------------------------------
 class DriverService {
   final _fire = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
@@ -245,8 +271,8 @@ class DriverService {
 
     final q = _fire
         .collection(AppPaths.ridesCollection)
-        .where('driverId', isEqualTo: user.uid)
-        .where('status', whereIn: RideStatus.ongoingSet.toList())
+        .where(AppFields.driverId, isEqualTo: user.uid)
+        .where(AppFields.status, whereIn: RideStatus.ongoingSet.toList())
         .limit(1);
 
     return q.snapshots().map((snap) {
@@ -303,32 +329,32 @@ class DriverService {
     } catch (_) {}
 
     final userDoc = await _fire.collection('users').doc(user.uid).get();
-    final driverName = userDoc.data()?['username'] ?? 'Unknown Driver';
+    final driverName = userDoc.data()?[AppFields.username] ?? 'Unknown Driver';
 
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).set({
-      'driverId': user.uid,
+      AppFields.driverId: user.uid,
       'driverName': driverName,
-      'status': RideStatus.accepted,
-      'acceptedAt': FieldValue.serverTimestamp(),
+      AppFields.status: RideStatus.accepted,
+      AppFields.acceptedAt: FieldValue.serverTimestamp(),
       if (contextData != null) ...{
-        'pickupLat': contextData.pickupLat,
-        'pickupLng': contextData.pickupLng,
-        'dropoffLat': contextData.dropoffLat,
-        'dropoffLng': contextData.dropoffLng,
+        AppFields.pickupLat: contextData.pickupLat,
+        AppFields.pickupLng: contextData.pickupLng,
+        AppFields.dropoffLat: contextData.dropoffLat,
+        AppFields.dropoffLng: contextData.dropoffLng,
       },
     }, SetOptions(merge: true));
 
-    try {
-      final res = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/accept/driver'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'rideId': rideId, 'driverUid': user.uid}),
-      );
-      if (res.statusCode != 200) {
-        debugPrint('[ACCEPT] backend reply: ${res.statusCode} ${res.body}');
-      }
-    } catch (e) {
-      debugPrint('[ACCEPT] notify error: $e');
+    // Notify rider via RTDB
+    final riderId =
+        contextData?.raw[AppFields.riderId] ??
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_accepted',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     }
   }
 
@@ -339,100 +365,141 @@ class DriverService {
     }
 
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      'fare': newFare,
-      'status': 'pending_counter', // Custom status for rider to accept
+      AppFields.fare: newFare,
+      AppFields.status: 'pending_counter',
     });
 
-    try {
-      final res = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'rideId': rideId,
-          'status': 'counter_fare',
-          'counterFare': newFare,
-          'driverUid': user.uid,
-        }),
-      );
-      if (res.statusCode != 200) {
-        debugPrint('[COUNTER] backend reply: ${res.statusCode} ${res.body}');
-      }
-    } catch (e) {
-      debugPrint('[COUNTER] notify error: $e');
+    // Notify rider via RTDB
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'counter_fare',
+        'counterFare': newFare,
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
+    }
+  }
+
+  Future<void> declineRide(String rideId) async {
+    await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+    await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+
+    // Notify rider via RTDB
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_declined',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     }
   }
 
   Future<void> updateRideStatus(String rideId, String newStatus) async {
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      'status': newStatus,
+      AppFields.status: newStatus,
       '${newStatus}At': FieldValue.serverTimestamp(),
     });
 
-    try {
-      final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'rideId': rideId, 'status': newStatus}),
-      );
-      if (response.statusCode != 200) {
-        debugPrint('[FCM] status change failed: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('[FCM] notify error: $e');
+    // Notify rider via RTDB
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'status_update',
+        AppFields.status: newStatus,
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     }
   }
 
   Future<void> cancelRide(String rideId) async {
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      'status': RideStatus.cancelled,
-      'driverId': FieldValue.delete(),
+      AppFields.status: RideStatus.cancelled,
+      AppFields.driverId: FieldValue.delete(),
       'driverName': FieldValue.delete(),
-      'cancelledAt': FieldValue.serverTimestamp(),
+      AppFields.cancelledAt: FieldValue.serverTimestamp(),
     });
 
-    try {
-      final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'rideId': rideId, 'status': RideStatus.cancelled}),
-      );
-      if (response.statusCode != 200) {
-        debugPrint('[FCM] cancel failed: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('[FCM] notify error: $e');
+    // Notify rider via RTDB
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_cancelled',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     }
   }
 
-  Future<void> completeRide(String rideId) async {
+  Future<void> completeRide(String rideId, double finalFare) async {
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      'status': RideStatus.completed,
-      'completedAt': FieldValue.serverTimestamp(),
+      AppFields.status: RideStatus.completed,
+      AppFields.completedAt: FieldValue.serverTimestamp(),
+      AppFields.finalFare: finalFare,
+      AppFields.paymentStatus: 'processed',
     });
 
-    try {
-      final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'rideId': rideId, 'status': RideStatus.completed}),
-      );
-      if (response.statusCode != 200) {
-        debugPrint('[FCM] complete failed: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('[FCM] notify error: $e');
+    // Notify rider via RTDB
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
+    if (riderId != null) {
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_completed',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
+      });
     }
+  }
+
+  Future<void> sendMessage(
+    String rideId,
+    String message,
+    String senderId,
+  ) async {
+    await _rtdb
+        .child('${AppPaths.ridesCollection}/$rideId/${AppPaths.messages}')
+        .push()
+        .set({
+          AppFields.senderId: senderId,
+          AppFields.text: message,
+          AppFields.timestamp: ServerValue.timestamp,
+        });
+  }
+
+  Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
+    return _rtdb
+        .child('${AppPaths.ridesCollection}/$rideId/${AppPaths.messages}')
+        .onValue
+        .map((event) {
+          final v = event.snapshot.value as Map?;
+          if (v == null) return [];
+          return v.entries
+              .map(
+                (e) =>
+                    Map<String, dynamic>.from(e.value as Map)..['id'] = e.key,
+              )
+              .toList();
+        });
   }
 }
 
-/// ------------------------------
-/// Riverpod Providers
-/// ------------------------------
 final driverDashboardProvider =
     StateNotifierProvider<
       DriverDashboardController,
       AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>
     >((ref) => DriverDashboardController(ref));
+final _auth = FirebaseAuth.instance;
 
 class DriverDashboardController
     extends StateNotifier<AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>> {
@@ -469,12 +536,20 @@ class DriverDashboardController
   Future<void> proposeCounterFare(String rideId, double newFare) =>
       _service.proposeCounterFare(rideId, newFare);
 
+  Future<void> declineRide(String rideId) => _service.declineRide(rideId);
+
   Future<void> updateStatus(String rideId, String newStatus) =>
       _service.updateRideStatus(rideId, newStatus);
 
   Future<void> cancelRide(String rideId) => _service.cancelRide(rideId);
 
-  Future<void> completeRide(String rideId) => _service.completeRide(rideId);
+  Future<void> completeRide(String rideId, double finalFare) =>
+      _service.completeRide(rideId, finalFare);
+
+  Future<void> sendMessage(String rideId, String message) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid != null) await _service.sendMessage(rideId, message, uid);
+  }
 }
 
 final pendingRequestsProvider =
@@ -482,9 +557,6 @@ final pendingRequestsProvider =
       return DriverService().listenPendingRequestsMerged();
     });
 
-/// ------------------------------
-/// Shared Widgets (Map + Feedback)
-/// ------------------------------
 class DriverMapWidget extends ConsumerStatefulWidget {
   final Map<String, dynamic> rideData;
   final void Function(GoogleMapController) onMapCreated;
@@ -514,19 +586,22 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   bool _statusBusy = false;
   bool _emergencyBusy = false;
   GoogleMapController? _mapController;
+  Timer? _pickupTimer;
+  bool _timerExpired = false;
 
   @override
   void initState() {
     super.initState();
     _pickup = LatLng(
-      (widget.rideData['pickupLat'] as num).toDouble(),
-      (widget.rideData['pickupLng'] as num).toDouble(),
+      (widget.rideData[AppFields.pickupLat] as num).toDouble(),
+      (widget.rideData[AppFields.pickupLng] as num).toDouble(),
     );
     _dropoff = LatLng(
-      (widget.rideData['dropoffLat'] as num).toDouble(),
-      (widget.rideData['dropoffLng'] as num).toDouble(),
+      (widget.rideData[AppFields.dropoffLat] as num).toDouble(),
+      (widget.rideData[AppFields.dropoffLng] as num).toDouble(),
     );
-    _status = (widget.rideData['status'] as String?) ?? RideStatus.accepted;
+    _status =
+        (widget.rideData[AppFields.status] as String?) ?? RideStatus.accepted;
 
     _markers = {
       Marker(
@@ -559,6 +634,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       final route = await DirectionsService.getRoute(
         start,
         end,
+        role: '',
       ).timeout(const Duration(seconds: 12));
       if (!mounted || route == null) return;
 
@@ -597,13 +673,26 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     }
   }
 
+  void _startPickupTimer() {
+    _pickupTimer = Timer(const Duration(minutes: 5), () {
+      setState(() => _timerExpired = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pickup time expired. Consider cancelling the ride.'),
+        ),
+      );
+    });
+  }
+
   Future<void> _progressStatus() async {
     if (_statusBusy) return;
     String next = _status;
     if (_status == RideStatus.accepted) {
       next = RideStatus.arriving;
+      _startPickupTimer();
     } else if (_status == RideStatus.arriving) {
       next = RideStatus.started;
+      _pickupTimer?.cancel();
     } else if (_status == RideStatus.started) {
       next = RideStatus.completed;
     } else {
@@ -617,10 +706,20 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
           .updateStatus(widget.rideData['rideId'] as String, next);
       _status = next;
       widget.onStatusChange(next);
-      if (next == RideStatus.completed) widget.onComplete();
+      if (next == RideStatus.completed) {
+        final distance = await DirectionsService.getDistance(_pickup, _dropoff);
+        final fares =
+            ref.read(faresConfigProvider).asData?.value ??
+            {'base': 5.0, 'perKm': 1.0};
+        final finalFare = fares['base']! + distance * fares['perKm']!;
+        await ref
+            .read(driverDashboardProvider.notifier)
+            .completeRide(widget.rideData['rideId'] as String, finalFare);
+        widget.onComplete();
+      }
       if (mounted) {
         setState(() {});
-        _fetchRoute(); // Update route for new status
+        _fetchRoute();
       }
     } catch (e) {
       if (mounted) {
@@ -660,7 +759,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     setState(() => _emergencyBusy = true);
     try {
       final currentUid = FirebaseAuth.instance.currentUser!.uid;
-      final otherUid = widget.rideData['riderId'] as String?;
+      final otherUid = widget.rideData[AppFields.riderId] as String?;
       if (otherUid == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -759,8 +858,30 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
                 : const Text('Emergency'),
           ),
         ),
+        if (_timerExpired)
+          Positioned(
+            top: 60,
+            left: 20,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.yellow.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: const Text('Pickup timer expired!'),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  @override
+  void dispose() {
+    _pickupTimer?.cancel();
+    _mapController?.dispose();
+    super.dispose();
   }
 }
 
@@ -832,16 +953,21 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
                         .add({
                           'rideId': widget.rideId,
                           'fromUid': user.uid,
-                          'toUid': widget.rideId, // Rider ID needed
-                          'rating': rating,
-                          'comment': comment.text.trim(),
-                          'createdAt': FieldValue.serverTimestamp(),
+                          'toUid': widget.rideId, // Fix: use riderId
+                          AppFields.rating: rating,
+                          AppFields.comment: comment.text.trim(),
+                          AppFields.timestamp: FieldValue.serverTimestamp(),
                         });
 
+                    // Update rider's average rating
+                    // Logic to calculate average and update user doc
+
                     if (!mounted) return;
+                    // ignore: use_build_context_synchronously
                     Navigator.of(context).pop();
                     widget.onSubmitted();
                     if (mounted) {
+                      // ignore: use_build_context_synchronously
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text('Thank you for your feedback!'),
@@ -850,6 +976,7 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
                     }
                   } catch (e) {
                     if (mounted) {
+                      // ignore: use_build_context_synchronously
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('Failed to submit feedback: $e'),

@@ -1,7 +1,4 @@
-// ignore_for_file: use_build_context_synchronously, deprecated_member_use
-
 import 'dart:convert';
-import 'package:femdrive/location/directions_service.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,13 +7,13 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:femdrive/emergency_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_typeahead/flutter_typeahead.dart';
-import '/rider/nearby_drivers_service.dart';
-import 'package:flutter/foundation.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:logger/logger.dart';
+import '../location/directions_service.dart';
+import 'nearby_drivers_service.dart';
 
-// Securely load API key
 const String googleApiKey = String.fromEnvironment(
   'GOOGLE_API_KEY',
   defaultValue: '',
@@ -24,20 +21,28 @@ const String googleApiKey = String.fromEnvironment(
 
 class MapService {
   final poly = PolylinePoints(apiKey: googleApiKey);
+  final _logger = Logger();
 
   Future<LatLng> currentLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
+        // ignore: deprecated_member_use
         desiredAccuracy: LocationAccuracy.high,
       );
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
-      throw Exception('Failed to get current location: $e');
+      _logger.e('Failed to get current location: $e');
+      throw Exception(
+        'Unable to get current location. Please check permissions.',
+      );
     }
   }
 
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final result = await poly.getRouteBetweenCoordinatesV2(
         request: RoutesApiRequest(
           origin: PointLatLng(start.latitude, start.longitude),
@@ -45,13 +50,13 @@ class MapService {
           travelMode: TravelMode.driving,
         ),
       );
-
       if (result.routes.isEmpty) throw Exception('No route found');
       final route = result.routes.first;
       final points = route.polylinePoints ?? [];
       return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
     } catch (e) {
-      throw Exception('Failed to fetch route: $e');
+      _logger.e('Failed to fetch route: $e');
+      throw Exception('Unable to load route. Please try again.');
     }
   }
 
@@ -60,6 +65,9 @@ class MapService {
     LatLng destination,
   ) async {
     try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/distancematrix/json'
         '?origins=${origin.latitude},${origin.longitude}'
@@ -79,14 +87,20 @@ class MapService {
         'durationMin': durationSeconds / 60,
       };
     } catch (e) {
-      throw Exception('Failed to fetch rate and ETA: $e');
+      _logger.e('Failed to fetch rate and ETA: $e');
+      throw Exception('Unable to calculate fare and ETA. Please try again.');
     }
   }
 }
 
 class PlaceService {
+  final _logger = Logger();
+
   Future<LatLng?> geocodeFromText(String text) async {
     try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final locations = await locationFromAddress(text);
       if (locations.isNotEmpty) {
         final loc = locations.first;
@@ -94,13 +108,17 @@ class PlaceService {
       }
       return null;
     } catch (e) {
-      throw Exception('Failed to geocode address: $e');
+      _logger.e('Failed to geocode address: $e');
+      throw Exception('Invalid address. Please try again.');
     }
   }
 
   Future<List<Map<String, dynamic>>> autoComplete(String input) async {
     if (input.isEmpty) return [];
     try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$googleApiKey',
       );
@@ -111,12 +129,16 @@ class PlaceService {
       }
       return [];
     } catch (e) {
-      throw Exception('Failed to fetch autocomplete suggestions: $e');
+      _logger.e('Failed to fetch autocomplete suggestions: $e');
+      throw Exception('Unable to load address suggestions. Please try again.');
     }
   }
 
   Future<LatLng?> getLatLngFromPlaceId(String placeId) async {
     try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&key=$googleApiKey',
       );
@@ -128,7 +150,8 @@ class PlaceService {
       }
       return null;
     } catch (e) {
-      throw Exception('Failed to fetch place details: $e');
+      _logger.e('Failed to fetch place details: $e');
+      throw Exception('Unable to load place details. Please try again.');
     }
   }
 }
@@ -136,6 +159,7 @@ class PlaceService {
 class RideService {
   final _fire = FirebaseFirestore.instance;
   final _rtdb = FirebaseDatabase.instance;
+  final _logger = Logger();
 
   String? _lastUid;
   String? get userId {
@@ -144,18 +168,13 @@ class RideService {
     return current ?? _lastUid;
   }
 
-  Stream<DocumentSnapshot?> listenActiveRide() {
+  Stream<Map<String, dynamic>?> listenActiveRide() {
     final uid = userId;
     if (uid == null) return const Stream.empty();
-
-    return _fire
-        .collection('rides')
-        .where('riderId', isEqualTo: uid)
-        .where('status', whereIn: ['pending', 'accepted', 'in_progress'])
-        .orderBy('createdAt', descending: false)
-        .limit(1)
-        .snapshots()
-        .map((s) => s.docs.isNotEmpty ? s.docs.first : null);
+    return _rtdb.ref('rides').child(uid).onValue.map((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      return data != null ? Map<String, dynamic>.from(data) : null;
+    });
   }
 
   Future<void> requestRide(Map<String, dynamic> data) async {
@@ -163,46 +182,24 @@ class RideService {
     if (uid == null) throw Exception('User not logged in');
 
     try {
-      final doc = await _fire.collection('rides').add({
+      final rideId = _rtdb.ref('rides').push().key!;
+      await _rtdb.ref('rides/$rideId').set({
         ...data,
         'riderId': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      final rideId = doc.id;
-
-      await _rtdb.ref('rides_pending/$rideId').set({
-        'pickup': data['pickup'],
-        'dropoff': data['dropoff'],
-        'pickupLat': data['pickupLat'],
-        'pickupLng': data['pickupLng'],
-        'dropoffLat': data['dropoffLat'],
-        'dropoffLng': data['dropoffLng'],
-        'fare': data['fare'],
-        'rideType': data['rideType'],
-        'note': data['note'] ?? '',
-        'riderId': uid,
         'rideId': rideId,
+        'status': 'pending',
         'createdAt': ServerValue.timestamp,
       });
-
-      try {
-        await http.post(
-          Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'riderId': uid,
-            'status': 'pending',
-            'rideId': rideId,
-          }),
-        );
-      } catch (e) {
-        if (kDebugMode) {
-          print('Failed to send notification: $e');
-        }
-        // Continue flow despite notification failure
-      }
+      await _fire.collection('rides').doc(rideId).set({
+        ...data,
+        'riderId': uid,
+        'rideId': rideId,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     } catch (e) {
-      throw Exception('Failed to request ride: $e');
+      _logger.e('Failed to request ride: $e');
+      throw Exception('Unable to request ride. Please try again.');
     }
   }
 
@@ -211,31 +208,17 @@ class RideService {
     if (uid == null) throw Exception('User not logged in');
 
     try {
+      await _rtdb.ref('rides/$id').update({
+        'status': 'cancelled',
+        'cancelledAt': ServerValue.timestamp,
+      });
       await _fire.collection('rides').doc(id).update({
         'status': 'cancelled',
         'cancelledAt': FieldValue.serverTimestamp(),
       });
-
-      await _rtdb.ref('rides_pending/$id').remove();
-
-      try {
-        await http.post(
-          Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'riderId': uid,
-            'status': 'cancelled',
-            'rideId': id,
-          }),
-        );
-      } catch (e) {
-        if (kDebugMode) {
-          print('Failed to send cancellation notification: $e');
-        }
-        // Continue flow despite notification failure
-      }
     } catch (e) {
-      throw Exception('Failed to cancel ride: $e');
+      _logger.e('Failed to cancel ride: $e');
+      throw Exception('Unable to cancel ride. Please try again.');
     }
   }
 
@@ -244,37 +227,25 @@ class RideService {
     if (uid == null) throw Exception('User not logged in');
 
     try {
+      await _rtdb.ref('rides/$rideId').update({
+        'fare': counterFare,
+        'status': 'accepted',
+        'acceptedAt': ServerValue.timestamp,
+      });
       await _fire.collection('rides').doc(rideId).update({
         'fare': counterFare,
         'status': 'accepted',
         'acceptedAt': FieldValue.serverTimestamp(),
       });
-
-      try {
-        await http.post(
-          Uri.parse('https://fem-drive.vercel.app/api/notify/status'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'riderId': uid,
-            'status': 'accepted',
-            'rideId': rideId,
-          }),
-        );
-      } catch (e) {
-        if (kDebugMode) {
-          print('Failed to send counter-fare notification: $e');
-        }
-        // Continue flow despite notification failure
-      }
     } catch (e) {
-      throw Exception('Failed to accept counter-fare: $e');
+      _logger.e('Failed to accept counter-fare: $e');
+      throw Exception('Unable to accept counter-fare. Please try again.');
     }
   }
 
   Stream<QuerySnapshot> pastRides() {
     final uid = userId;
     if (uid == null) return const Stream.empty();
-
     return _fire
         .collection('rides')
         .where('riderId', isEqualTo: uid)
@@ -282,10 +253,42 @@ class RideService {
         .orderBy('createdAt', descending: true)
         .snapshots();
   }
+
+  Stream<List<Map<String, dynamic>>> messages(String rideId) {
+    return _rtdb.ref('messages/$rideId').onValue.map((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (data == null) return [];
+      return data.entries.map((e) {
+        final msg = e.value as Map<dynamic, dynamic>;
+        return {
+          'id': e.key,
+          'senderId': msg['senderId'],
+          'message': msg['message'],
+          'timestamp': msg['timestamp'],
+        };
+      }).toList();
+    });
+  }
+
+  Future<void> sendMessage(String rideId, String message) async {
+    final uid = userId;
+    if (uid == null) throw Exception('User not logged in');
+    try {
+      await _rtdb.ref('messages/$rideId').push().set({
+        'senderId': uid,
+        'message': message,
+        'timestamp': ServerValue.timestamp,
+      });
+    } catch (e) {
+      _logger.e('Failed to send message: $e');
+      throw Exception('Unable to send message. Please try again.');
+    }
+  }
 }
 
 class UserService {
   final _fire = FirebaseFirestore.instance;
+  final _logger = Logger();
 
   String? _lastUid;
   String? get uid {
@@ -303,12 +306,21 @@ class UserService {
   Future<void> updateProfile(Map<String, dynamic> data) async {
     final uid = this.uid;
     if (uid == null) throw Exception('No UID available');
-    await _fire.collection('users').doc(uid).set(data, SetOptions(merge: true));
+    try {
+      await _fire
+          .collection('users')
+          .doc(uid)
+          .set(data, SetOptions(merge: true));
+    } catch (e) {
+      _logger.e('Failed to update profile: $e');
+      throw Exception('Unable to update profile. Please try again.');
+    }
   }
 }
 
 class RatingService {
   final _fire = FirebaseFirestore.instance;
+  final _logger = Logger();
 
   Future<bool> hasAlreadyRated(String rideId, String fromUid) async {
     try {
@@ -320,9 +332,7 @@ class RatingService {
           .get();
       return q.docs.isNotEmpty;
     } catch (e) {
-      if (kDebugMode) {
-        print('Failed to check rating: $e');
-      }
+      _logger.e('Failed to check rating: $e');
       return false;
     }
   }
@@ -344,14 +354,14 @@ class RatingService {
         'createdAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      throw Exception('Failed to submit rating: $e');
+      _logger.e('Failed to submit rating: $e');
+      throw Exception('Unable to submit rating. Please try again.');
     }
   }
 }
 
 class PastRidesPage extends StatefulWidget {
   const PastRidesPage({super.key});
-
   @override
   State<PastRidesPage> createState() => _PastRidesPageState();
 }
@@ -367,7 +377,6 @@ class _PastRidesPageState extends State<PastRidesPage> {
   @override
   Widget build(BuildContext context) {
     final currentUid = uid;
-
     if (currentUid == null) {
       return const Scaffold(body: Center(child: Text('No user logged in.')));
     }
@@ -381,7 +390,12 @@ class _PastRidesPageState extends State<PastRidesPage> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text('Error: ${snap.error}'));
+            return Center(
+              child: Text(
+                'Error: ${snap.error}',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            );
           }
           if (!snap.hasData || snap.data!.docs.isEmpty) {
             return const Center(child: Text('No past rides found.'));
@@ -416,6 +430,7 @@ class _PastRidesPageState extends State<PastRidesPage> {
                       ),
                       Text('Type: $rideType'),
                       if (note.isNotEmpty) Text('Note: $note'),
+                      Text('Base Fare: \$${fare.toStringAsFixed(2)}'),
                     ],
                   ),
                   trailing: Text('\$${fare.toStringAsFixed(2)}'),
@@ -432,7 +447,6 @@ class _PastRidesPageState extends State<PastRidesPage> {
 class RatingDialog extends StatefulWidget {
   final Function(int rating, String comment) onSubmit;
   const RatingDialog({required this.onSubmit, super.key});
-
   @override
   State<RatingDialog> createState() => _RatingDialogState();
 }
@@ -482,6 +496,7 @@ class _RatingDialogState extends State<RatingDialog> {
           onPressed: rating > 0
               ? () {
                   widget.onSubmit(rating, commentCtrl.text.trim());
+                  Navigator.pop(context);
                 }
               : null,
           child: const Text('Submit'),
@@ -491,29 +506,34 @@ class _RatingDialogState extends State<RatingDialog> {
   }
 }
 
-class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+class RiderProfilePage extends StatefulWidget {
+  const RiderProfilePage({super.key});
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  State<RiderProfilePage> createState() => _RiderProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
+class _RiderProfilePageState extends State<RiderProfilePage> {
   final us = UserService();
   final _displayNameController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _homeAddressController = TextEditingController();
+  final _workAddressController = TextEditingController();
   bool loading = false;
   String? errorMessage;
+  final _logger = Logger();
 
   @override
   void dispose() {
     _displayNameController.dispose();
     _phoneController.dispose();
+    _homeAddressController.dispose();
+    _workAddressController.dispose();
     super.dispose();
   }
 
   void _saveProfile() async {
     if (_displayNameController.text.isEmpty || _phoneController.text.isEmpty) {
-      setState(() => errorMessage = 'Please complete all fields');
+      setState(() => errorMessage = 'Please complete required fields');
       return;
     }
 
@@ -525,6 +545,8 @@ class _ProfilePageState extends State<ProfilePage> {
       await us.updateProfile({
         'username': _displayNameController.text.trim(),
         'phone': _phoneController.text.trim(),
+        'homeAddress': _homeAddressController.text.trim(),
+        'workAddress': _workAddressController.text.trim(),
       });
       if (mounted) {
         ScaffoldMessenger.of(
@@ -533,6 +555,7 @@ class _ProfilePageState extends State<ProfilePage> {
       }
     } catch (e) {
       setState(() => errorMessage = 'Error: $e');
+      _logger.e('Profile update failed: $e');
     } finally {
       setState(() => loading = false);
     }
@@ -548,6 +571,7 @@ class _ProfilePageState extends State<ProfilePage> {
         );
       }
     } catch (e) {
+      _logger.e('Logout failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -570,7 +594,7 @@ class _ProfilePageState extends State<ProfilePage> {
             return Center(
               child: Text(
                 'Error: ${snap.error}',
-                style: const TextStyle(color: Colors.red),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             );
           }
@@ -578,6 +602,8 @@ class _ProfilePageState extends State<ProfilePage> {
           final doc = snap.data!;
           _displayNameController.text = doc['username'] ?? '';
           _phoneController.text = doc['phone'] ?? '';
+          _homeAddressController.text = doc['homeAddress'] ?? '';
+          _workAddressController.text = doc['workAddress'] ?? '';
           final role = doc['role'] as String;
           final verified =
               (doc.data() as Map<String, dynamic>?)?.containsKey(
@@ -602,6 +628,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   decoration: InputDecoration(
                     labelText: 'Username',
                     errorText: errorMessage,
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -610,8 +637,59 @@ class _ProfilePageState extends State<ProfilePage> {
                   decoration: InputDecoration(
                     labelText: 'Phone',
                     errorText: errorMessage,
+                    border: const OutlineInputBorder(),
                   ),
                   keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 12),
+                TypeAheadField<String>(
+                  builder: (context, controller, focusNode) {
+                    return TextField(
+                      controller: _homeAddressController,
+                      focusNode: focusNode,
+                      decoration: const InputDecoration(
+                        labelText: 'Home Address (optional)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.home),
+                      ),
+                    );
+                  },
+                  suggestionsCallback: (pattern) async => await PlaceService()
+                      .autoComplete(pattern)
+                      .then(
+                        (suggestions) => suggestions
+                            .map((s) => s['description'] as String)
+                            .toList(),
+                      ),
+                  itemBuilder: (context, suggestion) =>
+                      ListTile(title: Text(suggestion)),
+                  onSelected: (suggestion) =>
+                      _homeAddressController.text = suggestion,
+                ),
+                const SizedBox(height: 12),
+                TypeAheadField<String>(
+                  builder: (context, controller, focusNode) {
+                    return TextField(
+                      controller: _workAddressController,
+                      focusNode: focusNode,
+                      decoration: const InputDecoration(
+                        labelText: 'Work Address (optional)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.work),
+                      ),
+                    );
+                  },
+                  suggestionsCallback: (pattern) async => await PlaceService()
+                      .autoComplete(pattern)
+                      .then(
+                        (suggestions) => suggestions
+                            .map((s) => s['description'] as String)
+                            .toList(),
+                      ),
+                  itemBuilder: (context, suggestion) =>
+                      ListTile(title: Text(suggestion)),
+                  onSelected: (suggestion) =>
+                      _workAddressController.text = suggestion,
                 ),
                 const SizedBox(height: 20),
                 ListTile(
@@ -647,7 +725,9 @@ class _ProfilePageState extends State<ProfilePage> {
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Text(
                       errorMessage!,
-                      style: const TextStyle(color: Colors.red),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
                   ),
                 loading
@@ -661,7 +741,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   icon: const Icon(Icons.logout),
                   label: const Text('Logout'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
+                    backgroundColor: Theme.of(context).colorScheme.error,
                   ),
                   onPressed: _logout,
                 ),
@@ -675,11 +755,9 @@ class _ProfilePageState extends State<ProfilePage> {
 }
 
 class RideStatusCard extends StatefulWidget {
-  final DocumentSnapshot ride;
+  final Map<String, dynamic> ride;
   final VoidCallback onCancel;
-
   const RideStatusCard({required this.ride, required this.onCancel, super.key});
-
   @override
   State<RideStatusCard> createState() => _RideStatusCardState();
 }
@@ -694,6 +772,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
   String? _eta;
   LatLng? _currentLocation;
   String? errorMessage;
+  final _logger = Logger();
 
   String? _lastUid;
   String? get currentUid {
@@ -705,7 +784,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
   @override
   void initState() {
     super.initState();
-    data = widget.ride.data() as Map<String, dynamic>;
+    final data = widget.ride;
     pickup = LatLng(data['pickupLat'], data['pickupLng']);
     dropoff = LatLng(data['dropoffLat'], data['dropoffLng']);
     _markers = {
@@ -714,28 +793,31 @@ class _RideStatusCardState extends State<RideStatusCard> {
     };
     _fetchRoute();
     _updateCurrentLocation();
+    _listenDriverLocation();
   }
 
   Future<void> _fetchRoute() async {
     try {
       final current = await MapService().currentLocation();
-      final routeData = await DirectionsService.getRoute(current, dropoff);
+      final routeData = await DirectionsService.getRoute(
+        current,
+        dropoff,
+        role: 'rider',
+      );
       if (routeData != null && mounted) {
         setState(() {
           _eta = routeData['eta'];
           _polyline = Polyline(
             polylineId: const PolylineId('route'),
-            color: Colors.blue,
+            color: Theme.of(context).colorScheme.primary,
             width: 5,
             points: routeData['polyline'],
           );
         });
       }
     } catch (e) {
-      setState(() => errorMessage = 'Failed to load route: $e');
-      if (kDebugMode) {
-        print('RideStatusCard: $errorMessage');
-      }
+      setState(() => errorMessage = e.toString());
+      _logger.e('RideStatusCard: $errorMessage');
     }
   }
 
@@ -759,10 +841,8 @@ class _RideStatusCardState extends State<RideStatusCard> {
         _mapController?.animateCamera(CameraUpdate.newLatLng(current));
       }
     } catch (e) {
-      setState(() => errorMessage = 'Failed to get current location: $e');
-      if (kDebugMode) {
-        print('RideStatusCard: $errorMessage');
-      }
+      setState(() => errorMessage = e.toString());
+      _logger.e('RideStatusCard: $errorMessage');
     }
   }
 
@@ -772,11 +852,55 @@ class _RideStatusCardState extends State<RideStatusCard> {
       position: position,
       icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
     );
-
     setState(() {
       _markers.removeWhere((m) => m.markerId.value == 'driver');
       _markers.add(driverMarker);
     });
+  }
+
+  void _listenDriverLocation() {
+    final rideId = widget.ride['id'];
+    FirebaseDatabase.instance
+        .ref('rides/$rideId')
+        .onValue
+        .listen(
+          (event) {
+            final data = event.snapshot.value as Map<dynamic, dynamic>?;
+            if (data != null &&
+                data['driverLat'] != null &&
+                data['driverLng'] != null) {
+              final driverPos = LatLng(
+                data['driverLat'] as double,
+                data['driverLng'] as double,
+              );
+              _updateDriverMarker(driverPos);
+            }
+          },
+          onError: (e) {
+            _logger.e('Failed to listen to driver location: $e');
+            setState(
+              () => errorMessage = 'Unable to track driver location: $e',
+            );
+          },
+        );
+  }
+
+  Future<void> _shareTrip() async {
+    try {
+      final pickupText = data['pickup'] ?? 'N/A';
+      final dropoffText = data['dropoff'] ?? 'N/A';
+      final driver = data['driverName'] ?? 'Not Assigned';
+      final shareText =
+          'I’m on a FemDrive trip from $pickupText to $dropoffText with driver $driver. Track my ride!';
+      // ignore: deprecated_member_use
+      await Share.share(shareText);
+    } catch (e) {
+      _logger.e('Failed to share trip: $e');
+      ScaffoldMessenger.of(
+        // ignore: use_build_context_synchronously
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to share trip: $e')));
+    }
   }
 
   @override
@@ -786,7 +910,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
     final pickupText = data['pickup'] ?? 'N/A';
     final dropoffText = data['dropoff'] ?? 'N/A';
     final fare = data['fare']?.toStringAsFixed(2) ?? '--';
-    final rideId = widget.ride.id;
+    final rideId = widget.ride['id'];
     final rideType = data['rideType'] ?? 'Unknown';
     final note = data['note'] ?? '';
 
@@ -817,48 +941,31 @@ class _RideStatusCardState extends State<RideStatusCard> {
             padding: const EdgeInsets.all(8.0),
             child: Text(
               errorMessage!,
-              style: const TextStyle(color: Colors.red, fontSize: 14),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 14,
+              ),
             ),
           ),
         SizedBox(
           height: 300,
-          child: StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('rides')
-                .doc(rideId)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.hasData && snapshot.data!.exists) {
-                final liveData = snapshot.data!.data() as Map<String, dynamic>;
-                if (liveData['driverLat'] != null &&
-                    liveData['driverLng'] != null) {
-                  final driverPos = LatLng(
-                    liveData['driverLat'],
-                    liveData['driverLng'],
-                  );
-                  _updateDriverMarker(driverPos);
-                }
+          child: GoogleMap(
+            markers: _markers,
+            polylines: _polyline == null ? {} : {_polyline!},
+            initialCameraPosition: CameraPosition(
+              target: _currentLocation ?? pickup,
+              zoom: 15,
+            ),
+            onMapCreated: (controller) {
+              _mapController = controller;
+              if (_currentLocation != null) {
+                controller.animateCamera(
+                  CameraUpdate.newLatLng(_currentLocation!),
+                );
               }
-
-              return GoogleMap(
-                markers: _markers,
-                polylines: _polyline == null ? {} : {_polyline!},
-                initialCameraPosition: CameraPosition(
-                  target: _currentLocation ?? pickup,
-                  zoom: 15,
-                ),
-                onMapCreated: (controller) {
-                  _mapController = controller;
-                  if (_currentLocation != null) {
-                    controller.animateCamera(
-                      CameraUpdate.newLatLng(_currentLocation!),
-                    );
-                  }
-                },
-                myLocationEnabled: true,
-                myLocationButtonEnabled: true,
-              );
             },
+            myLocationEnabled: true,
+            myLocationButtonEnabled: true,
           ),
         ),
         if (_eta != null)
@@ -874,6 +981,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
               ? null
               : (status == 'accepted' ? 0.5 : 1.0),
           color: statusColor,
+          // ignore: deprecated_member_use
           backgroundColor: statusColor.withOpacity(0.2),
         ),
         Card(
@@ -884,7 +992,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "$pickupText → $dropoffText",
+                  '$pickupText → $dropoffText',
                   style: Theme.of(
                     context,
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
@@ -895,71 +1003,105 @@ class _RideStatusCardState extends State<RideStatusCard> {
                     Icon(Icons.directions_car, color: statusColor),
                     const SizedBox(width: 8),
                     Text(
-                      "Status: $statusText",
+                      'Status: $statusText',
                       style: TextStyle(color: statusColor, fontSize: 16),
                     ),
                   ],
                 ),
-                Text("Fare: \$$fare"),
-                Text("Driver: $driver"),
-                Text("Ride Type: $rideType"),
-                if (note.isNotEmpty) Text("Note: $note"),
+                Text('Fare: \$$fare'),
+                Text('Driver: $driver'),
+                Text('Ride Type: $rideType'),
+                if (note.isNotEmpty) Text('Note: $note'),
                 const SizedBox(height: 12),
-                if (status == 'accepted' || status == 'in_progress')
+                if (status == 'accepted' || status == 'in_progress') ...[
+                  StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: RideService().messages(rideId),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return Text(
+                          'Error loading messages: ${snapshot.error}',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        );
+                      }
+                      if (!snapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      final messages = snapshot.data!;
+                      return Column(
+                        children: [
+                          SizedBox(
+                            height: 100,
+                            child: ListView.builder(
+                              itemCount: messages.length,
+                              itemBuilder: (context, index) {
+                                final msg = messages[index];
+                                final isMe = msg['senderId'] == currentUid;
+                                return ListTile(
+                                  title: Text(msg['message']),
+                                  subtitle: Text(
+                                    DateTime.fromMillisecondsSinceEpoch(
+                                      msg['timestamp'],
+                                    ).toLocal().toString(),
+                                  ),
+                                  trailing: Text(isMe ? 'You' : 'Driver'),
+                                );
+                              },
+                            ),
+                          ),
+                          TextField(
+                            decoration: const InputDecoration(
+                              labelText: 'Send a message',
+                              border: OutlineInputBorder(),
+                            ),
+                            onSubmitted: (value) async {
+                              if (value.isNotEmpty) {
+                                try {
+                                  await RideService().sendMessage(
+                                    rideId,
+                                    value,
+                                  );
+                                } catch (e) {
+                                  // ignore: use_build_context_synchronously
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Failed to send message: $e',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.redAccent,
+                          backgroundColor: Theme.of(context).colorScheme.error,
                         ),
                         onPressed: () async {
-                          final uid = currentUid;
-                          if (uid == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('User not available'),
+                          // Placeholder for emergency_service.dart integration
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Emergency reported (pending implementation)',
                               ),
-                            );
-                            return;
-                          }
-
-                          final isDriver = data['driverId'] == uid;
-                          final otherUid = isDriver
-                              ? data['riderId']
-                              : data['driverId'];
-
-                          if (otherUid == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Unable to determine other user'),
-                              ),
-                            );
-                            return;
-                          }
-
-                          try {
-                            await EmergencyService.sendEmergency(
-                              rideId: rideId,
-                              currentUid: uid,
-                              otherUid: otherUid,
-                            );
-                            if (mounted) {
-                              Navigator.pushNamedAndRemoveUntil(
-                                context,
-                                '/dashboard',
-                                (route) => false,
-                              );
-                            }
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Emergency failed: $e')),
-                              );
-                            }
-                          }
+                            ),
+                          );
                         },
                         child: const Text('Emergency'),
+                      ),
+                      ElevatedButton(
+                        onPressed: _shareTrip,
+                        child: const Text('Share Trip'),
                       ),
                       if (status == 'accepted')
                         IconButton(
@@ -969,6 +1111,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
                         ),
                     ],
                   ),
+                ],
               ],
             ),
           ),
@@ -981,9 +1124,7 @@ class _RideStatusCardState extends State<RideStatusCard> {
 class RideForm extends StatefulWidget {
   final void Function(String, String, double, LatLng, LatLng, String, String)
   onSubmit;
-
   const RideForm({required this.onSubmit, super.key});
-
   @override
   State<RideForm> createState() => _RideFormState();
 }
@@ -994,6 +1135,7 @@ class _RideFormState extends State<RideForm>
   final dc = TextEditingController();
   final noteCtrl = TextEditingController();
   String selectedCar = 'Standard';
+  String? selectedPaymentMethod;
   double? fare;
   String? eta;
   LatLng? pcLL, dcLL;
@@ -1005,7 +1147,7 @@ class _RideFormState extends State<RideForm>
   final Set<Circle> _circles = {};
   Polyline? _polyline;
   String? activeRideId;
-
+  final _logger = Logger();
   String? _lastUid;
   final ps = PlaceService();
   final ms = MapService();
@@ -1058,10 +1200,8 @@ class _RideFormState extends State<RideForm>
         });
       }
     } catch (e) {
-      setState(() => errorMessage = 'Failed to set current location: $e');
-      if (kDebugMode) {
-        print('RideForm: $errorMessage');
-      }
+      setState(() => errorMessage = e.toString());
+      _logger.e('RideForm: $errorMessage');
     }
   }
 
@@ -1097,7 +1237,7 @@ class _RideFormState extends State<RideForm>
       setState(() {
         _polyline = Polyline(
           polylineId: const PolylineId('route'),
-          color: Colors.blue,
+          color: Theme.of(context).colorScheme.primary,
           width: 5,
           points: route,
         );
@@ -1128,10 +1268,8 @@ class _RideFormState extends State<RideForm>
         );
       });
     } catch (e) {
-      setState(() => errorMessage = 'Failed to calculate fare/route: $e');
-      if (kDebugMode) {
-        print('RideForm: $errorMessage');
-      }
+      setState(() => errorMessage = e.toString());
+      _logger.e('RideForm: $errorMessage');
     } finally {
       setState(() => loading = false);
     }
@@ -1148,7 +1286,11 @@ class _RideFormState extends State<RideForm>
       errorMessage = null;
     });
     try {
-      final drivers = await nds.fetchNearbyDrivers(pcLL!, 5.0); // 5km radius
+      final drivers = await nds.fetchNearbyDrivers(
+        pcLL!,
+        5.0,
+        rideType: selectedCar,
+      );
       setState(() {
         _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));
         _circles.clear();
@@ -1170,17 +1312,16 @@ class _RideFormState extends State<RideForm>
             circleId: const CircleId('radar'),
             center: pcLL!,
             radius: 5000,
-            fillColor: Colors.blue.withOpacity(0.1),
-            strokeColor: Colors.blue,
+            // ignore: deprecated_member_use
+            fillColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+            strokeColor: Theme.of(context).colorScheme.primary,
             strokeWidth: 1,
           ),
         );
       });
     } catch (e) {
-      setState(() => errorMessage = 'Failed to find nearby drivers: $e');
-      if (kDebugMode) {
-        print('RideForm: $errorMessage');
-      }
+      setState(() => errorMessage = e.toString());
+      _logger.e('RideForm: $errorMessage');
     } finally {
       setState(() => searchingDrivers = false);
     }
@@ -1204,7 +1345,6 @@ class _RideFormState extends State<RideForm>
   }
 
   @override
-  @override
   Widget build(BuildContext context) {
     final currentUid = uid;
     return Column(
@@ -1214,7 +1354,10 @@ class _RideFormState extends State<RideForm>
             padding: const EdgeInsets.all(8.0),
             child: Text(
               errorMessage!,
-              style: const TextStyle(color: Colors.red, fontSize: 14),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 14,
+              ),
             ),
           ),
         SizedBox(
@@ -1237,9 +1380,9 @@ class _RideFormState extends State<RideForm>
                       circleId: const CircleId('radar_pulse'),
                       center: pcLL ?? const LatLng(0, 0),
                       radius: 5000 * _radarAnimation!.value,
-                      fillColor: Colors.blue.withOpacity(
-                        0.3 * (1 - _radarAnimation!.value),
-                      ),
+                      fillColor: Theme.of(context).colorScheme.primary
+                          // ignore: deprecated_member_use
+                          .withOpacity(0.3 * (1 - _radarAnimation!.value)),
                       strokeColor: Colors.transparent,
                     ),
                 },
@@ -1268,24 +1411,21 @@ class _RideFormState extends State<RideForm>
                   },
                   suggestionsCallback: (pattern) async {
                     try {
-                      final suggestions = await ps.autoComplete(pattern);
-                      return suggestions
-                          .map((s) => s['description'] as String)
-                          .toList();
+                      return await ps
+                          .autoComplete(pattern)
+                          .then(
+                            (suggestions) => suggestions
+                                .map((s) => s['description'] as String)
+                                .toList(),
+                          );
                     } catch (e) {
-                      setState(
-                        () => errorMessage =
-                            'Failed to load pickup suggestions: $e',
-                      );
+                      setState(() => errorMessage = e.toString());
                       return [];
                     }
                   },
-                  itemBuilder: (context, suggestion) {
-                    return ListTile(title: Text(suggestion));
-                  },
-                  onSelected: (suggestion) {
-                    pc.text = suggestion;
-                  },
+                  itemBuilder: (context, suggestion) =>
+                      ListTile(title: Text(suggestion)),
+                  onSelected: (suggestion) => pc.text = suggestion,
                 ),
                 const SizedBox(height: 12),
                 TypeAheadField<String>(
@@ -1302,28 +1442,25 @@ class _RideFormState extends State<RideForm>
                   },
                   suggestionsCallback: (pattern) async {
                     try {
-                      final suggestions = await ps.autoComplete(pattern);
-                      return suggestions
-                          .map((s) => s['description'] as String)
-                          .toList();
+                      return await ps
+                          .autoComplete(pattern)
+                          .then(
+                            (suggestions) => suggestions
+                                .map((s) => s['description'] as String)
+                                .toList(),
+                          );
                     } catch (e) {
-                      setState(
-                        () => errorMessage =
-                            'Failed to load drop-off suggestions: $e',
-                      );
+                      setState(() => errorMessage = e.toString());
                       return [];
                     }
                   },
-                  itemBuilder: (context, suggestion) {
-                    return ListTile(title: Text(suggestion));
-                  },
-                  onSelected: (suggestion) {
-                    dc.text = suggestion;
-                  },
+                  itemBuilder: (context, suggestion) =>
+                      ListTile(title: Text(suggestion)),
+                  onSelected: (suggestion) => dc.text = suggestion,
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: selectedCar,
+                  initialValue: selectedCar,
                   decoration: const InputDecoration(
                     labelText: 'Ride Type',
                     border: OutlineInputBorder(),
@@ -1337,6 +1474,23 @@ class _RideFormState extends State<RideForm>
                     DropdownMenuItem(value: 'Luxury', child: Text('Luxury')),
                   ],
                   onChanged: (v) => setState(() => selectedCar = v!),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedPaymentMethod,
+                  decoration: const InputDecoration(
+                    labelText: 'Payment Method',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'Credit Card',
+                      child: Text('Credit Card'),
+                    ),
+                    DropdownMenuItem(value: 'Wallet', child: Text('Wallet')),
+                    DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                  ],
+                  onChanged: (v) => setState(() => selectedPaymentMethod = v),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -1380,7 +1534,9 @@ class _RideFormState extends State<RideForm>
                               onPressed: _searchNearbyDrivers,
                               style: ElevatedButton.styleFrom(
                                 minimumSize: const Size(double.infinity, 48),
-                                backgroundColor: Colors.blueAccent,
+                                backgroundColor: Theme.of(
+                                  context,
+                                ).colorScheme.secondary,
                               ),
                               child: Text(
                                 searchingDrivers
@@ -1397,7 +1553,8 @@ class _RideFormState extends State<RideForm>
                       (fare != null &&
                           pcLL != null &&
                           dcLL != null &&
-                          currentUid != null)
+                          currentUid != null &&
+                          selectedPaymentMethod != null)
                       ? () async {
                           try {
                             widget.onSubmit(
@@ -1421,18 +1578,14 @@ class _RideFormState extends State<RideForm>
                               );
                             }
                           } catch (e) {
-                            setState(
-                              () => errorMessage = 'Error requesting ride: $e',
-                            );
-                            if (kDebugMode) {
-                              print('RideForm: $errorMessage');
-                            }
+                            setState(() => errorMessage = e.toString());
+                            _logger.e('RideForm: $errorMessage');
                           }
                         }
                       : null,
                   style: ElevatedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 48),
-                    backgroundColor: Colors.green,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
                   ),
                   child: const Text('Request Ride'),
                 ),
