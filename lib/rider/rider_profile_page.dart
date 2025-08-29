@@ -6,13 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import '../theme.dart';
 
-final riderProfileProvider = StreamProvider<DocumentSnapshot<Object?>?>((ref) {
+final riderProfileProvider = StreamProvider<Map<String, dynamic>?>((ref) {
   final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return Stream.value(null); // return null when not logged in
+  if (user == null) return Stream.value(null);
   return FirebaseFirestore.instance
       .collection('users')
       .doc(user.uid)
-      .snapshots();
+      .snapshots()
+      .map((snapshot) => snapshot.data());
 });
 
 class RiderProfilePage extends ConsumerStatefulWidget {
@@ -32,6 +33,12 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
   bool _isLoading = false;
 
   @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
@@ -40,7 +47,25 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
     super.dispose();
   }
 
-  Future<void> _saveProfile(Map<String, dynamic> data) async {
+  Future<void> _loadProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+    final data = doc.data();
+    if (data != null) {
+      setState(() {
+        _nameController.text = data['username'] ?? '';
+        _phoneController.text = data['phone'] ?? '';
+        _homeController.text = data['savedLocations']?['home'] ?? '';
+        _workController.text = data['savedLocations']?['work'] ?? '';
+      });
+    }
+  }
+
+  Future<void> _saveProfile() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       _logger.w('No user logged in');
@@ -50,12 +75,25 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
       return;
     }
 
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Name cannot be empty')));
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update(data);
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).update(
+        {
+          'username': _nameController.text.trim(),
+          'phone': _phoneController.text.trim(),
+          'savedLocations': {
+            'home': _homeController.text.trim(),
+            'work': _workController.text.trim(),
+          },
+        },
+      );
       setState(() => _isEditing = false);
       // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
@@ -74,8 +112,6 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final profileAsync = ref.watch(riderProfileProvider);
-
     return Theme(
       data: Theme.of(context).copyWith(
         colorScheme: femLightTheme.colorScheme,
@@ -90,14 +126,7 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
               icon: Icon(_isEditing ? Icons.save : Icons.edit),
               onPressed: () {
                 if (_isEditing) {
-                  _saveProfile({
-                    'username': _nameController.text.trim(),
-                    'phone': _phoneController.text.trim(),
-                    'savedLocations': {
-                      'home': _homeController.text.trim(),
-                      'work': _workController.text.trim(),
-                    },
-                  });
+                  _saveProfile();
                 } else {
                   setState(() => _isEditing = true);
                 }
@@ -105,108 +134,82 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
             ),
           ],
         ),
-        body: profileAsync.when(
-          data: (doc) {
-            if (!doc!.exists) {
-              return const Center(child: Text('Profile not found'));
-            }
-            final data = doc.data() as Map<String, dynamic>;
-            _nameController.text = data['username'] ?? '';
-            _phoneController.text = data['phone'] ?? '';
-            _homeController.text = data['savedLocations']?['home'] ?? '';
-            _workController.text = data['savedLocations']?['work'] ?? '';
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Personal Information',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 16),
-                          TextField(
-                            controller: _nameController,
-                            decoration: const InputDecoration(
-                              labelText: 'Name',
-                              border: OutlineInputBorder(),
-                            ),
-                            enabled: _isEditing,
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _phoneController,
-                            decoration: const InputDecoration(
-                              labelText: 'Phone Number',
-                              border: OutlineInputBorder(),
-                            ),
-                            enabled: _isEditing,
-                            keyboardType: TextInputType.phone,
-                          ),
-                        ],
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Personal Information',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                    ),
-                  ).animate().fadeIn(duration: 400.ms),
-                  const SizedBox(height: 16),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Saved Locations',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 16),
-                          TextField(
-                            controller: _homeController,
-                            decoration: const InputDecoration(
-                              labelText: 'Home Address',
-                              border: OutlineInputBorder(),
-                            ),
-                            enabled: _isEditing,
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _workController,
-                            decoration: const InputDecoration(
-                              labelText: 'Work Address',
-                              border: OutlineInputBorder(),
-                            ),
-                            enabled: _isEditing,
-                          ),
-                        ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Name',
+                          border: OutlineInputBorder(),
+                        ),
+                        enabled: _isEditing,
                       ),
-                    ),
-                  ).animate().fadeIn(duration: 400.ms),
-                  if (_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(),
-                    ),
-                ],
-              ),
-            );
-          },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text('Error loading profile: $e'),
-                ElevatedButton(
-                  onPressed: () => ref.refresh(riderProfileProvider),
-                  child: const Text('Retry'),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _phoneController,
+                        decoration: const InputDecoration(
+                          labelText: 'Phone Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        enabled: _isEditing,
+                        keyboardType: TextInputType.phone,
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
+              ).animate().fadeIn(duration: 400.ms),
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Saved Locations',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _homeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Home Address',
+                          border: OutlineInputBorder(),
+                        ),
+                        enabled: _isEditing,
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _workController,
+                        decoration: const InputDecoration(
+                          labelText: 'Work Address',
+                          border: OutlineInputBorder(),
+                        ),
+                        enabled: _isEditing,
+                      ),
+                    ],
+                  ),
+                ),
+              ).animate().fadeIn(duration: 400.ms),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(),
+                ),
+            ],
           ),
         ),
       ),

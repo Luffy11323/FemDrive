@@ -24,28 +24,33 @@ class ShareService {
       String driverInfo = 'Not assigned';
 
       if (driverId != null) {
-        final driver = await _firestore.collection('users').doc(driverId).get();
-        if (driver.exists) {
-          final driverData = driver.data()!;
+        final driverDoc = await _firestore
+            .collection('users')
+            .doc(driverId)
+            .get();
+        if (driverDoc.exists) {
+          final driverData = driverDoc.data();
           driverInfo =
-              '${driverData['username']} (${driverData['vehicle']?['make']} ${driverData['vehicle']?['model']}, Plate: ${driverData['vehicle']?['plateNumber']})';
+              '${driverData?['username'] ?? 'Unknown Driver'} '
+              '(${driverData?['vehicle']?['make'] ?? 'Unknown'} '
+              '${driverData?['vehicle']?['model'] ?? ''})';
         }
       }
 
-      final shareText =
-          '''
-Ride Status: $status
-From: $pickup
-To: $dropoff
-Driver: $driverInfo
-Track: https://yourapp.com/track/$rideId
-''';
+      final message =
+          'Trip Status:\n'
+          'Pickup: $pickup\n'
+          'Dropoff: $dropoff\n'
+          'Status: $status\n'
+          'Driver: $driverInfo\n'
+          'Ride ID: $rideId\n'
+          'Shared by: $userId';
 
       // ignore: deprecated_member_use
-      await Share.share(shareText, subject: 'My Ride Status');
+      await Share.share(message, subject: 'My Ride Trip Status');
     } catch (e) {
       _logger.e('Failed to share trip status: $e');
-      throw Exception('Failed to share trip status: $e');
+      throw Exception('Unable to share trip status: $e');
     }
   }
 }

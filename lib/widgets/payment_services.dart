@@ -5,7 +5,6 @@ class PaymentService {
   final _firestore = FirebaseFirestore.instance;
   final _logger = Logger();
 
-  // Simulate payment processing (e.g., credit card, wallet)
   Future<bool> processPayment({
     required String rideId,
     required double amount,
@@ -14,7 +13,6 @@ class PaymentService {
   }) async {
     try {
       if (paymentMethod == 'Cash') {
-        // For cash, mark payment as pending driver confirmation
         await _firestore.collection('rides').doc(rideId).update({
           'paymentStatus': 'pending_driver_confirmation',
           'paymentMethod': paymentMethod,
@@ -22,7 +20,6 @@ class PaymentService {
         });
         return true;
       } else {
-        // Simulate API call for credit card/wallet
         await Future.delayed(const Duration(seconds: 2)); // Mock API delay
         await _firestore.collection('rides').doc(rideId).update({
           'paymentStatus': 'completed',
@@ -31,7 +28,6 @@ class PaymentService {
           'paymentTimestamp': FieldValue.serverTimestamp(),
         });
 
-        // Update driver earnings
         final ride = await _firestore.collection('rides').doc(rideId).get();
         final driverId = ride.data()?['driverId'] as String?;
         if (driverId != null) {
@@ -39,7 +35,6 @@ class PaymentService {
             'earnings': FieldValue.increment(amount * 0.8), // 80% to driver
           });
         }
-
         return true;
       }
     } catch (e) {
@@ -48,7 +43,6 @@ class PaymentService {
     }
   }
 
-  // Driver confirms cash payment
   Future<bool> confirmCashPayment({
     required String rideId,
     required String driverId,
@@ -59,12 +53,12 @@ class PaymentService {
         'paymentTimestamp': FieldValue.serverTimestamp(),
       });
 
-      await _firestore.collection('users').doc(driverId).update({
-        'earnings': FieldValue.increment(
+      final amount =
           (await _firestore.collection('rides').doc(rideId).get())
-                  .data()!['amount'] *
-              0.8,
-        ),
+                  .data()!['amount']
+              as double;
+      await _firestore.collection('users').doc(driverId).update({
+        'earnings': FieldValue.increment(amount * 0.8),
       });
       return true;
     } catch (e) {
@@ -73,7 +67,6 @@ class PaymentService {
     }
   }
 
-  // Calculate fare breakdown
   Map<String, dynamic> calculateFareBreakdown({
     required double distanceKm,
     required String rideType,

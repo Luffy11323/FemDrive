@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,8 +17,9 @@ class RiderDashboardController
     extends StateNotifier<AsyncValue<Map<String, dynamic>?>> {
   RiderDashboardController() : super(const AsyncLoading());
   final fire = FirebaseFirestore.instance;
-  final rtdb = FirebaseDatabase.instance;
+  final rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
+  StreamSubscription? _rideSubscription;
 
   String? _lastUid;
   String? get uid {
@@ -31,7 +34,7 @@ class RiderDashboardController
       _logger.w('No UID, returning empty stream');
       return const Stream.empty();
     }
-    return rtdb.ref('rides').child(currentUid).onValue.map((event) {
+    return rtdb.ref.onValue.map((event) {
       final data = event.snapshot.value as Map<dynamic, dynamic>?;
       _logger.d('Ride stream updated: $data');
       return data != null ? Map<String, dynamic>.from(data) : null;
@@ -43,11 +46,13 @@ class RiderDashboardController
     if (currentUid == null) {
       _logger.w('No UID, setting state to null');
       state = const AsyncData(null);
+      _cancelSubscription();
       return;
     }
 
     state = const AsyncLoading();
-    rideStream.listen(
+    _cancelSubscription();
+    _rideSubscription = rideStream.listen(
       (data) {
         state = AsyncData(data);
       },
@@ -58,10 +63,16 @@ class RiderDashboardController
     );
   }
 
+  void _cancelSubscription() {
+    _rideSubscription?.cancel();
+    _rideSubscription = null;
+  }
+
   void clearCachedUid() {
     _lastUid = null;
     state = const AsyncData(null);
     _logger.i('Cleared cached UID');
+    _cancelSubscription();
   }
 
   Future<void> createRide(
@@ -87,19 +98,31 @@ class RiderDashboardController
         'fare': fare,
         'rideType': rideType,
         'note': note,
-      });
-      state = AsyncData({
-        'pickup': pickup,
-        'dropoff': dropoff,
-        'pickupLat': pickupLocation.latitude,
-        'pickupLng': pickupLocation.longitude,
-        'dropoffLat': dropoffLocation.latitude,
-        'dropoffLng': dropoffLocation.longitude,
-        'fare': fare,
-        'rideType': rideType,
-        'note': note,
+        'riderId': currentUid,
         'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
       });
+      final latest = await fire
+          .collection('rides')
+          .where('riderId', isEqualTo: currentUid)
+          .orderBy('createdAt', descending: true)
+          .limit(1)
+          .get();
+      if (latest.docs.isNotEmpty) {
+        state = AsyncData({
+          'id': latest.docs.first.id,
+          'pickup': pickup,
+          'dropoff': dropoff,
+          'pickupLat': pickupLocation.latitude,
+          'pickupLng': pickupLocation.longitude,
+          'dropoffLat': dropoffLocation.latitude,
+          'dropoffLng': dropoffLocation.longitude,
+          'fare': fare,
+          'rideType': rideType,
+          'note': note,
+          'status': 'pending',
+        });
+      }
     } catch (e, st) {
       state = AsyncError(e, st);
       _logger.e('Failed to create ride: $e', stackTrace: st);
@@ -141,5 +164,11 @@ class RiderDashboardController
       _logger.e('Failed to handle counter-fare: $e', stackTrace: st);
       throw Exception('Unable to handle counter-fare: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    _cancelSubscription();
+    super.dispose();
   }
 }

@@ -1,54 +1,67 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/foundation.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:logger/logger.dart';
 
 class NearbyDriversService {
-  final _fire = FirebaseFirestore.instance;
+  final _firestore = FirebaseFirestore.instance;
+  final _logger = Logger();
+  static const double _searchRadiusKm = 5.0; // 5 km radius
 
-  Future<List<Map<String, dynamic>>> fetchNearbyDrivers(
-    LatLng center,
-    double radiusKm, {
-    required String rideType,
-  }) async {
+  Future<List<Map<String, dynamic>>> getNearbyDrivers(
+    LatLng riderLocation,
+    LatLng latLng,
+  ) async {
     try {
-      final snapshot = await _fire
+      final drivers = await _firestore
           .collection('users')
           .where('role', isEqualTo: 'driver')
-          .where('verified', isEqualTo: true)
-          .where('lastLocation', isNotEqualTo: null)
+          .where('isOnline', isEqualTo: true)
           .get();
 
-      final drivers = <Map<String, dynamic>>[];
-      for (var doc in snapshot.docs) {
+      final nearbyDrivers = <Map<String, dynamic>>[];
+      for (var doc in drivers.docs) {
         final data = doc.data();
-        final geoPoint = data['lastLocation'] as GeoPoint?;
-        if (geoPoint == null) continue;
+        final driverLocation = data['location'] as GeoPoint?;
+        if (driverLocation == null) continue;
 
-        final driverPos = LatLng(geoPoint.latitude, geoPoint.longitude);
         final distance =
             Geolocator.distanceBetween(
-              center.latitude,
-              center.longitude,
-              driverPos.latitude,
-              driverPos.longitude,
+              riderLocation.latitude,
+              riderLocation.longitude,
+              driverLocation.latitude,
+              driverLocation.longitude,
             ) /
-            1000;
+            1000; // Convert to km
 
-        if (distance <= radiusKm) {
-          drivers.add({
+        if (distance <= _searchRadiusKm) {
+          nearbyDrivers.add({
             'uid': doc.id,
-            'position': driverPos,
-            'name': data['username'] ?? 'Unknown Driver',
+            'username': data['username'] ?? 'Unknown Driver',
+            'location': driverLocation,
+            'rideType': data['availableRideType'] ?? 'Economy',
           });
         }
       }
-      return drivers;
+      return nearbyDrivers;
     } catch (e) {
-      if (kDebugMode) {
-        print('Error fetching nearby drivers: $e');
-      }
+      _logger.e('Failed to fetch nearby drivers: $e');
       return [];
+    }
+  }
+
+  Future<void> assignDriver(String rideId, String driverId) async {
+    try {
+      await _firestore.collection('rides').doc(rideId).update({
+        'driverId': driverId,
+        'status': 'accepted',
+      });
+      await _firestore.collection('users').doc(driverId).update({
+        'currentRideId': rideId,
+      });
+    } catch (e) {
+      _logger.e('Failed to assign driver: $e');
+      throw Exception('Unable to assign driver: $e');
     }
   }
 }

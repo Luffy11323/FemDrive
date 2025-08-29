@@ -1,3 +1,5 @@
+import 'package:femdrive/past_rides_page.dart';
+import 'package:femdrive/rider/rider_profile_page.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -15,7 +17,6 @@ import 'sign_up_page.dart';
 import 'driver_dashboard.dart';
 import 'rider_dashboard.dart';
 import 'admin.dart';
-import 'rider/rider_services.dart';
 import 'driver/driver_ride_details_page.dart' as details;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -230,7 +231,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
       routes: {
         '/login': (context) => const LoginPage(),
         '/signup': (context) => const SignUpPage(),
-        '/dashboard': (context) => const RiderDashboardPage(),
+        '/dashboard': (context) => const RiderDashboard(),
         '/driver-dashboard': (context) => const DriverDashboard(),
         '/admin': (context) => const AdminDriverVerificationPage(),
         '/profile': (context) {
@@ -321,7 +322,7 @@ class InitialScreen extends ConsumerWidget {
                 return const DriverDashboard();
               case 'rider':
                 debugPrint("🔐 Redirecting to RiderDashboard");
-                return const RiderDashboardPage();
+                return const RiderDashboard();
               default:
                 debugPrint("🔐 Unknown role: $role, showing LoginPage");
                 return const LoginPage();
