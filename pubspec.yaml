@@ -48,6 +48,7 @@ dependencies:
   async: ^2.13.0
   flutter_typeahead: ^5.2.0
   share_plus: ^11.1.0
+  flutter_dotenv: ^6.0.0
 
 dev_dependencies:
   flutter_test:

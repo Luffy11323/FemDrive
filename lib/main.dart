@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'theme.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // Pages
 import 'login_page.dart';
@@ -26,6 +27,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 void main() async {
+  await dotenv.load(fileName: '.env');
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -231,7 +233,38 @@ class _FemDriveAppState extends State<FemDriveApp> {
         '/dashboard': (context) => const RiderDashboardPage(),
         '/driver-dashboard': (context) => const DriverDashboard(),
         '/admin': (context) => const AdminDriverVerificationPage(),
-        '/profile': (context) => const ProfilePage(),
+        '/profile': (context) {
+          final user = FirebaseAuth.instance.currentUser;
+
+          if (user == null) return const LoginPage();
+
+          return FutureBuilder<DocumentSnapshot>(
+            future: FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.uid)
+                .get(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              if (!snapshot.hasData || !snapshot.data!.exists) {
+                return const LoginPage();
+              }
+
+              final role = snapshot.data!.get('role');
+
+              if (role == 'driver') {
+                return const ProfilePage(); // ✅ Your correct driver profile widget
+              } else {
+                return const RiderProfilePage();
+              }
+            },
+          );
+        },
+
         '/past-rides': (context) => const PastRidesPage(),
         '/driver-ride-details': (context) {
           final rideId = ModalRoute.of(context)?.settings.arguments as String?;
