@@ -1,83 +1,117 @@
-import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:logger/logger.dart';
 
 class PaymentService {
+  final _firestore = FirebaseFirestore.instance;
   final _logger = Logger();
-  final List<String> _paymentMethods = ['Cash', 'Card', 'Mobile Wallet'];
 
-  List<String> get paymentMethods => List.unmodifiable(_paymentMethods);
-
-  String? validatePaymentMethod(String? method) {
-    if (method == null || !_paymentMethods.contains(method)) {
-      _logger.w('Invalid payment method: $method');
-      return 'Please select a valid payment method';
-    }
-    return null;
-  }
-
-  Future<void> processPayment(String method, double amount) async {
+  // Simulate payment processing (e.g., credit card, wallet)
+  Future<bool> processPayment({
+    required String rideId,
+    required double amount,
+    required String paymentMethod,
+    required String userId,
+  }) async {
     try {
-      // Placeholder for payment gateway integration (e.g., Stripe, PayPal)
-      _logger.i('Processing payment of $amount with $method');
-      // Simulate payment processing delay
-      await Future.delayed(const Duration(seconds: 1));
-      if (method == 'Cash') {
-        // No further action for cash; handled on ride completion
-        return;
+      if (paymentMethod == 'Cash') {
+        // For cash, mark payment as pending driver confirmation
+        await _firestore.collection('rides').doc(rideId).update({
+          'paymentStatus': 'pending_driver_confirmation',
+          'paymentMethod': paymentMethod,
+          'amount': amount,
+        });
+        return true;
+      } else {
+        // Simulate API call for credit card/wallet
+        await Future.delayed(const Duration(seconds: 2)); // Mock API delay
+        await _firestore.collection('rides').doc(rideId).update({
+          'paymentStatus': 'completed',
+          'paymentMethod': paymentMethod,
+          'amount': amount,
+          'paymentTimestamp': FieldValue.serverTimestamp(),
+        });
+
+        // Update driver earnings
+        final ride = await _firestore.collection('rides').doc(rideId).get();
+        final driverId = ride.data()?['driverId'] as String?;
+        if (driverId != null) {
+          await _firestore.collection('users').doc(driverId).update({
+            'earnings': FieldValue.increment(amount * 0.8), // 80% to driver
+          });
+        }
+
+        return true;
       }
-      // Add actual payment gateway logic here (e.g., Stripe API call)
-      throw UnimplementedError(
-        'Payment gateway integration not yet implemented',
-      );
     } catch (e) {
       _logger.e('Payment processing failed: $e');
-      throw Exception('Unable to process payment: $e');
+      throw Exception('Failed to process payment: $e');
     }
   }
-}
 
-class PaymentDropdown extends StatefulWidget {
-  final ValueChanged<String?> onChanged;
-  final String? initialValue;
-  const PaymentDropdown({
-    required this.onChanged,
-    this.initialValue,
-    super.key,
-  });
+  // Driver confirms cash payment
+  Future<bool> confirmCashPayment({
+    required String rideId,
+    required String driverId,
+  }) async {
+    try {
+      await _firestore.collection('rides').doc(rideId).update({
+        'paymentStatus': 'completed',
+        'paymentTimestamp': FieldValue.serverTimestamp(),
+      });
 
-  @override
-  State<PaymentDropdown> createState() => _PaymentDropdownState();
-}
-
-class _PaymentDropdownState extends State<PaymentDropdown> {
-  final PaymentService _paymentService = PaymentService();
-  String? _selectedMethod;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedMethod =
-        widget.initialValue ?? _paymentService.paymentMethods.first;
+      await _firestore.collection('users').doc(driverId).update({
+        'earnings': FieldValue.increment(
+          (await _firestore.collection('rides').doc(rideId).get())
+                  .data()!['amount'] *
+              0.8,
+        ),
+      });
+      return true;
+    } catch (e) {
+      _logger.e('Cash payment confirmation failed: $e');
+      throw Exception('Failed to confirm cash payment: $e');
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return DropdownButton<String>(
-      value: _selectedMethod,
-      items: _paymentService.paymentMethods.map((method) {
-        return DropdownMenuItem<String>(value: method, child: Text(method));
-      }).toList(),
-      onChanged: (value) {
-        setState(() => _selectedMethod = value);
-        widget.onChanged(value);
-      },
-      dropdownColor: const Color(
-        0xFFF28AB2,
-        // ignore: deprecated_member_use
-      ).withOpacity(0.9), // Soft Rose palette
-      style: TextStyle(color: Colors.white),
-      underline: Container(height: 2, color: const Color(0xFFF28AB2)),
-      iconEnabledColor: Colors.white,
-    );
+  // Calculate fare breakdown
+  Map<String, dynamic> calculateFareBreakdown({
+    required double distanceKm,
+    required String rideType,
+  }) {
+    double baseFare;
+    double perKmRate;
+
+    switch (rideType) {
+      case 'Economy':
+        baseFare = 2.0;
+        perKmRate = 0.5;
+        break;
+      case 'Premium':
+        baseFare = 5.0;
+        perKmRate = 1.0;
+        break;
+      case 'XL':
+        baseFare = 7.0;
+        perKmRate = 1.5;
+        break;
+      case 'Electric':
+        baseFare = 4.0;
+        perKmRate = 0.8;
+        break;
+      default:
+        baseFare = 2.0;
+        perKmRate = 0.5;
+    }
+
+    final distanceFare = distanceKm * perKmRate;
+    final tax = (baseFare + distanceFare) * 0.1; // 10% tax
+    final total = baseFare + distanceFare + tax;
+
+    return {
+      'baseFare': baseFare,
+      'distanceFare': distanceFare,
+      'tax': tax,
+      'total': total,
+    };
   }
 }
