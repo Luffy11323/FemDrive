@@ -106,12 +106,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           ridesAsync.when(
             data: (rideData) {
               if (rideData == null || rideData.isEmpty) {
-                return const SizedBox.shrink();
+                return const SizedBox.shrink(); // nothing is shown
               }
 
-              // The provider currently returns Map<String,dynamic>?,
-              // but in your old UI you showed multiple rides. We’ll pick "the" active ride.
-              final ride = rideData; // single active ride map
+              final ride = rideData;
               final status = (ride['status'] ?? '').toString();
 
               return Stack(
@@ -120,13 +118,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     alignment: Alignment.topCenter,
                     child: RideStatusWidget(ride: ride),
                   ),
-
                   if (ride['driverId'] != null)
                     Align(
                       alignment: Alignment.topRight,
                       child: DriverDetailsWidget(driverId: ride['driverId']),
                     ),
-
                   if (ride['counterFare'] != null &&
                       status != 'completed' &&
                       status != 'cancelled')
@@ -134,7 +130,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       alignment: Alignment.center,
                       child: CounterFareWidget(rideId: ride['id']),
                     ),
-
                   if (status == 'accepted' ||
                       status == 'in_progress' ||
                       status == 'onTrip')
@@ -143,14 +138,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       right: 16,
                       child: ShareTripButton(rideId: ride['id']),
                     ),
-
                   if (status != 'completed' && status != 'cancelled')
                     Positioned(
                       bottom: 100,
                       right: 16,
                       child: SOSButton(ride: ride),
                     ),
-
                   if (status == 'completed')
                     Align(
                       alignment: Alignment.bottomCenter,
@@ -159,14 +152,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 ],
               );
             },
-            loading: () => const Align(
-              alignment: Alignment.topCenter,
-              child: LinearProgressIndicator(),
-            ),
-            error: (e, st) => Align(
-              alignment: Alignment.topCenter,
-              child: Text("Ride error: $e"),
-            ),
+            loading: () => const SizedBox.shrink(), // hide loading indicator
+            error: (e, st) => const SizedBox.shrink(), // hide error widget
           ),
 
           /// The request panel (draggable)
