@@ -10,6 +10,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'theme.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:femdrive/extras/help_support_page.dart';
+import 'package:femdrive/extras/payment_page.dart';
+import 'package:femdrive/extras/settings_page.dart';
 
 // Pages
 import 'login_page.dart';
@@ -234,6 +237,9 @@ class _FemDriveAppState extends State<FemDriveApp> {
         '/dashboard': (context) => const RiderDashboard(),
         '/driver-dashboard': (context) => const DriverDashboard(),
         '/admin': (context) => const AdminDriverVerificationPage(),
+        '/settings': (context) => const SettingsPage(),
+        '/payment': (context) => const PaymentPage(),
+        '/help-center': (context) => const HelpCenterPage(),
         '/profile': (context) {
           final user = FirebaseAuth.instance.currentUser;
 

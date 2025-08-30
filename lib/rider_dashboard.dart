@@ -436,7 +436,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         padding: EdgeInsets.zero,
         children: [
           const DrawerHeader(
-            decoration: BoxDecoration(color: Colors.deepPurple),
+            decoration: BoxDecoration(color: Color.fromARGB(255, 226, 58, 162)),
             child: Text(
               'FemDrive Menu',
               style: TextStyle(color: Colors.white, fontSize: 20),
@@ -445,24 +445,42 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           ListTile(
             leading: const Icon(Icons.person),
             title: const Text('Profile'),
-            onTap: () {},
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/profile');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.history),
             title: const Text('Past Rides'),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const PastRidesListWidget()),
-            ),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/past-rides');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.payment),
             title: const Text('Payment Methods'),
-            onTap: () {},
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/payment');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.settings),
             title: const Text('Settings'),
-            onTap: () {},
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/settings');
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.help),
+            title: const Text('Help & Support'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/help-center');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.logout),
