@@ -926,50 +926,88 @@ class RideStatusWidget extends ConsumerStatefulWidget {
   ConsumerState<RideStatusWidget> createState() => _RideStatusWidgetState();
 }
 
-class _RideStatusWidgetState extends ConsumerState<RideStatusWidget> {
+class _RideStatusWidgetState extends ConsumerState<RideStatusWidget>
+    with SingleTickerProviderStateMixin {
   double _rating = 0;
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    );
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _controller.reverse();
+    });
+    _controller.forward(); // Trigger fade-in on build
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final ride = widget.ride;
+    final pickup = ride['pickup'] ?? 'Unknown';
+    final dropoff = ride['dropoff'] ?? 'Unknown';
+    final status = ride['status']?.toString() ?? 'Unknown';
 
-    return Card(
-      margin: const EdgeInsets.all(16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Ride: ${ride['pickup']} → ${ride['dropoff']}",
-              style: const TextStyle(fontWeight: FontWeight.bold),
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: Container(
+        margin: const EdgeInsets.only(top: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.black.withAlpha((0.75 * 255).round()),
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 8,
+              offset: Offset(0, 4),
             ),
-            Text("Status: ${ride['status']}"),
-            if (ride['fare'] != null)
-              Text(
-                "Fare: \$${(ride['fare'] as num).toStringAsFixed(2)}",
-                style: const TextStyle(color: Colors.green),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.directions_car, color: Colors.white, size: 16),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                'Ride: $pickup → $dropoff | Status: $status',
+                style: const TextStyle(color: Colors.white),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
-            const SizedBox(height: 12),
-
-            if (ride['status'] == 'completed')
-              ElevatedButton.icon(
-                onPressed: () {
+            ),
+            if (status == 'completed') ...[
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: () {
                   showDialog(
                     context: context,
                     builder: (_) =>
                         _buildRatingDialog(context, ride['driverId']),
                   );
                 },
-                icon: const Icon(Icons.star_rate),
-                label: const Text("Rate Driver"),
+                child: const Icon(Icons.star, color: Colors.amber, size: 20),
               ),
+            ],
           ],
         ),
       ),
-    ).animate().fadeIn(duration: 300.ms).scale(delay: 80.ms);
+    );
   }
 
   Widget _buildRatingDialog(BuildContext context, String driverId) {
