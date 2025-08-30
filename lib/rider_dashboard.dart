@@ -1,5 +1,8 @@
 // rider_dashboard.dart
 
+import 'dart:async';
+import 'dart:math';
+
 import 'package:femdrive/emergency_service.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
@@ -14,6 +17,17 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+final connectivityProvider = StreamProvider<ConnectivityResult>((ref) {
+  return Connectivity().onConnectivityChanged.cast<ConnectivityResult>();
+});
+
+final locationPermissionProvider = FutureProvider<bool>((ref) async {
+  final permission = await Permission.location.request();
+  return permission == PermissionStatus.granted;
+});
 
 /// Provides nearby online drivers (live updates) for the map overlay
 final nearbyDriversProvider =
@@ -35,10 +49,28 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   GoogleMapController? _mapController;
   LatLng? _currentLocation;
 
+  final _pickupController = TextEditingController();
+  final _dropoffController = TextEditingController();
+  Set<Polyline> _polylines = {};
+
+  double? _fare;
+  int? _eta;
+  double? _distanceKm;
+
+  LatLng? _pickupLatLng;
+  LatLng? _dropoffLatLng;
+
   @override
   void initState() {
     super.initState();
     _loadCurrentLocation();
+  }
+
+  @override
+  void dispose() {
+    _pickupController.dispose();
+    _dropoffController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -50,6 +82,158 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
   }
 
+  Future<void> _panTo(LatLng? pos) async {
+    if (pos == null || _mapController == null) return;
+    try {
+      await _mapController!.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
+    } catch (e) {
+      _logger.e('Map pan failed: $e');
+    }
+  }
+
+  Future<void> _updateRouteAndFare() async {
+    if (_pickupLatLng == null || _dropoffLatLng == null) return;
+
+    try {
+      final routePoints = await MapService().getRoute(
+        _pickupLatLng!,
+        _dropoffLatLng!,
+      );
+
+      final result = await MapService().getRateAndEta(
+        _pickupController.text.trim(),
+        _dropoffController.text.trim(),
+        'Economy',
+      );
+
+      setState(() {
+        _fare = result['total']?.toDouble();
+        _eta = result['etaMinutes']?.toInt();
+        _distanceKm = result['distanceKm']?.toDouble();
+        _polylines = {
+          Polyline(
+            polylineId: const PolylineId('route'),
+            points: routePoints,
+            color: Colors.blue,
+            width: 5,
+          ),
+        };
+      });
+
+      if (_mapController != null) {
+        final bounds = LatLngBounds(
+          southwest: LatLng(
+            min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+            min(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
+          ),
+          northeast: LatLng(
+            max(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+            max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
+          ),
+        );
+        await _mapController!.animateCamera(
+          CameraUpdate.newLatLngBounds(bounds, 50),
+        );
+      }
+    } catch (e) {
+      _logger.e('Failed to update route/fare: $e');
+    }
+  }
+
+  Widget _buildLocationPicker() {
+    Widget buildTypeAheadField({
+      required TextEditingController controller,
+      required String label,
+      required bool isPickup,
+    }) {
+      return TypeAheadField<String>(
+        builder: (context, controllerWidget, focusNode) {
+          controllerWidget.text = controller.text;
+          return TextField(
+            controller: controller,
+            focusNode: focusNode,
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (value) async {
+              if (value.trim().isEmpty) return;
+              try {
+                final latLng = await GeocodingService.getLatLngFromAddress(
+                  value.trim(),
+                );
+                if (latLng != null) {
+                  setState(() {
+                    if (isPickup) {
+                      _pickupLatLng = latLng;
+                    } else {
+                      _dropoffLatLng = latLng;
+                    }
+                  });
+                  await _updateRouteAndFare();
+                  await _panTo(latLng);
+                }
+              } catch (e) {
+                _logger.e('Failed to update $label LatLng: $e');
+              }
+            },
+          );
+        },
+        suggestionsCallback: (query) async {
+          if (query.isEmpty || _currentLocation == null) return [];
+          try {
+            return await MapService().getPlaceSuggestions(
+              query,
+              _currentLocation!.latitude,
+              _currentLocation!.longitude,
+            );
+          } catch (e) {
+            _logger.e('Autocomplete error: $e');
+            return [];
+          }
+        },
+        itemBuilder: (context, suggestion) => ListTile(title: Text(suggestion)),
+        onSelected: (suggestion) async {
+          controller.text = suggestion;
+          try {
+            final latLng = await GeocodingService.getLatLngFromAddress(
+              suggestion,
+            );
+            if (latLng != null) {
+              setState(() {
+                if (isPickup) {
+                  _pickupLatLng = latLng;
+                } else {
+                  _dropoffLatLng = latLng;
+                }
+              });
+              await _updateRouteAndFare();
+              await _panTo(latLng);
+            }
+          } catch (e) {
+            _logger.e('Failed to set $label LatLng on selection: $e');
+          }
+        },
+      );
+    }
+
+    return Column(
+      children: [
+        buildTypeAheadField(
+          controller: _pickupController,
+          label: 'Pickup Location',
+          isPickup: true,
+        ),
+        const SizedBox(height: 8),
+        buildTypeAheadField(
+          controller: _dropoffController,
+          label: 'Dropoff Location',
+          isPickup: false,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ridesAsync = ref.watch(riderDashboardProvider);
@@ -59,7 +243,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       drawer: _buildDrawer(context),
       body: Stack(
         children: [
-          /// Map with my location + nearby drivers
           Consumer(
             builder: (context, ref, _) {
               final nearbyAsync = ref.watch(nearbyDriversProvider);
@@ -82,8 +265,24 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           BitmapDescriptor.hueAzure,
                         ),
                       ),
+                    if (_pickupLatLng != null)
+                      Marker(
+                        markerId: const MarkerId("pickup"),
+                        position: _pickupLatLng!,
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueGreen,
+                        ),
+                      ),
+                    if (_dropoffLatLng != null)
+                      Marker(
+                        markerId: const MarkerId("dropoff"),
+                        position: _dropoffLatLng!,
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueRed,
+                        ),
+                      ),
                     ...drivers.map((d) {
-                      final gp = d['location']; // GeoPoint
+                      final gp = d['location'];
                       return Marker(
                         markerId: MarkerId(
                           d['uid'] ?? d['id'] ?? UniqueKey().toString(),
@@ -95,6 +294,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       );
                     }),
                   },
+                  polylines: _polylines,
                 ),
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, st) => Center(child: Text("Map error: $e")),
@@ -102,11 +302,35 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             },
           ),
 
-          /// Active Ride Overlays (Status / Driver / Counter Fare / SOS / Share / Receipt)
+          if (_fare != null && _eta != null && _distanceKm != null)
+            Positioned(
+              top: 80,
+              left: 16,
+              right: 16,
+              child: Card(
+                color: Colors.white70,
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      Text('Fare: \$${_fare!.toStringAsFixed(2)}'),
+                      Text('ETA: ${_eta!} min'),
+                      Text('Distance: ${_distanceKm!.toStringAsFixed(1)} km'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
           ridesAsync.when(
             data: (rideData) {
               if (rideData == null || rideData.isEmpty) {
-                return const SizedBox.shrink(); // nothing is shown
+                return const SizedBox.shrink();
               }
 
               final ride = rideData;
@@ -152,11 +376,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 ],
               );
             },
-            loading: () => const SizedBox.shrink(), // hide loading indicator
-            error: (e, st) => const SizedBox.shrink(), // hide error widget
+            loading: () => const SizedBox.shrink(),
+            error: (e, st) => const SizedBox.shrink(),
           ),
 
-          /// The request panel (draggable)
           Align(
             alignment: Alignment.bottomCenter,
             child: DraggableScrollableSheet(
@@ -167,10 +390,42 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 mapController: _mapController,
                 scrollController: controller,
                 currentLocation: _currentLocation,
+                pickupController: _pickupController,
+                dropoffController: _dropoffController,
+                onFareUpdated:
+                    (fare, eta, distanceKm, routePoints, {pickup, dropoff}) {
+                      setState(() {
+                        _fare = fare;
+                        _eta = eta;
+                        _distanceKm = distanceKm;
+                        if (pickup != null) _pickupLatLng = pickup;
+                        if (dropoff != null) _dropoffLatLng = dropoff;
+                        _polylines = {
+                          Polyline(
+                            polylineId: const PolylineId('route'),
+                            points: routePoints,
+                            color: Colors.blue,
+                            width: 5,
+                          ),
+                        };
+                      });
+                    },
               ),
             ),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          showModalBottomSheet(
+            context: context,
+            builder: (context) => Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: _buildLocationPicker(),
+            ),
+          );
+        },
+        child: const Icon(Icons.add_location),
       ),
     );
   }
@@ -190,16 +445,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           ListTile(
             leading: const Icon(Icons.person),
             title: const Text('Profile'),
-            onTap: () {}, // keep placeholder to preserve route structure
+            onTap: () {},
           ),
           ListTile(
             leading: const Icon(Icons.history),
             title: const Text('Past Rides'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const PastRidesListWidget()),
-              );
-            },
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PastRidesListWidget()),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.payment),
@@ -232,12 +485,26 @@ class RideForm extends ConsumerStatefulWidget {
   final GoogleMapController? mapController;
   final ScrollController scrollController;
   final LatLng? currentLocation;
+  final TextEditingController? pickupController;
+  final TextEditingController? dropoffController;
+  final void Function(
+    double fare,
+    int eta,
+    double distanceKm,
+    List<LatLng> routePoints, {
+    LatLng? pickup,
+    LatLng? dropoff,
+  })?
+  onFareUpdated;
 
   const RideForm({
     super.key,
     required this.mapController,
     required this.scrollController,
     required this.currentLocation,
+    this.pickupController,
+    this.dropoffController,
+    this.onFareUpdated,
   });
 
   @override
@@ -246,8 +513,8 @@ class RideForm extends ConsumerStatefulWidget {
 
 class _RideFormState extends ConsumerState<RideForm> {
   final _logger = Logger();
-  final _pickupController = TextEditingController();
-  final _dropoffController = TextEditingController();
+  late final TextEditingController _pickupController;
+  late final TextEditingController _dropoffController;
   final _noteController = TextEditingController();
 
   LatLng? _pickupLatLng;
@@ -255,61 +522,156 @@ class _RideFormState extends ConsumerState<RideForm> {
   String? _selectedRideType = 'Economy';
   String? _selectedPaymentMethod = 'Cash';
   double? _fare;
+  int? _eta;
+  double? _distanceKm;
   String? _errorMessage;
+
+  Timer? _debouncePickup;
+  Timer? _debounceDropoff;
+
+  @override
+  void initState() {
+    super.initState();
+    _pickupController = widget.pickupController ?? TextEditingController();
+    _dropoffController = widget.dropoffController ?? TextEditingController();
+
+    // Debounced listeners for live address changes
+    _pickupController.addListener(() {
+      _debouncePickup?.cancel();
+      _debouncePickup = Timer(
+        const Duration(milliseconds: 500),
+        _updatePickupLatLngLive,
+      );
+    });
+    _dropoffController.addListener(() {
+      _debounceDropoff?.cancel();
+      _debounceDropoff = Timer(
+        const Duration(milliseconds: 500),
+        _updateDropoffLatLngLive,
+      );
+    });
+  }
 
   @override
   void dispose() {
-    _pickupController.dispose();
-    _dropoffController.dispose();
+    _pickupController.removeListener(_updatePickupLatLngLive);
+    _dropoffController.removeListener(_updateDropoffLatLngLive);
+    _debouncePickup?.cancel();
+    _debounceDropoff?.cancel();
+
+    if (widget.pickupController == null) _pickupController.dispose();
+    if (widget.dropoffController == null) _dropoffController.dispose();
     _noteController.dispose();
     super.dispose();
   }
 
   Future<List<String>> _fetchSuggestions(String query) async {
-    if (query.trim().length < 3) return [];
+    if (query.isEmpty) return [];
+
     try {
-      final origin =
-          widget.currentLocation ?? await MapService().currentLocation();
-      return MapService().getPlaceSuggestions(
+      final currentLat = widget.currentLocation?.latitude ?? 0.0;
+      final currentLng = widget.currentLocation?.longitude ?? 0.0;
+      final suggestions = await MapService().getPlaceSuggestions(
         query,
-        origin.latitude,
-        origin.longitude,
+        currentLat,
+        currentLng,
       );
+      return suggestions;
     } catch (e) {
-      _logger.e('Failed suggestions: $e');
+      _logger.e('Failed to fetch suggestions: $e');
       return [];
+    }
+  }
+
+  Future<void> _updatePickupLatLngLive() async {
+    final text = _pickupController.text.trim();
+    if (text.isEmpty) return;
+
+    try {
+      final latLng = await GeocodingService.getLatLngFromAddress(text);
+      if (latLng != null) {
+        _pickupLatLng = latLng;
+        await _updateRouteAndFare(sendMarkers: true);
+        await _panTo(latLng);
+      }
+    } catch (e) {
+      _logger.e('Pickup update failed: $e');
+    }
+  }
+
+  Future<void> _updateDropoffLatLngLive() async {
+    final text = _dropoffController.text.trim();
+    if (text.isEmpty) return;
+
+    try {
+      final latLng = await GeocodingService.getLatLngFromAddress(text);
+      if (latLng != null) {
+        _dropoffLatLng = latLng;
+        await _updateRouteAndFare(sendMarkers: true);
+        await _panTo(latLng);
+      }
+    } catch (e) {
+      _logger.e('Dropoff update failed: $e');
     }
   }
 
   Future<void> _panTo(LatLng? pos) async {
     if (pos == null || widget.mapController == null) return;
-    await widget.mapController!.animateCamera(
-      CameraUpdate.newLatLngZoom(pos, 15),
-    );
+    try {
+      await widget.mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(pos, 15),
+      );
+    } catch (e) {
+      _logger.e('Map pan failed: $e');
+    }
   }
 
-  Future<void> _calculateFareAndRoute() async {
-    if (_pickupLatLng == null ||
-        _dropoffLatLng == null ||
-        _selectedRideType == null) {
-      setState(
-        () => _errorMessage = 'Please select pickup, dropoff and ride type.',
-      );
-      return;
-    }
+  Future<void> _updateRouteAndFare({bool sendMarkers = false}) async {
+    if (_pickupLatLng == null || _dropoffLatLng == null) return;
+
     try {
-      final rateAndEta = await MapService().getRateAndEta(
+      final routePoints = await MapService().getRoute(
+        _pickupLatLng!,
+        _dropoffLatLng!,
+      );
+      final result = await MapService().getRateAndEta(
         _pickupController.text.trim(),
         _dropoffController.text.trim(),
-        _selectedRideType!,
+        _selectedRideType ?? 'Economy',
       );
+
       setState(() {
-        _fare = (rateAndEta['total'] as num).toDouble();
-        _errorMessage = null;
+        _fare = result['total']?.toDouble();
+        _eta = result['etaMinutes']?.toInt();
+        _distanceKm = result['distanceKm']?.toDouble();
       });
+
+      widget.onFareUpdated?.call(
+        _fare ?? 0,
+        _eta ?? 0,
+        _distanceKm ?? 0,
+        routePoints,
+        pickup: sendMarkers ? _pickupLatLng : null,
+        dropoff: sendMarkers ? _dropoffLatLng : null,
+      );
+
+      if (widget.mapController != null) {
+        final bounds = LatLngBounds(
+          southwest: LatLng(
+            min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+            min(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
+          ),
+          northeast: LatLng(
+            max(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+            max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
+          ),
+        );
+        await widget.mapController!.animateCamera(
+          CameraUpdate.newLatLngBounds(bounds, 50),
+        );
+      }
     } catch (e) {
-      setState(() => _errorMessage = 'Unable to calculate fare: $e');
-      _logger.e('Rate & ETA error: $e');
+      _logger.e('Route/fare update failed: $e');
     }
   }
 
@@ -321,6 +683,7 @@ class _RideFormState extends ConsumerState<RideForm> {
       setState(() => _errorMessage = 'Incomplete details to request a ride.');
       return;
     }
+
     try {
       final controller = ref.read(riderDashboardProvider.notifier);
       await controller.createRide(
@@ -329,7 +692,7 @@ class _RideFormState extends ConsumerState<RideForm> {
         _fare!,
         GeoPoint(_pickupLatLng!.latitude, _pickupLatLng!.longitude),
         GeoPoint(_dropoffLatLng!.latitude, _dropoffLatLng!.longitude),
-        ref, // 👈 Add this here
+        ref,
         rideType: _selectedRideType!,
         note: _noteController.text.trim(),
       );
@@ -345,10 +708,10 @@ class _RideFormState extends ConsumerState<RideForm> {
       }
 
       if (context.mounted) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Ride requested')));
+        // ignore: use_build_context_synchronously
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ride requested successfully')),
+        );
       }
     } catch (e) {
       setState(() => _errorMessage = 'Ride request failed: $e');
@@ -366,7 +729,6 @@ class _RideFormState extends ConsumerState<RideForm> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // Grip
             Container(
               width: 44,
               height: 4,
@@ -380,8 +742,8 @@ class _RideFormState extends ConsumerState<RideForm> {
             /// Pickup
             TypeAheadField<String>(
               suggestionsCallback: _fetchSuggestions,
-              builder: (context, controller, focusNode) {
-                controller.text = _pickupController.text;
+              builder: (context, controllerWidget, focusNode) {
+                controllerWidget.text = _pickupController.text;
                 return TextField(
                   controller: _pickupController,
                   focusNode: focusNode,
@@ -398,8 +760,14 @@ class _RideFormState extends ConsumerState<RideForm> {
                 _pickupLatLng = await GeocodingService.getLatLngFromAddress(
                   suggestion,
                 );
-                await _panTo(_pickupLatLng);
-                setState(() {});
+                if (_pickupLatLng != null) {
+                  await _updateRouteAndFare(sendMarkers: true);
+                  await _panTo(_pickupLatLng);
+                } else {
+                  setState(
+                    () => _errorMessage = 'Failed to locate pickup address',
+                  );
+                }
               },
             ),
             const SizedBox(height: 12),
@@ -407,8 +775,8 @@ class _RideFormState extends ConsumerState<RideForm> {
             /// Dropoff
             TypeAheadField<String>(
               suggestionsCallback: _fetchSuggestions,
-              builder: (context, controller, focusNode) {
-                controller.text = _dropoffController.text;
+              builder: (context, controllerWidget, focusNode) {
+                controllerWidget.text = _dropoffController.text;
                 return TextField(
                   controller: _dropoffController,
                   focusNode: focusNode,
@@ -425,8 +793,14 @@ class _RideFormState extends ConsumerState<RideForm> {
                 _dropoffLatLng = await GeocodingService.getLatLngFromAddress(
                   suggestion,
                 );
-                await _panTo(_dropoffLatLng);
-                setState(() {});
+                if (_dropoffLatLng != null) {
+                  await _updateRouteAndFare(sendMarkers: true);
+                  await _panTo(_dropoffLatLng);
+                } else {
+                  setState(
+                    () => _errorMessage = 'Failed to locate dropoff address',
+                  );
+                }
               },
             ),
             const SizedBox(height: 12),
@@ -444,11 +818,14 @@ class _RideFormState extends ConsumerState<RideForm> {
                 'XL',
                 'Electric',
               ].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (v) => setState(() => _selectedRideType = v),
+              onChanged: (v) async {
+                setState(() => _selectedRideType = v);
+                await _updateRouteAndFare();
+              },
             ),
             const SizedBox(height: 12),
 
-            /// Payment
+            /// Payment Method
             DropdownButtonFormField<String>(
               initialValue: _selectedPaymentMethod,
               decoration: const InputDecoration(
@@ -474,7 +851,7 @@ class _RideFormState extends ConsumerState<RideForm> {
             ),
             const SizedBox(height: 16),
 
-            /// Action Buttons
+            /// Buttons
             Row(
               children: [
                 Expanded(
@@ -483,62 +860,9 @@ class _RideFormState extends ConsumerState<RideForm> {
                         (_pickupLatLng != null &&
                             _dropoffLatLng != null &&
                             _selectedRideType != null)
-                        ? _calculateFareAndRoute
+                        ? _updateRouteAndFare
                         : null,
                     child: const Text('Calculate Fare & Route'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Consumer(
-                    builder: (context, ref, _) {
-                      final asyncDrivers = ref.watch(nearbyDriversProvider);
-
-                      return asyncDrivers.when(
-                        data: (drivers) {
-                          if (drivers.isEmpty) {
-                            return const Center(
-                              child: Text(
-                                '🚗 No drivers currently nearby',
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            );
-                          }
-
-                          if (_selectedRideType == null) {
-                            final rt = drivers.first['rideType'] as String?;
-                            if (rt != null && rt.isNotEmpty) {
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                setState(() => _selectedRideType = rt);
-                              });
-                            }
-                          }
-
-                          return Center(
-                            child: Text(
-                              '🚗 ${drivers.length} drivers nearby',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          );
-                        },
-                        loading: () => const Center(
-                          child: Text(
-                            '🔍 Searching for drivers…',
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                        ),
-                        error: (e, _) => Center(
-                          child: Text(
-                            '⚠️ Error loading drivers',
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
                   ),
                 ),
               ],
@@ -571,7 +895,7 @@ class _RideFormState extends ConsumerState<RideForm> {
           ],
         ),
       ),
-    ).animate().fadeIn(duration: 300.ms);
+    );
   }
 }
 

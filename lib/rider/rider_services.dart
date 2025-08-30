@@ -36,6 +36,12 @@ class MapService {
   final poly = PolylinePoints(apiKey: googleApiKey);
   final _logger = Logger();
 
+  /// Unified polyline route
+  Future<List<LatLng>> getRoutePolyline(LatLng start, LatLng end) {
+    return getRoute(start, end);
+  }
+
+  /// Current user location
   Future<LatLng> currentLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
@@ -50,6 +56,7 @@ class MapService {
     }
   }
 
+  /// Get route polyline points between two coordinates
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
       if (googleApiKey.isEmpty) {
@@ -72,6 +79,7 @@ class MapService {
     }
   }
 
+  /// Place suggestions near given lat/lng
   Future<List<String>> getPlaceSuggestions(
     String query,
     double lat,
@@ -79,44 +87,71 @@ class MapService {
   ) async {
     try {
       if (googleApiKey.isEmpty) {
+        _logger.e('Google API key is missing or invalid');
         throw Exception('Google API key is missing or invalid');
       }
+      _logger.i('Fetching suggestions for query: $query, location: $lat,$lng');
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/place/autocomplete/json'
-        '?input=$query'
+        '?input=${Uri.encodeQueryComponent(query)}'
         '&location=$lat,$lng'
         '&radius=50000'
         '&key=$googleApiKey',
       );
       final response = await http.get(url);
+      _logger.i(
+        'Autocomplete response: ${response.statusCode}, ${response.body}',
+      );
       final data = jsonDecode(response.body);
-      if (data['status'] != 'OK') throw Exception('Autocomplete failed');
-      return (data['predictions'] as List)
+      if (data['status'] != 'OK') {
+        _logger.e(
+          'Autocomplete failed: ${data['status']}, ${data['error_message']}',
+        );
+        throw Exception('Autocomplete failed: ${data['error_message']}');
+      }
+      final suggestions = (data['predictions'] as List)
           .map((p) => p['description'] as String)
           .toList();
+      _logger.i('Suggestions: $suggestions');
+      return suggestions;
     } catch (e) {
       _logger.e('Failed to fetch place suggestions: $e');
       return [];
     }
   }
 
+  /// Get Rate + ETA from **addresses** (uses Geocoding)
   Future<Map<String, dynamic>> getRateAndEta(
     String pickup,
     String dropoff,
     String rideType,
   ) async {
     try {
-      if (googleApiKey.isEmpty) {
-        throw Exception('Google API key is missing or invalid');
-      }
       final pickupLoc = (await GeocodingService.getLatLngFromAddress(pickup))!;
       final dropoffLoc = (await GeocodingService.getLatLngFromAddress(
         dropoff,
       ))!;
+      return getRateAndEtaFromCoords(pickupLoc, dropoffLoc, rideType);
+    } catch (e) {
+      _logger.e('Failed to get rate and ETA (address): $e');
+      throw Exception('Unable to calculate rate and ETA: $e');
+    }
+  }
+
+  /// Get Rate + ETA directly from **LatLng coords**
+  Future<Map<String, dynamic>> getRateAndEtaFromCoords(
+    LatLng pickup,
+    LatLng dropoff,
+    String rideType,
+  ) async {
+    try {
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
       final url = Uri.parse(
         'https://maps.googleapis.com/maps/api/distancematrix/json'
-        '?origins=${pickupLoc.latitude},${pickupLoc.longitude}'
-        '&destinations=${dropoffLoc.latitude},${dropoffLoc.longitude}'
+        '?origins=${pickup.latitude},${pickup.longitude}'
+        '&destinations=${dropoff.latitude},${dropoff.longitude}'
         '&key=$googleApiKey',
       );
       final response = await http.get(url);
@@ -140,7 +175,7 @@ class MapService {
         'distanceKm': distanceKm,
       };
     } catch (e) {
-      _logger.e('Failed to get rate and ETA: $e');
+      _logger.e('Failed to get rate and ETA (coords): $e');
       throw Exception('Unable to calculate rate and ETA: $e');
     }
   }
