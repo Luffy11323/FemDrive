@@ -38,15 +38,10 @@ class PastRidesPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final _ = FirebaseAuth.instance.currentUser;
     final logger = Logger();
 
-    final isDriver =
-        ref.watch(userDocProvider).asData?.value?['role'] == 'driver';
-
-    final ridesAsync = isDriver
-        ? ref.watch(driverPastRidesProvider)
-        : ref.watch(pastRidesProvider);
+    // First, wait for user doc to load
+    final userDocAsync = ref.watch(userDocProvider);
 
     return Theme(
       data: Theme.of(context).copyWith(
@@ -55,103 +50,153 @@ class PastRidesPage extends ConsumerWidget {
       ),
       child: Scaffold(
         appBar: AppBar(title: const Text('Ride History')),
-        body: ridesAsync.when(
-          data: (snapshot) {
-            if (snapshot == null || snapshot.docs.isEmpty) {
-              return const Center(child: Text('No past rides found'));
+        body: userDocAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('Failed to load user info: $e')),
+          data: (userDoc) {
+            if (userDoc == null) {
+              return const Center(child: Text('User info not available'));
             }
 
-            return ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: snapshot.docs.length,
-              itemBuilder: (context, index) {
-                final ride = snapshot.docs[index].data();
-                final fare = (ride['fare'] as num?)?.toDouble() ?? 0.0;
-                final completedAt = (ride['completedAt'] as Timestamp?)
-                    ?.toDate();
-                final status = ride['status'] ?? 'unknown';
+            final userData = userDoc.data() as Map<String, dynamic>?;
+            final isDriver = userData?['role'] == 'driver';
 
-                return Card(
-                  child: ListTile(
-                    title: Text('${ride['pickup']} → ${ride['dropoff']}'),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Fare: \$${fare.toStringAsFixed(2)}'),
-                        Text('Status: ${status.toUpperCase()}'),
-                        if (completedAt != null)
-                          Text(
-                            'Completed: ${completedAt.toString().split('.')[0]}',
-                          ),
-                        Text(
-                          'Distance: ${(ride['distanceKm'] ?? 0).toStringAsFixed(2)} km',
+            final ridesAsync = isDriver
+                ? ref.watch(driverPastRidesProvider)
+                : ref.watch(pastRidesProvider);
+
+            return ridesAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) {
+                logger.e('Error loading rides: $e');
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Error loading rides: $e'),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: () => ref.refresh(
+                          isDriver
+                              ? driverPastRidesProvider
+                              : pastRidesProvider,
                         ),
-                      ],
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              data: (snapshot) {
+                if (snapshot == null || snapshot.docs.isEmpty) {
+                  return const Center(
+                    child: Text(
+                      'No past rides found',
+                      style: TextStyle(fontSize: 16),
                     ),
-                    onTap: () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('Ride Receipt'),
-                          content: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Ride ID: ${snapshot.docs[index].id}'),
-                                Text('From: ${ride['pickup']}'),
-                                Text('To: ${ride['dropoff']}'),
-                                Text('Fare: \$${fare.toStringAsFixed(2)}'),
-                                Text('Status: ${status.toUpperCase()}'),
-                                if (completedAt != null)
-                                  Text(
-                                    'Completed: ${completedAt.toString().split('.')[0]}',
-                                  ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh: () async {
+                    // ignore: unused_result
+                    ref.refresh(
+                      isDriver ? driverPastRidesProvider : pastRidesProvider,
+                    );
+                    // Wait a short duration so RefreshIndicator shows properly
+                    await Future.delayed(const Duration(milliseconds: 500));
+                  },
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: snapshot.docs.length,
+                    itemBuilder: (context, index) {
+                      final ride = snapshot.docs[index].data();
+                      final fare = (ride['fare'] as num?)?.toDouble() ?? 0.0;
+                      final completedAt = (ride['completedAt'] as Timestamp?)
+                          ?.toDate();
+                      final status = (ride['status'] ?? 'unknown').toString();
+
+                      return Card(
+                        child: ListTile(
+                          title: Text('${ride['pickup']} → ${ride['dropoff']}'),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Fare: \$${fare.toStringAsFixed(2)}'),
+                              Text('Status: ${status.toUpperCase()}'),
+                              if (completedAt != null)
                                 Text(
-                                  'Distance: ${(ride['distanceKm'] ?? 0).toStringAsFixed(2)} km',
+                                  'Completed: ${_formatDateTime(completedAt)}',
                                 ),
-                                Text(
-                                  'Ride Type: ${ride['rideType'] ?? 'Unknown'}',
-                                ),
-                                Text(
-                                  'Payment: ${ride['paymentMethod'] ?? 'Unknown'}',
-                                ),
-                              ],
-                            ),
+                              Text(
+                                'Distance: ${(ride['distanceKm'] ?? 0).toStringAsFixed(2)} km',
+                              ),
+                            ],
                           ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Close'),
-                            ),
-                          ],
+                          onTap: () {
+                            showDialog(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Ride Receipt'),
+                                content: SingleChildScrollView(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Ride ID: ${snapshot.docs[index].id}',
+                                      ),
+                                      Text('From: ${ride['pickup']}'),
+                                      Text('To: ${ride['dropoff']}'),
+                                      Text(
+                                        'Fare: \$${fare.toStringAsFixed(2)}',
+                                      ),
+                                      Text('Status: ${status.toUpperCase()}'),
+                                      if (completedAt != null)
+                                        Text(
+                                          'Completed: ${_formatDateTime(completedAt)}',
+                                        ),
+                                      Text(
+                                        'Distance: ${(ride['distanceKm'] ?? 0).toStringAsFixed(2)} km',
+                                      ),
+                                      Text(
+                                        'Ride Type: ${ride['rideType'] ?? 'Unknown'}',
+                                      ),
+                                      Text(
+                                        'Payment: ${ride['paymentMethod'] ?? 'Unknown'}',
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('Close'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
+                      ).animate().fadeIn(
+                        duration: 400.ms,
+                        delay: (100 * index).ms,
                       );
                     },
                   ),
-                ).animate().fadeIn(duration: 400.ms, delay: (100 * index).ms);
+                );
               },
-            );
-          },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) {
-            logger.e('Error loading rides: $e');
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text('Error loading rides: $e'),
-                  ElevatedButton(
-                    onPressed: () => ref.refresh(
-                      isDriver ? driverPastRidesProvider : pastRidesProvider,
-                    ),
-                    child: const Text('Retry'),
-                  ),
-                ],
-              ),
             );
           },
         ),
       ),
     );
   }
+
+  String _formatDateTime(DateTime dt) {
+    return '${dt.year}-${_twoDigits(dt.month)}-${_twoDigits(dt.day)} '
+        '${_twoDigits(dt.hour)}:${_twoDigits(dt.minute)}';
+  }
+
+  String _twoDigits(int n) => n.toString().padLeft(2, '0');
 }

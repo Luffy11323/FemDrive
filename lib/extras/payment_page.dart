@@ -44,6 +44,7 @@ class _PaymentPageState extends ConsumerState<PaymentPage> {
         },
       );
       if (context.mounted) {
+        if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Payment method added')));
@@ -53,6 +54,7 @@ class _PaymentPageState extends ConsumerState<PaymentPage> {
     } catch (e) {
       _logger.e('Failed to add payment method: $e');
       if (context.mounted) {
+        if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -70,7 +72,7 @@ class _PaymentPageState extends ConsumerState<PaymentPage> {
           children: [
             DropdownButtonFormField<String>(
               decoration: const InputDecoration(labelText: 'Payment Method'),
-              value: _selectedMethod,
+              initialValue: _selectedMethod,
               items: const [
                 DropdownMenuItem(value: 'EasyPaisa', child: Text('EasyPaisa')),
                 DropdownMenuItem(value: 'JazzCash', child: Text('JazzCash')),

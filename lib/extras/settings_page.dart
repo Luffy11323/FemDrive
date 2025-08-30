@@ -26,6 +26,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         },
       );
       if (context.mounted) {
+        if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Settings saved')));
@@ -33,6 +34,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (e) {
       _logger.e('Failed to save settings: $e');
       if (context.mounted) {
+        if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
