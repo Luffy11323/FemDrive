@@ -12,9 +12,7 @@ class ShareService {
   }) async {
     try {
       final ride = await _firestore.collection('rides').doc(rideId).get();
-      if (!ride.exists) {
-        throw Exception('Ride not found');
-      }
+      if (!ride.exists) throw Exception('Ride not found');
 
       final data = ride.data()!;
       final pickup = data['pickup'] ?? 'Unknown';
@@ -37,20 +35,23 @@ class ShareService {
         }
       }
 
+      final deepLink = 'https://yourapp.com/track/$rideId';
       final message =
-          'Trip Status:\n'
+          '🚖 Trip Status\n\n'
           'Pickup: $pickup\n'
           'Dropoff: $dropoff\n'
           'Status: $status\n'
           'Driver: $driverInfo\n'
           'Ride ID: $rideId\n'
+          'Track live: $deepLink\n\n'
           'Shared by: $userId';
 
-      // ignore: deprecated_member_use
-      await Share.share(message, subject: 'My Ride Trip Status');
+      final params = ShareParams(text: message, subject: 'My Ride Status');
+
+      await SharePlus.instance.share(params);
     } catch (e) {
       _logger.e('Failed to share trip status: $e');
-      throw Exception('Unable to share trip status: $e');
+      rethrow;
     }
   }
 }

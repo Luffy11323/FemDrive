@@ -20,7 +20,9 @@ class PaymentService {
         });
         return true;
       } else {
-        await Future.delayed(const Duration(seconds: 2)); // Mock API delay
+        // Simulated payment gateway
+        await Future.delayed(const Duration(seconds: 2));
+
         await _firestore.collection('rides').doc(rideId).update({
           'paymentStatus': 'completed',
           'paymentMethod': paymentMethod,
@@ -28,18 +30,30 @@ class PaymentService {
           'paymentTimestamp': FieldValue.serverTimestamp(),
         });
 
+        // Credit driver
         final ride = await _firestore.collection('rides').doc(rideId).get();
         final driverId = ride.data()?['driverId'] as String?;
         if (driverId != null) {
           await _firestore.collection('users').doc(driverId).update({
-            'earnings': FieldValue.increment(amount * 0.8), // 80% to driver
+            'earnings': FieldValue.increment(amount * 0.8),
           });
         }
+
+        // Store receipt
+        await _firestore.collection('receipts').doc(rideId).set({
+          'rideId': rideId,
+          'userId': userId,
+          'driverId': driverId,
+          'amount': amount,
+          'method': paymentMethod,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         return true;
       }
     } catch (e) {
       _logger.e('Payment processing failed: $e');
-      throw Exception('Failed to process payment: $e');
+      rethrow;
     }
   }
 
@@ -57,13 +71,24 @@ class PaymentService {
           (await _firestore.collection('rides').doc(rideId).get())
                   .data()!['amount']
               as double;
+
       await _firestore.collection('users').doc(driverId).update({
         'earnings': FieldValue.increment(amount * 0.8),
       });
+
+      // Record receipt
+      await _firestore.collection('receipts').doc(rideId).set({
+        'rideId': rideId,
+        'driverId': driverId,
+        'amount': amount,
+        'method': 'Cash',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
       return true;
     } catch (e) {
       _logger.e('Cash payment confirmation failed: $e');
-      throw Exception('Failed to confirm cash payment: $e');
+      rethrow;
     }
   }
 
@@ -71,8 +96,7 @@ class PaymentService {
     required double distanceKm,
     required String rideType,
   }) {
-    double baseFare;
-    double perKmRate;
+    double baseFare, perKmRate;
 
     switch (rideType) {
       case 'Economy':
@@ -96,9 +120,15 @@ class PaymentService {
         perKmRate = 0.5;
     }
 
-    final distanceFare = distanceKm * perKmRate;
-    final tax = (baseFare + distanceFare) * 0.1; // 10% tax
-    final total = baseFare + distanceFare + tax;
+    final distanceFare = double.parse(
+      (distanceKm * perKmRate).toStringAsFixed(2),
+    );
+    final tax = double.parse(
+      ((baseFare + distanceFare) * 0.1).toStringAsFixed(2),
+    );
+    final total = double.parse(
+      (baseFare + distanceFare + tax).toStringAsFixed(2),
+    );
 
     return {
       'baseFare': baseFare,

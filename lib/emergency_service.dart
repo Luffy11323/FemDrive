@@ -7,25 +7,42 @@ class EmergencyService {
   static final _rtdb = FirebaseDatabase.instance.ref();
   static final _logger = Logger();
 
+  /// Trigger SOS during a ride
   static Future<void> sendEmergency({
     required String rideId,
     required String currentUid,
     required String otherUid,
   }) async {
     try {
-      // Update Firestore to mark other user as unverified and cancel ride
-      await _fire.collection('users').doc(otherUid).update({'verified': false});
-      await _fire.collection('rides').doc(rideId).update({
-        'status': 'cancelled',
-        'emergencyTriggered': true,
+      final batch = _fire.batch();
+
+      // Mark other user suspicious
+      batch.update(_fire.collection('users').doc(otherUid), {
+        'verified': false,
       });
 
-      // Remove ride from RTDB pending queues
-      await _rtdb.child('rides/$currentUid/$rideId').remove();
-      await _rtdb.child('rides/pending/a/$rideId').remove();
-      await _rtdb.child('rides/pending/b/$rideId').remove();
+      // Cancel ride with SOS flag
+      batch.update(_fire.collection('rides').doc(rideId), {
+        'status': 'cancelled',
+        'emergencyTriggered': true,
+        'cancelledBy': currentUid,
+        'cancelReason': 'emergency',
+        'cancelledAt': FieldValue.serverTimestamp(),
+      });
 
-      // Notify admin via RTDB
+      await batch.commit();
+
+      // Remove ride from RTDB
+      final paths = [
+        'rides/$currentUid/$rideId',
+        'rides/pending/a/$rideId',
+        'rides/pending/b/$rideId',
+      ];
+      for (final path in paths) {
+        await _rtdb.child(path).remove();
+      }
+
+      // Notify admin
       await _rtdb.child('notifications/admin').push().set({
         'type': 'emergency',
         'rideId': rideId,
@@ -33,9 +50,11 @@ class EmergencyService {
         'otherUid': otherUid,
         'timestamp': ServerValue.timestamp,
       });
+
+      _logger.i('Emergency triggered for ride $rideId by $currentUid');
     } catch (e) {
       _logger.e('Failed to send emergency: $e');
-      throw Exception('Failed to send emergency: $e');
+      rethrow;
     }
   }
 }

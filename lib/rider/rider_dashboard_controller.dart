@@ -16,9 +16,19 @@ final riderDashboardProvider =
 class RiderDashboardController
     extends StateNotifier<AsyncValue<Map<String, dynamic>?>> {
   RiderDashboardController() : super(const AsyncLoading());
+
+  final _logger = Logger();
+  List<Map<String, dynamic>> _nearbyDrivers = [];
+
+  List<Map<String, dynamic>> get nearbyDrivers => _nearbyDrivers;
+
+  void updateNearbyDrivers(List<Map<String, dynamic>> drivers) {
+    _nearbyDrivers = drivers;
+    _logger.i("Updated nearby drivers: $_nearbyDrivers");
+  }
+
   final fire = FirebaseFirestore.instance;
   final rtdb = FirebaseDatabase.instance.ref();
-  final _logger = Logger();
   StreamSubscription? _rideSubscription;
 
   String? _lastUid;
@@ -80,7 +90,8 @@ class RiderDashboardController
     String dropoff,
     double fare,
     GeoPoint pickupLocation,
-    GeoPoint dropoffLocation, {
+    GeoPoint dropoffLocation,
+    WidgetRef ref, { // 🔹 Added ref here
     required String rideType,
     String note = '',
   }) async {
@@ -88,6 +99,7 @@ class RiderDashboardController
     if (currentUid == null) throw Exception('User not logged in');
 
     try {
+      // 🔹 Call requestRide with both params
       await RideService().requestRide({
         'pickup': pickup,
         'dropoff': dropoff,
@@ -101,13 +113,16 @@ class RiderDashboardController
         'riderId': currentUid,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
-      });
+      }, ref);
+
+      // 🔹 Optionally fetch latest ride to sync controller state
       final latest = await fire
           .collection('rides')
           .where('riderId', isEqualTo: currentUid)
           .orderBy('createdAt', descending: true)
           .limit(1)
           .get();
+
       if (latest.docs.isNotEmpty) {
         state = AsyncData({
           'id': latest.docs.first.id,

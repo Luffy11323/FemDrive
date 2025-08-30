@@ -1,10 +1,13 @@
 // ignore_for_file: unused_import
 
 import 'dart:convert';
+import 'package:femdrive/rider/nearby_drivers_service.dart';
+import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
@@ -13,7 +16,6 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:logger/logger.dart';
 import '../location/directions_service.dart';
-import 'nearby_drivers_service.dart';
 import 'package:femdrive/widgets/payment_services.dart';
 import '../rating_service.dart';
 
@@ -21,6 +23,14 @@ const String googleApiKey = String.fromEnvironment(
   'GOOGLE_API_KEY',
   defaultValue: '',
 );
+// Top-level provider
+final nearbyDriversProvider =
+    StreamProvider.family<List<Map<String, dynamic>>, LatLng>((
+      ref,
+      riderLocation,
+    ) {
+      return NearbyDriversService().streamNearbyDrivers(riderLocation);
+    });
 
 class MapService {
   final poly = PolylinePoints(apiKey: googleApiKey);
@@ -141,36 +151,54 @@ class RideService {
   final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
 
-  Future<void> requestRide(Map<String, dynamic> rideData) async {
+  Future<void> requestRide(Map<String, dynamic> rideData, WidgetRef ref) async {
     try {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
+
       rideData['riderId'] = currentUid;
       rideData['status'] = 'pending';
       rideData['createdAt'] = FieldValue.serverTimestamp();
 
+      // Save ride to Firestore
       final rideRef = await _firestore.collection('rides').add(rideData);
       final rideId = rideRef.id;
+
+      // Mirror ride in Realtime DB
       await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
         ...rideData,
       });
 
-      // Notify nearby drivers
-      final pickupLoc = GeoPoint(rideData['pickupLat'], rideData['pickupLng']);
-      final nearbyDrivers = await NearbyDriversService().getNearbyDrivers(
-        LatLng(pickupLoc.latitude, pickupLoc.longitude),
-        rideData['rideType'],
+      // --- 🔹 Subscribe to nearby drivers live stream ---
+      final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
+
+      ref.listen<AsyncValue<List<Map<String, dynamic>>>>(
+        nearbyDriversProvider(pickupLoc),
+        (previous, next) async {
+          next.whenData((nearbyDrivers) async {
+            _logger.i("Nearby drivers updated: $nearbyDrivers");
+
+            // Update dashboard state
+            ref
+                .read(riderDashboardProvider.notifier)
+                .updateNearbyDrivers(nearbyDrivers);
+
+            // Push notifications to drivers
+            for (var driver in nearbyDrivers) {
+              await _rtdb
+                  .child('driver_notifications/${driver['id']}/$rideId')
+                  .set({
+                    'rideId': rideId,
+                    'pickup': rideData['pickup'],
+                    'dropoff': rideData['dropoff'],
+                    'fare': rideData['fare'],
+                    'timestamp': ServerValue.timestamp,
+                  });
+            }
+          });
+        },
       );
-      for (var driver in nearbyDrivers) {
-        await _rtdb.child('driver_notifications/${driver['uid']}/$rideId').set({
-          'rideId': rideId,
-          'pickup': rideData['pickup'],
-          'dropoff': rideData['dropoff'],
-          'fare': rideData['fare'],
-          'timestamp': ServerValue.timestamp,
-        });
-      }
     } catch (e) {
       _logger.e('Failed to request ride: $e');
       throw Exception('Unable to request ride: $e');
