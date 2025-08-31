@@ -20,7 +20,7 @@ import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:carousel_slider/carousel_slider.dart';
+import 'package:carousel_slider/carousel_slider.dart' as cs;
 import 'package:shimmer/shimmer.dart'; // Add to pubspec.yaml
 // For Timer (already imported)
 import 'package:geocoding/geocoding.dart';
@@ -193,8 +193,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           padding: EdgeInsets.all(16),
           children: [
             // Ride Type Slider
-            CarouselSlider(
-              options: CarouselOptions(
+            cs.CarouselSlider(
+              options: cs.CarouselOptions(
                 height: 80,
                 enlargeCenterPage: true,
                 enableInfiniteScroll: false,
