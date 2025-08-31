@@ -91,7 +91,7 @@ class RiderDashboardController
     double fare,
     GeoPoint pickupLocation,
     GeoPoint dropoffLocation,
-    WidgetRef ref, { // 🔹 Added ref here
+    WidgetRef ref, {
     required String rideType,
     String note = '',
   }) async {
@@ -99,7 +99,10 @@ class RiderDashboardController
     if (currentUid == null) throw Exception('User not logged in');
 
     try {
-      // 🔹 Call requestRide with both params
+      if (fare <= 0) {
+        _logger.e('Invalid fare: $fare');
+        throw Exception('Invalid fare amount');
+      }
       await RideService().requestRide({
         'pickup': pickup,
         'dropoff': dropoff,
@@ -115,7 +118,6 @@ class RiderDashboardController
         'createdAt': FieldValue.serverTimestamp(),
       }, ref);
 
-      // 🔹 Optionally fetch latest ride to sync controller state
       final latest = await fire
           .collection('rides')
           .where('riderId', isEqualTo: currentUid)
@@ -124,6 +126,9 @@ class RiderDashboardController
           .get();
 
       if (latest.docs.isNotEmpty) {
+        _logger.i(
+          'Ride created: ${latest.docs.first.id}, Type: $rideType, Fare: $fare',
+        );
         state = AsyncData({
           'id': latest.docs.first.id,
           'pickup': pickup,
@@ -139,8 +144,8 @@ class RiderDashboardController
         });
       }
     } catch (e, st) {
-      state = AsyncError(e, st);
       _logger.e('Failed to create ride: $e', stackTrace: st);
+      state = AsyncError(e, st);
       throw Exception('Unable to create ride: $e');
     }
   }

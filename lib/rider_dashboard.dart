@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/location/directions_service.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
@@ -19,7 +20,13 @@ import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:carousel_slider/carousel_slider.dart';
+import 'package:shimmer/shimmer.dart'; // Add to pubspec.yaml
+// For Timer (already imported)
+import 'package:geocoding/geocoding.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+final String googleApiKey = dotenv.env['GOOGLE_API_KEY'] ?? '';
 final connectivityProvider = StreamProvider<ConnectivityResult>((ref) {
   return Connectivity().onConnectivityChanged.cast<ConnectivityResult>();
 });
@@ -29,14 +36,14 @@ final locationPermissionProvider = FutureProvider<bool>((ref) async {
   return permission == PermissionStatus.granted;
 });
 
-/// Provides nearby online drivers (live updates) for the map overlay
 final nearbyDriversProvider =
-    StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) async* {
-      final loc = await MapService().currentLocation();
-      yield* NearbyDriversService().streamNearbyDrivers(loc);
+    StreamProvider.family<List<Map<String, dynamic>>, LatLng>((
+      ref,
+      center,
+    ) async* {
+      yield* NearbyDriversService().streamNearbyDrivers(center);
     });
 
-/// Rider Dashboard Main Page
 class RiderDashboard extends ConsumerStatefulWidget {
   const RiderDashboard({super.key});
 
@@ -48,17 +55,17 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   final _logger = Logger();
   GoogleMapController? _mapController;
   LatLng? _currentLocation;
-
   final _pickupController = TextEditingController();
   final _dropoffController = TextEditingController();
   Set<Polyline> _polylines = {};
-
   double? _fare;
   int? _eta;
-  double? _distanceKm;
-
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
+  String _selectedRideType = 'Economy';
+  final List<String> _rideTypes = ['Economy', 'Premium', 'SUV'];
+  bool _isLoadingRoute = false;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
@@ -70,6 +77,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   void dispose() {
     _pickupController.dispose();
     _dropoffController.dispose();
+    _debounceTimer?.cancel();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -77,8 +86,27 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     try {
       final loc = await MapService().currentLocation();
       setState(() => _currentLocation = loc);
+
+      // Reverse geocode for default pickup address
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        loc.latitude,
+        loc.longitude,
+      );
+      if (placemarks.isNotEmpty) {
+        _pickupController.text =
+            '${placemarks[0].name ?? ''}, ${placemarks[0].locality ?? ''}, ${placemarks[0].country ?? ''}';
+        _pickupLatLng = loc;
+        _updateNearbyDrivers(loc);
+      }
+      await _panTo(loc);
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
+      if (context.mounted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Location error: $e')));
+      }
     }
   }
 
@@ -91,36 +119,37 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
   }
 
+  void _updateNearbyDrivers(LatLng center) {
+    ref.read(nearbyDriversProvider(center));
+  }
+
   Future<void> _updateRouteAndFare() async {
-    if (_pickupLatLng == null || _dropoffLatLng == null) return;
-
-    try {
-      final routePoints = await MapService().getRoute(
-        _pickupLatLng!,
-        _dropoffLatLng!,
-      );
-
-      final result = await MapService().getRateAndEta(
-        _pickupController.text.trim(),
-        _dropoffController.text.trim(),
-        'Economy',
-      );
-
-      setState(() {
-        _fare = result['total']?.toDouble();
-        _eta = result['etaMinutes']?.toInt();
-        _distanceKm = result['distanceKm']?.toDouble();
-        _polylines = {
-          Polyline(
-            polylineId: const PolylineId('route'),
-            points: routePoints,
-            color: Colors.blue,
-            width: 5,
-          ),
-        };
-      });
-
-      if (_mapController != null) {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(Duration(milliseconds: 500), () async {
+      if (_pickupLatLng == null || _dropoffLatLng == null) return;
+      setState(() => _isLoadingRoute = true);
+      try {
+        final routePoints = await MapService().getRoute(
+          _pickupLatLng!,
+          _dropoffLatLng!,
+        );
+        final result = await MapService().getRateAndEtaFromCoords(
+          _pickupLatLng!,
+          _dropoffLatLng!,
+          _selectedRideType,
+        );
+        setState(() {
+          _fare = result['total'];
+          _eta = result['etaMinutes'];
+          _polylines = {
+            Polyline(
+              polylineId: PolylineId('route'),
+              points: routePoints,
+              color: Colors.blue,
+              width: 5,
+            ),
+          };
+        });
         final bounds = LatLngBounds(
           southwest: LatLng(
             min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
@@ -131,121 +160,265 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
           ),
         );
-        await _mapController!.animateCamera(
+        await _mapController?.animateCamera(
           CameraUpdate.newLatLngBounds(bounds, 50),
         );
+      } catch (e) {
+        _logger.e('Failed to update route/fare: $e');
+        if (context.mounted) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Route error: $e')));
+        }
+      } finally {
+        setState(() => _isLoadingRoute = false);
       }
-    } catch (e) {
-      _logger.e('Failed to update route/fare: $e');
-    }
+    });
   }
 
   Widget _buildLocationPicker() {
-    Widget buildTypeAheadField({
-      required TextEditingController controller,
-      required String label,
-      required bool isPickup,
-    }) {
-      return TypeAheadField<String>(
-        builder: (context, controllerWidget, focusNode) {
-          controllerWidget.text = controller.text;
-          return TextField(
-            controller: controller,
-            focusNode: focusNode,
-            decoration: InputDecoration(
-              labelText: label,
-              border: const OutlineInputBorder(),
+    return DraggableScrollableSheet(
+      initialChildSize: 0.3,
+      minChildSize: 0.1,
+      maxChildSize: 0.6,
+      builder: (_, controller) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: [BoxShadow(blurRadius: 10, color: Colors.black26)],
+        ),
+        child: ListView(
+          controller: controller,
+          padding: EdgeInsets.all(16),
+          children: [
+            // Ride Type Slider
+            CarouselSlider(
+              options: CarouselOptions(
+                height: 80,
+                enlargeCenterPage: true,
+                enableInfiniteScroll: false,
+                onPageChanged: (index, _) =>
+                    setState(() => _selectedRideType = _rideTypes[index]),
+              ),
+              items: _rideTypes
+                  .map(
+                    (type) => Card(
+                      elevation: 4,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      color: _selectedRideType == type
+                          ? Colors.blueAccent
+                          : Colors.grey[200],
+                      child: Center(
+                        child: Text(
+                          type,
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: _selectedRideType == type
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
             ),
-            onChanged: (value) async {
-              if (value.trim().isEmpty) return;
-              try {
-                final latLng = await GeocodingService.getLatLngFromAddress(
-                  value.trim(),
-                );
-                if (latLng != null) {
-                  setState(() {
-                    if (isPickup) {
-                      _pickupLatLng = latLng;
-                    } else {
-                      _dropoffLatLng = latLng;
-                    }
-                  });
-                  await _updateRouteAndFare();
-                  await _panTo(latLng);
-                }
-              } catch (e) {
-                _logger.e('Failed to update $label LatLng: $e');
-              }
-            },
-          );
-        },
-        suggestionsCallback: (query) async {
-          if (query.isEmpty || _currentLocation == null) return [];
-          try {
-            return await MapService().getPlaceSuggestions(
-              query,
-              _currentLocation!.latitude,
-              _currentLocation!.longitude,
-            );
-          } catch (e) {
-            _logger.e('Autocomplete error: $e');
-            return [];
-          }
-        },
-        itemBuilder: (context, suggestion) => ListTile(title: Text(suggestion)),
-        onSelected: (suggestion) async {
-          controller.text = suggestion;
-          try {
-            final latLng = await GeocodingService.getLatLngFromAddress(
-              suggestion,
-            );
-            if (latLng != null) {
-              setState(() {
-                if (isPickup) {
-                  _pickupLatLng = latLng;
-                } else {
-                  _dropoffLatLng = latLng;
-                }
-              });
-              await _updateRouteAndFare();
-              await _panTo(latLng);
-            }
-          } catch (e) {
-            _logger.e('Failed to set $label LatLng on selection: $e');
-          }
-        },
-      );
-    }
+            SizedBox(height: 16),
 
-    return Column(
-      children: [
-        buildTypeAheadField(
-          controller: _pickupController,
-          label: 'Pickup Location',
-          isPickup: true,
+            // Pickup Autocomplete
+            TypeAheadField<Map<String, String>>(
+              builder: (context, controller, focusNode) {
+                return TextField(
+                  controller: _pickupController,
+                  focusNode: focusNode,
+                  decoration: InputDecoration(
+                    hintText: 'Pickup Location',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                );
+              },
+              suggestionsCallback: (pattern) async {
+                if (pattern.length < 3) return [];
+                return await DirectionsService.getAutocompleteSuggestions(
+                  pattern,
+                  _currentLocation ?? LatLng(37.7749, -122.4194),
+                );
+              },
+              itemBuilder: (context, suggestion) =>
+                  ListTile(title: Text(suggestion['description'] ?? '')),
+              onSelected: (suggestion) async {
+                try {
+                  final placeId = suggestion['placeId']!;
+                  final coords = await DirectionsService.getPlaceCoordinates(
+                    placeId,
+                  );
+                  if (coords != null) {
+                    _pickupLatLng = coords;
+                    _pickupController.text = suggestion['description']!;
+                    setState(() {});
+                    await _panTo(_pickupLatLng);
+                    _updateNearbyDrivers(_pickupLatLng!);
+                    if (_dropoffLatLng != null) await _updateRouteAndFare();
+                  }
+                } catch (e) {
+                  _logger.e('Failed to set pickup location: $e');
+                  if (context.mounted) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('Pickup error: $e')));
+                  }
+                }
+              },
+            ),
+            SizedBox(height: 8),
+
+            // Dropoff Autocomplete
+            TypeAheadField<Map<String, String>>(
+              builder: (context, controller, focusNode) {
+                return TextField(
+                  controller: _dropoffController,
+                  focusNode: focusNode,
+                  decoration: InputDecoration(
+                    hintText: 'Dropoff Location',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                );
+              },
+              suggestionsCallback: (pattern) async {
+                if (pattern.length < 3) return [];
+                return await DirectionsService.getAutocompleteSuggestions(
+                  pattern,
+                  _pickupLatLng ??
+                      _currentLocation ??
+                      LatLng(37.7749, -122.4194),
+                );
+              },
+              itemBuilder: (context, suggestion) =>
+                  ListTile(title: Text(suggestion['description'] ?? '')),
+              onSelected: (suggestion) async {
+                try {
+                  final placeId = suggestion['placeId']!;
+                  final coords = await DirectionsService.getPlaceCoordinates(
+                    placeId,
+                  );
+                  if (coords != null) {
+                    _dropoffLatLng = coords;
+                    _dropoffController.text = suggestion['description']!;
+                    setState(() {});
+                    await _panTo(_dropoffLatLng);
+                    if (_pickupLatLng != null) await _updateRouteAndFare();
+                  }
+                } catch (e) {
+                  _logger.e('Failed to set dropoff location: $e');
+                  if (context.mounted) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Dropoff error: $e')),
+                    );
+                  }
+                }
+              },
+            ),
+            SizedBox(height: 16),
+
+            // Request Button with loading
+            ElevatedButton(
+              onPressed:
+                  (_pickupLatLng != null &&
+                      _dropoffLatLng != null &&
+                      !_isLoadingRoute)
+                  ? () async {
+                      try {
+                        await ref
+                            .read(riderDashboardProvider.notifier)
+                            .createRide(
+                              _pickupController.text,
+                              _dropoffController.text,
+                              _fare ?? 0.0,
+                              GeoPoint(
+                                _pickupLatLng!.latitude,
+                                _pickupLatLng!.longitude,
+                              ),
+                              GeoPoint(
+                                _dropoffLatLng!.latitude,
+                                _dropoffLatLng!.longitude,
+                              ),
+                              ref,
+                              rideType: _selectedRideType,
+                            );
+                        if (context.mounted) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Ride requested!')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+                        }
+                      }
+                    }
+                  : null,
+              style: ElevatedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: _isLoadingRoute
+                  ? CircularProgressIndicator()
+                  : Text('Request Ride'),
+            ),
+
+            // Fare and ETA Display
+            if (_fare != null && _eta != null)
+              Padding(
+                padding: EdgeInsets.only(top: 16),
+                child: Text(
+                  'Estimated Fare: \$${_fare!.toStringAsFixed(2)} | ETA: $_eta min',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+          ],
         ),
-        const SizedBox(height: 8),
-        buildTypeAheadField(
-          controller: _dropoffController,
-          label: 'Dropoff Location',
-          isPickup: false,
-        ),
-      ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final ridesAsync = ref.watch(riderDashboardProvider);
+    ref.watch(riderDashboardProvider);
+    final connectivityAsync = ref.watch(connectivityProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Rider Dashboard')),
+      appBar: AppBar(
+        title: const Text('Rider Dashboard'),
+        elevation: 0,
+        backgroundColor: Theme.of(context).primaryColor,
+      ),
       drawer: _buildDrawer(context),
       body: Stack(
         children: [
           Consumer(
             builder: (context, ref, _) {
-              final nearbyAsync = ref.watch(nearbyDriversProvider);
+              final nearbyAsync = ref.watch(
+                nearbyDriversProvider(
+                  _pickupLatLng ??
+                      _currentLocation ??
+                      LatLng(37.7749, -122.4194),
+                ),
+              );
               return nearbyAsync.when(
                 data: (drivers) => GoogleMap(
                   initialCameraPosition: CameraPosition(
@@ -256,6 +429,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   onMapCreated: (controller) => _mapController = controller,
                   myLocationEnabled: true,
                   myLocationButtonEnabled: true,
+                  trafficEnabled: true,
                   markers: {
                     if (_currentLocation != null)
                       Marker(
@@ -284,148 +458,44 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     ...drivers.map((d) {
                       final gp = d['location'];
                       return Marker(
-                        markerId: MarkerId(
-                          d['uid'] ?? d['id'] ?? UniqueKey().toString(),
-                        ),
+                        markerId: MarkerId(d['id'] ?? UniqueKey().toString()),
                         position: LatLng(gp.latitude, gp.longitude),
                         icon: BitmapDescriptor.defaultMarkerWithHue(
                           BitmapDescriptor.hueOrange,
+                        ),
+                        infoWindow: InfoWindow(
+                          title: d['username'] ?? 'Driver',
                         ),
                       );
                     }),
                   },
                   polylines: _polylines,
                 ),
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, st) => Center(child: Text("Map error: $e")),
+                loading: () => Shimmer.fromColors(
+                  baseColor: Colors.grey[300]!,
+                  highlightColor: Colors.grey[100]!,
+                  child: Container(color: Colors.white),
+                ),
+                error: (e, _) => Center(child: Text('Map error: $e')),
               );
             },
           ),
-
-          if (_fare != null && _eta != null && _distanceKm != null)
+          if (connectivityAsync.asData?.value == ConnectivityResult.none)
             Positioned(
-              top: 80,
-              left: 16,
-              right: 16,
-              child: Card(
-                color: Colors.white70,
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      Text('Fare: \$${_fare!.toStringAsFixed(2)}'),
-                      Text('ETA: ${_eta!} min'),
-                      Text('Distance: ${_distanceKm!.toStringAsFixed(1)} km'),
-                    ],
-                  ),
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                color: Colors.red,
+                padding: EdgeInsets.all(8),
+                child: Text(
+                  'Offline: Please check your network',
+                  style: TextStyle(color: Colors.white),
                 ),
               ),
             ),
-
-          ridesAsync.when(
-            data: (rideData) {
-              if (rideData == null || rideData.isEmpty) {
-                return const SizedBox.shrink();
-              }
-
-              final ride = rideData;
-              final status = (ride['status'] ?? '').toString();
-
-              return Stack(
-                children: [
-                  Align(
-                    alignment: Alignment.topCenter,
-                    child: RideStatusWidget(ride: ride),
-                  ),
-                  if (ride['driverId'] != null)
-                    Align(
-                      alignment: Alignment.topRight,
-                      child: DriverDetailsWidget(driverId: ride['driverId']),
-                    ),
-                  if (ride['counterFare'] != null &&
-                      status != 'completed' &&
-                      status != 'cancelled')
-                    Align(
-                      alignment: Alignment.center,
-                      child: CounterFareWidget(rideId: ride['id']),
-                    ),
-                  if (status == 'accepted' ||
-                      status == 'in_progress' ||
-                      status == 'onTrip')
-                    Positioned(
-                      bottom: 160,
-                      right: 16,
-                      child: ShareTripButton(rideId: ride['id']),
-                    ),
-                  if (status != 'completed' && status != 'cancelled')
-                    Positioned(
-                      bottom: 100,
-                      right: 16,
-                      child: SOSButton(ride: ride),
-                    ),
-                  if (status == 'completed')
-                    Align(
-                      alignment: Alignment.bottomCenter,
-                      child: ReceiptWidget(ride: ride),
-                    ),
-                ],
-              );
-            },
-            loading: () => const SizedBox.shrink(),
-            error: (e, st) => const SizedBox.shrink(),
-          ),
-
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: DraggableScrollableSheet(
-              initialChildSize: 0.35,
-              minChildSize: 0.2,
-              maxChildSize: 0.88,
-              builder: (_, controller) => RideForm(
-                mapController: _mapController,
-                scrollController: controller,
-                currentLocation: _currentLocation,
-                pickupController: _pickupController,
-                dropoffController: _dropoffController,
-                onFareUpdated:
-                    (fare, eta, distanceKm, routePoints, {pickup, dropoff}) {
-                      setState(() {
-                        _fare = fare;
-                        _eta = eta;
-                        _distanceKm = distanceKm;
-                        if (pickup != null) _pickupLatLng = pickup;
-                        if (dropoff != null) _dropoffLatLng = dropoff;
-                        _polylines = {
-                          Polyline(
-                            polylineId: const PolylineId('route'),
-                            points: routePoints,
-                            color: Colors.blue,
-                            width: 5,
-                          ),
-                        };
-                      });
-                    },
-              ),
-            ),
-          ),
+          _buildLocationPicker(),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          showModalBottomSheet(
-            context: context,
-            builder: (context) => Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: _buildLocationPicker(),
-            ),
-          );
-        },
-        child: const Icon(Icons.add_location),
       ),
     );
   }
@@ -546,12 +616,19 @@ class _RideFormState extends ConsumerState<RideForm> {
 
   Timer? _debouncePickup;
   Timer? _debounceDropoff;
+  Timer? _debounceTimer;
+
+  GoogleMapController? _mapController;
+  Set<Polyline> _polylines = {};
+  Set<Marker> _markers = {};
+  bool _isLoadingRoute = false;
 
   @override
   void initState() {
     super.initState();
     _pickupController = widget.pickupController ?? TextEditingController();
     _dropoffController = widget.dropoffController ?? TextEditingController();
+    _mapController = widget.mapController;
 
     // Debounced listeners for live address changes
     _pickupController.addListener(() {
@@ -581,24 +658,6 @@ class _RideFormState extends ConsumerState<RideForm> {
     if (widget.dropoffController == null) _dropoffController.dispose();
     _noteController.dispose();
     super.dispose();
-  }
-
-  Future<List<String>> _fetchSuggestions(String query) async {
-    if (query.isEmpty) return [];
-
-    try {
-      final currentLat = widget.currentLocation?.latitude ?? 0.0;
-      final currentLng = widget.currentLocation?.longitude ?? 0.0;
-      final suggestions = await MapService().getPlaceSuggestions(
-        query,
-        currentLat,
-        currentLng,
-      );
-      return suggestions;
-    } catch (e) {
-      _logger.e('Failed to fetch suggestions: $e');
-      return [];
-    }
   }
 
   Future<void> _updatePickupLatLngLive() async {
@@ -634,9 +693,9 @@ class _RideFormState extends ConsumerState<RideForm> {
   }
 
   Future<void> _panTo(LatLng? pos) async {
-    if (pos == null || widget.mapController == null) return;
+    if (pos == null) return;
     try {
-      await widget.mapController!.animateCamera(
+      await (_mapController ?? widget.mapController)?.animateCamera(
         CameraUpdate.newLatLngZoom(pos, 15),
       );
     } catch (e) {
@@ -644,36 +703,61 @@ class _RideFormState extends ConsumerState<RideForm> {
     }
   }
 
-  Future<void> _updateRouteAndFare({bool sendMarkers = false}) async {
-    if (_pickupLatLng == null || _dropoffLatLng == null) return;
+  Future<void> _updateRouteAndFare({bool sendMarkers = true}) async {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
+      if (_pickupLatLng == null || _dropoffLatLng == null) return;
 
-    try {
-      final routePoints = await MapService().getRoute(
-        _pickupLatLng!,
-        _dropoffLatLng!,
-      );
-      final result = await MapService().getRateAndEta(
-        _pickupController.text.trim(),
-        _dropoffController.text.trim(),
-        _selectedRideType ?? 'Economy',
-      );
+      setState(() => _isLoadingRoute = true);
 
-      setState(() {
-        _fare = result['total']?.toDouble();
-        _eta = result['etaMinutes']?.toInt();
-        _distanceKm = result['distanceKm']?.toDouble();
-      });
+      try {
+        final routePoints = await MapService().getRoute(
+          _pickupLatLng!,
+          _dropoffLatLng!,
+        );
+        final result = await MapService().getRateAndEtaFromCoords(
+          _pickupLatLng!,
+          _dropoffLatLng!,
+          _selectedRideType!,
+        );
 
-      widget.onFareUpdated?.call(
-        _fare ?? 0,
-        _eta ?? 0,
-        _distanceKm ?? 0,
-        routePoints,
-        pickup: sendMarkers ? _pickupLatLng : null,
-        dropoff: sendMarkers ? _dropoffLatLng : null,
-      );
+        setState(() {
+          _fare = result['total'];
+          _eta = result['etaMinutes'];
+          _distanceKm = result['distanceKm'];
 
-      if (widget.mapController != null) {
+          _polylines = {
+            Polyline(
+              polylineId: const PolylineId('route'),
+              points: routePoints,
+              color: Colors.blue,
+              width: 5,
+            ),
+          };
+
+          if (sendMarkers) {
+            _markers = {
+              Marker(
+                markerId: const MarkerId('pickup'),
+                position: _pickupLatLng!,
+              ),
+              Marker(
+                markerId: const MarkerId('dropoff'),
+                position: _dropoffLatLng!,
+              ),
+            };
+          }
+        });
+
+        widget.onFareUpdated?.call(
+          _fare!,
+          _eta!,
+          _distanceKm!,
+          routePoints,
+          pickup: _pickupLatLng,
+          dropoff: _dropoffLatLng,
+        );
+
         final bounds = LatLngBounds(
           southwest: LatLng(
             min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
@@ -684,13 +768,22 @@ class _RideFormState extends ConsumerState<RideForm> {
             max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
           ),
         );
-        await widget.mapController!.animateCamera(
+
+        await (_mapController ?? widget.mapController)?.animateCamera(
           CameraUpdate.newLatLngBounds(bounds, 50),
         );
+      } catch (e) {
+        _logger.e('Failed to update route/fare: $e');
+        if (context.mounted) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Route error: $e')));
+        }
+      } finally {
+        setState(() => _isLoadingRoute = false);
       }
-    } catch (e) {
-      _logger.e('Route/fare update failed: $e');
-    }
+    });
   }
 
   Future<void> _requestRide() async {
@@ -726,7 +819,7 @@ class _RideFormState extends ConsumerState<RideForm> {
       }
 
       if (context.mounted) {
-        // ignore: use_build_context_synchronously
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Ride requested successfully')),
         );
@@ -742,176 +835,134 @@ class _RideFormState extends ConsumerState<RideForm> {
     return Material(
       elevation: 8,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      child: SingleChildScrollView(
-        controller: widget.scrollController,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Container(
-              width: 44,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(2),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 250,
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: widget.currentLocation ?? const LatLng(0, 0),
+                zoom: 12,
               ),
+              polylines: _polylines,
+              markers: _markers,
+              onMapCreated: (controller) {
+                _mapController = controller;
+              },
+              myLocationEnabled: true,
+              myLocationButtonEnabled: true,
+              zoomControlsEnabled: false,
             ),
-
-            /// Pickup
-            TypeAheadField<String>(
-              suggestionsCallback: _fetchSuggestions,
-              builder: (context, controllerWidget, focusNode) {
-                controllerWidget.text = _pickupController.text;
-                return TextField(
-                  controller: _pickupController,
-                  focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    labelText: 'Pickup Location',
-                    border: OutlineInputBorder(),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              controller: widget.scrollController,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                );
-              },
-              itemBuilder: (context, suggestion) =>
-                  ListTile(title: Text(suggestion)),
-              onSelected: (suggestion) async {
-                _pickupController.text = suggestion;
-                _pickupLatLng = await GeocodingService.getLatLngFromAddress(
-                  suggestion,
-                );
-                if (_pickupLatLng != null) {
-                  await _updateRouteAndFare(sendMarkers: true);
-                  await _panTo(_pickupLatLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate pickup address',
-                  );
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-
-            /// Dropoff
-            TypeAheadField<String>(
-              suggestionsCallback: _fetchSuggestions,
-              builder: (context, controllerWidget, focusNode) {
-                controllerWidget.text = _dropoffController.text;
-                return TextField(
-                  controller: _dropoffController,
-                  focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    labelText: 'Dropoff Location',
-                    border: OutlineInputBorder(),
+                  // Pickup Address Field
+                  TextFormField(
+                    controller: _pickupController,
+                    decoration: const InputDecoration(
+                      labelText: 'Pickup Location',
+                      prefixIcon: Icon(Icons.my_location),
+                    ),
                   ),
-                );
-              },
-              itemBuilder: (context, suggestion) =>
-                  ListTile(title: Text(suggestion)),
-              onSelected: (suggestion) async {
-                _dropoffController.text = suggestion;
-                _dropoffLatLng = await GeocodingService.getLatLngFromAddress(
-                  suggestion,
-                );
-                if (_dropoffLatLng != null) {
-                  await _updateRouteAndFare(sendMarkers: true);
-                  await _panTo(_dropoffLatLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate dropoff address',
-                  );
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-
-            /// Ride Type
-            DropdownButtonFormField<String>(
-              initialValue: _selectedRideType,
-              decoration: const InputDecoration(
-                labelText: 'Ride Type',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                'Economy',
-                'Premium',
-                'XL',
-                'Electric',
-              ].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (v) async {
-                setState(() => _selectedRideType = v);
-                await _updateRouteAndFare();
-              },
-            ),
-            const SizedBox(height: 12),
-
-            /// Payment Method
-            DropdownButtonFormField<String>(
-              initialValue: _selectedPaymentMethod,
-              decoration: const InputDecoration(
-                labelText: 'Payment Method',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                'Cash',
-                'Credit Card',
-                'Wallet',
-              ].map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
-              onChanged: (v) => setState(() => _selectedPaymentMethod = v),
-            ),
-            const SizedBox(height: 12),
-
-            /// Notes
-            TextField(
-              controller: _noteController,
-              decoration: const InputDecoration(
-                labelText: 'Notes (optional)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            /// Buttons
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed:
-                        (_pickupLatLng != null &&
-                            _dropoffLatLng != null &&
-                            _selectedRideType != null)
-                        ? _updateRouteAndFare
-                        : null,
-                    child: const Text('Calculate Fare & Route'),
+                  const SizedBox(height: 12),
+                  // Dropoff Address Field
+                  TextFormField(
+                    controller: _dropoffController,
+                    decoration: const InputDecoration(
+                      labelText: 'Dropoff Location',
+                      prefixIcon: Icon(Icons.location_on),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            ElevatedButton(
-              onPressed:
-                  (_fare != null &&
-                      _pickupLatLng != null &&
-                      _dropoffLatLng != null &&
-                      _selectedPaymentMethod != null)
-                  ? _requestRide
-                  : null,
-              child: Text(
-                _fare == null
-                    ? 'Request Ride'
-                    : 'Request Ride (\$${_fare!.toStringAsFixed(2)})',
+                  const SizedBox(height: 12),
+                  // Ride Type Dropdown
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedRideType,
+                    decoration: const InputDecoration(labelText: 'Ride Type'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'Economy',
+                        child: Text('Economy'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'Premium',
+                        child: Text('Premium'),
+                      ),
+                      DropdownMenuItem(value: 'Luxury', child: Text('Luxury')),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedRideType = value;
+                        _updateRouteAndFare(sendMarkers: false);
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  // Payment Method Dropdown
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedPaymentMethod,
+                    decoration: const InputDecoration(
+                      labelText: 'Payment Method',
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                      DropdownMenuItem(value: 'Card', child: Text('Card')),
+                      DropdownMenuItem(value: 'Wallet', child: Text('Wallet')),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPaymentMethod = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  // Notes Field
+                  TextFormField(
+                    controller: _noteController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Additional Notes',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_fare != null && _eta != null && _distanceKm != null)
+                    Text(
+                      'Fare: \$${_fare!.toStringAsFixed(2)}, ETA: $_eta mins, Distance: ${_distanceKm!.toStringAsFixed(2)} km',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  if (_errorMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Text(
+                        _errorMessage!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: _isLoadingRoute ? null : _requestRide,
+                    child: _isLoadingRoute
+                        ? const CircularProgressIndicator()
+                        : const Text('Request Ride'),
+                  ),
+                ],
               ),
             ),
-
-            if (_errorMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _errorMessage!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

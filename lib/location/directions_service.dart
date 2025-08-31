@@ -9,11 +9,9 @@ class DirectionsService {
   static final _apiKey = dotenv.env['GOOGLE_API_KEY'] ?? '';
   static final _logger = Logger();
 
-  /// In-memory cache to avoid repeated API calls for the same route
   static final Map<String, Map<String, dynamic>> _routeCache = {};
 
-  /// Fetches route between [from] and [to].
-  /// Returns polyline points, ETA (text & seconds), distance (km).
+  /// 🔹 Fetch directions between two coordinates
   static Future<Map<String, dynamic>?> getRoute(
     LatLng from,
     LatLng to, {
@@ -37,12 +35,16 @@ class DirectionsService {
       final res = await http.get(Uri.parse(url));
 
       if (res.statusCode != 200) {
-        throw Exception('Failed to fetch directions: ${res.statusCode}');
+        _logger.e('HTTP error: ${res.statusCode}, ${res.body}');
+        throw Exception(
+          'Failed to fetch directions: ${res.statusCode} - ${res.body}',
+        );
       }
 
       final data = jsonDecode(res.body);
       if ((data['routes'] as List).isEmpty) {
-        throw Exception('No routes found');
+        _logger.e('No routes found: ${data['status']}');
+        throw Exception('No routes found: ${data['status']}');
       }
 
       final route = data['routes'][0];
@@ -69,21 +71,69 @@ class DirectionsService {
       return result;
     } catch (e) {
       _logger.e('DirectionsService: Error fetching route: $e');
-      return null; // Safe failure
+      return null;
     }
   }
 
-  /// Fetches only distance in km (used for fare calc).
+  /// 🔹 Get just the distance
   static Future<double> getDistance(LatLng from, LatLng to) async {
     try {
       final route = await getRoute(from, to, role: 'rider');
       return route?['distanceKm'] ?? 0.0;
     } catch (e) {
-      _logger.w('DirectionsService: Failed to fetch distance: $e');
+      _logger.w('Failed to fetch distance: $e');
       return 0.0;
     }
   }
 
-  /// Clear cache (e.g. when rider starts a new ride)
+  /// 🔹 Autocomplete Places API
+  static Future<List<Map<String, String>>> getAutocompleteSuggestions(
+    String input,
+    LatLng location,
+  ) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+          '?input=${Uri.encodeComponent(input)}'
+          '&location=${location.latitude},${location.longitude}'
+          '&radius=50000'
+          '&key=$_apiKey';
+
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200)
+        throw Exception('Failed to fetch autocomplete');
+
+      final data = jsonDecode(res.body);
+      final predictions = data['predictions'] as List;
+
+      return predictions.map<Map<String, String>>((p) {
+        return {'description': p['description'], 'placeId': p['place_id']};
+      }).toList();
+    } catch (e) {
+      _logger.e('Autocomplete error: $e');
+      return [];
+    }
+  }
+
+  /// 🔹 Get place details using Place ID
+  static Future<LatLng?> getPlaceCoordinates(String placeId) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/place/details/json'
+          '?place_id=$placeId&key=$_apiKey';
+
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200)
+        throw Exception('Failed to fetch place details');
+
+      final data = jsonDecode(res.body);
+      final location = data['result']['geometry']['location'];
+      return LatLng(location['lat'], location['lng']);
+    } catch (e) {
+      _logger.e('Place details error: $e');
+      return null;
+    }
+  }
+
   static void clearCache() => _routeCache.clear();
 }

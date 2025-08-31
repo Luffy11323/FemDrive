@@ -56,26 +56,14 @@ class MapService {
     }
   }
 
-  /// Get route polyline points between two coordinates
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
-      if (googleApiKey.isEmpty) {
-        throw Exception('Google API key is missing or invalid');
-      }
-      final result = await poly.getRouteBetweenCoordinatesV2(
-        request: RoutesApiRequest(
-          origin: PointLatLng(start.latitude, start.longitude),
-          destination: PointLatLng(end.latitude, end.longitude),
-          travelMode: TravelMode.driving,
-        ),
-      );
-      if (result.routes.isEmpty) throw Exception('No route found');
-      final route = result.routes.first;
-      final points = route.polylinePoints ?? [];
-      return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
+      final route = await DirectionsService.getRoute(start, end, role: 'rider');
+      if (route == null) throw Exception('No route found');
+      return route['polyline'] ?? [];
     } catch (e) {
       _logger.e('Failed to fetch route: $e');
-      throw Exception('Unable to load route. Please try again.');
+      throw Exception('Unable to load route: $e');
     }
   }
 
