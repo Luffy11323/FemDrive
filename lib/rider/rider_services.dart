@@ -18,11 +18,10 @@ import 'package:logger/logger.dart';
 import '../location/directions_service.dart';
 import 'package:femdrive/widgets/payment_services.dart';
 import '../rating_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-const String googleApiKey = String.fromEnvironment(
-  'GOOGLE_API_KEY',
-  defaultValue: '',
-);
+final String googleApiKey = dotenv.env['GOOGLE_API_KEY'] ?? '';
+
 // Top-level provider
 final nearbyDriversProvider =
     StreamProvider.family<List<Map<String, dynamic>>, LatLng>((
@@ -56,14 +55,26 @@ class MapService {
     }
   }
 
+  /// Get route polyline points between two coordinates
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
-      final route = await DirectionsService.getRoute(start, end, role: 'rider');
-      if (route == null) throw Exception('No route found');
-      return route['polyline'] ?? [];
+      if (googleApiKey.isEmpty) {
+        throw Exception('Google API key is missing or invalid');
+      }
+      final result = await poly.getRouteBetweenCoordinatesV2(
+        request: RoutesApiRequest(
+          origin: PointLatLng(start.latitude, start.longitude),
+          destination: PointLatLng(end.latitude, end.longitude),
+          travelMode: TravelMode.driving,
+        ),
+      );
+      if (result.routes.isEmpty) throw Exception('No route found');
+      final route = result.routes.first;
+      final points = route.polylinePoints ?? [];
+      return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
     } catch (e) {
       _logger.e('Failed to fetch route: $e');
-      throw Exception('Unable to load route: $e');
+      throw Exception('Unable to load route. Please try again.');
     }
   }
 

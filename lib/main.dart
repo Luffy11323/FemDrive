@@ -7,6 +7,8 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:logger/logger.dart';
 import 'firebase_options.dart';
 import 'theme.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -35,6 +37,25 @@ void main() async {
   await dotenv.load(fileName: '.env');
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  // Initialize location permissions at app startup
+  final logger = Logger();
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    logger.w('Location services disabled');
+    await Geolocator.openLocationSettings();
+  }
+
+  LocationPermission permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      logger.w('Location permission denied');
+    }
+  } else if (permission == LocationPermission.deniedForever) {
+    logger.w('Location permission permanently denied');
+    await Geolocator.openAppSettings();
+  }
 
   runApp(const ProviderScope(child: FemDriveApp()));
 }
