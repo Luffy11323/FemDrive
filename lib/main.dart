@@ -11,7 +11,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:logger/logger.dart';
 import 'firebase_options.dart';
 import 'theme.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:femdrive/extras/help_support_page.dart';
 import 'package:femdrive/extras/payment_page.dart';
 import 'package:femdrive/extras/settings_page.dart';
@@ -34,7 +33,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   // Initialize location permissions at app startup

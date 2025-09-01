@@ -20,7 +20,7 @@ import 'package:femdrive/widgets/payment_services.dart';
 import '../rating_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-final String googleApiKey = dotenv.env['GOOGLE_API_KEY'] ?? '';
+final String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 
 // Top-level provider
 final nearbyDriversProvider =

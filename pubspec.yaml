@@ -64,7 +64,6 @@ dev_dependencies:
 
 flutter:
   assets:
-    - .env
     - car.png
     - bike.png
   uses-material-design: true

@@ -1,12 +1,11 @@
 import 'dart:convert';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 
 class DirectionsService {
-  static final _apiKey = dotenv.env['GOOGLE_API_KEY'] ?? '';
+  static final _apiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
   static final _logger = Logger();
 
   /// In-memory cache to avoid repeated API calls for the same route
