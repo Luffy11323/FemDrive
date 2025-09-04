@@ -112,7 +112,6 @@ class RiderDashboardController
         'note': note,
         'riderId': currentUid,
         'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
       }, ref);
 
       // 🔹 Optionally fetch latest ride to sync controller state

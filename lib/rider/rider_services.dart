@@ -48,27 +48,35 @@ class RideService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      rideData['riderId'] = currentUid;
-      rideData['status'] = 'pending';
-      rideData['createdAt'] = FieldValue.serverTimestamp();
+      // Firestore-specific map
+      final firestoreRide = {
+        ...rideData,
+        'riderId': currentUid,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(), // ✅ Firestore timestamp
+      };
 
       // Save ride to Firestore
-      final rideRef = await _firestore.collection('rides').add(rideData);
+      final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
 
-      // Mirror ride in Realtime DB
-      await _rtdb.child('rides/$currentUid/$rideId').set({
+      // RTDB-specific map
+      final rtdbRide = {
         'id': rideId,
         ...rideData,
-      });
+        'riderId': currentUid,
+        'status': 'pending',
+        'createdAt': ServerValue.timestamp, // ✅ RTDB timestamp
+      };
+
+      // Mirror ride in Realtime DB
+      await _rtdb.child('rides/$currentUid/$rideId').set(rtdbRide);
 
       // --- 🔹 Subscribe to nearby drivers live stream ---
       final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
 
-      // Set the reactive center so nearbyDriversProvider starts streaming
       ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
 
-      // Listen to the reactive provider (no arguments now)
       ref.listen<AsyncValue<List<Map<String, dynamic>>>>(
         nearbyDriversProvider,
         (previous, next) async {
