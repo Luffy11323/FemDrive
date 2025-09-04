@@ -558,7 +558,10 @@ class _RideFormState extends ConsumerState<RideForm> {
   late final TextEditingController _pickupController;
   late final TextEditingController _dropoffController;
   final _noteController = TextEditingController();
-
+  final _pickupFocus = FocusNode();
+  final _dropoffFocus = FocusNode();
+  final _pickupSuggestionsCtl = SuggestionsController<PlacePrediction>();
+  final _dropoffSuggestionsCtl = SuggestionsController<PlacePrediction>();
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
   String? _selectedRideType = 'Economy';
@@ -722,117 +725,143 @@ class _RideFormState extends ConsumerState<RideForm> {
             ),
 
             /// Pickup
-            TypeAheadField<PlacePrediction>(
-              suggestionsCallback: (query) async {
-                if (query.trim().isEmpty) return const [];
-                final lat = widget.currentLocation?.latitude ?? 0.0;
-                final lng = widget.currentLocation?.longitude ?? 0.0;
-                final res = await MapService().getPlaceSuggestions(
-                  query,
-                  lat,
-                  lng,
-                );
-                _logger.i(
-                  '[AC] pickup query="$query" -> ${res.length} results',
-                );
-                return res;
-              },
-              itemBuilder: (context, prediction) =>
-                  ListTile(title: Text(prediction.description)),
-              onSelected: (prediction) async {
-                // keep both controllers in sync
-                _pickupController.text = prediction.description;
+            Material(
+              // ensures ink/taps work above sheets/maps
+              color: Colors.transparent,
+              child: TypeAheadField<PlacePrediction>(
+                // 🔑 make TA listen to YOUR controller & focus node
+                controller: _pickupController,
+                focusNode: _pickupFocus,
+                suggestionsController: _pickupSuggestionsCtl,
 
-                final latLng = await MapService().getLatLngFromPlaceId(
-                  prediction.placeId,
-                );
-                if (latLng != null) {
+                // UX & robustness
+                debounceDuration: const Duration(milliseconds: 250),
+                hideOnEmpty: true,
+                hideOnUnfocus: true,
+                hideWithKeyboard: true,
+                retainOnLoading: true,
+                constraints: const BoxConstraints(maxHeight: 280),
+
+                suggestionsCallback: (query) async {
+                  if (query.trim().isEmpty) return const [];
+                  final lat = widget.currentLocation?.latitude ?? 0.0;
+                  final lng = widget.currentLocation?.longitude ?? 0.0;
+                  final res = await MapService().getPlaceSuggestions(
+                    query,
+                    lat,
+                    lng,
+                  );
+                  _logger.i('[AC] pickup "$query" -> ${res.length}');
+                  return res;
+                },
+
+                itemBuilder: (context, p) => ListTile(
+                  dense: true,
+                  title: Text(
+                    p.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+
+                onSelected: (p) async {
+                  _pickupController.text = p.description; // keep UI in sync
+                  final latLng = await MapService().getLatLngFromPlaceId(
+                    p.placeId,
+                  );
+                  if (latLng == null) {
+                    setState(
+                      () => _errorMessage = 'Failed to locate pickup address',
+                    );
+                    return;
+                  }
                   _pickupLatLng = latLng;
 
-                  // re-center nearby drivers on pickup
+                  // recenter nearby drivers
                   ref.read(driverSearchCenterProvider.notifier).state = latLng;
 
                   await _updateRouteAndFare(sendMarkers: true);
                   await _panTo(latLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate pickup address',
+                },
+
+                // build the text field (use the provided controller/focus)
+                builder: (context, providedController, providedFocusNode) {
+                  return TextField(
+                    controller: providedController,
+                    focusNode: providedFocusNode,
+                    decoration: const InputDecoration(
+                      labelText: 'Pickup Location',
+                      border: OutlineInputBorder(),
+                    ),
                   );
-                }
-              },
-              // IMPORTANT: use the controller provided by TypeAheadField
-              builder: (context, providedController, focusNode) {
-                // (optional) keep provided controller prefilled with your state
-                if (providedController.text != _pickupController.text) {
-                  providedController.text = _pickupController.text;
-                  providedController.selection = TextSelection.fromPosition(
-                    TextPosition(offset: providedController.text.length),
-                  );
-                }
-                return TextField(
-                  controller:
-                      providedController, // <-- use provided, not _pickupController
-                  focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    labelText: 'Pickup Location',
-                    border: OutlineInputBorder(),
-                  ),
-                );
-              },
+                },
+              ),
             ),
             const SizedBox(height: 12),
 
             /// Dropoff
-            TypeAheadField<PlacePrediction>(
-              suggestionsCallback: (query) async {
-                if (query.trim().isEmpty) return const [];
-                final lat = widget.currentLocation?.latitude ?? 0.0;
-                final lng = widget.currentLocation?.longitude ?? 0.0;
-                final res = await MapService().getPlaceSuggestions(
-                  query,
-                  lat,
-                  lng,
-                );
-                _logger.i(
-                  '[AC] dropoff query="$query" -> ${res.length} results',
-                );
-                return res;
-              },
-              itemBuilder: (context, prediction) =>
-                  ListTile(title: Text(prediction.description)),
-              onSelected: (prediction) async {
-                _dropoffController.text = prediction.description;
+            Material(
+              color: Colors.transparent,
+              child: TypeAheadField<PlacePrediction>(
+                controller: _dropoffController,
+                focusNode: _dropoffFocus,
+                suggestionsController: _dropoffSuggestionsCtl,
+                debounceDuration: const Duration(milliseconds: 250),
+                hideOnEmpty: true,
+                hideOnUnfocus: true,
+                hideWithKeyboard: true,
+                retainOnLoading: true,
+                constraints: const BoxConstraints(maxHeight: 280),
 
-                final latLng = await MapService().getLatLngFromPlaceId(
-                  prediction.placeId,
-                );
-                if (latLng != null) {
+                suggestionsCallback: (query) async {
+                  if (query.trim().isEmpty) return const [];
+                  final lat = widget.currentLocation?.latitude ?? 0.0;
+                  final lng = widget.currentLocation?.longitude ?? 0.0;
+                  final res = await MapService().getPlaceSuggestions(
+                    query,
+                    lat,
+                    lng,
+                  );
+                  _logger.i('[AC] dropoff "$query" -> ${res.length}');
+                  return res;
+                },
+
+                itemBuilder: (context, p) => ListTile(
+                  dense: true,
+                  title: Text(
+                    p.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+
+                onSelected: (p) async {
+                  _dropoffController.text = p.description;
+                  final latLng = await MapService().getLatLngFromPlaceId(
+                    p.placeId,
+                  );
+                  if (latLng == null) {
+                    setState(
+                      () => _errorMessage = 'Failed to locate dropoff address',
+                    );
+                    return;
+                  }
                   _dropoffLatLng = latLng;
                   await _updateRouteAndFare(sendMarkers: true);
                   await _panTo(latLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate dropoff address',
+                },
+
+                builder: (context, providedController, providedFocusNode) {
+                  return TextField(
+                    controller: providedController,
+                    focusNode: providedFocusNode,
+                    decoration: const InputDecoration(
+                      labelText: 'Dropoff Location',
+                      border: OutlineInputBorder(),
+                    ),
                   );
-                }
-              },
-              builder: (context, providedController, focusNode) {
-                if (providedController.text != _dropoffController.text) {
-                  providedController.text = _dropoffController.text;
-                  providedController.selection = TextSelection.fromPosition(
-                    TextPosition(offset: providedController.text.length),
-                  );
-                }
-                return TextField(
-                  controller:
-                      providedController, // <-- use provided, not _dropoffController
-                  focusNode: focusNode,
-                  decoration: const InputDecoration(
-                    labelText: 'Dropoff Location',
-                    border: OutlineInputBorder(),
-                  ),
-                );
-              },
+                },
+              ),
             ),
             const SizedBox(height: 12),
 
