@@ -77,32 +77,27 @@ class RideService {
 
       ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
 
-      ref.listen<AsyncValue<List<Map<String, dynamic>>>>(
-        nearbyDriversProvider,
-        (previous, next) async {
-          next.whenData((nearbyDrivers) async {
-            _logger.i("Nearby drivers updated: $nearbyDrivers");
+      ref.read(nearbyDriversProvider.stream).listen((nearbyDrivers) async {
+        _logger.i("Nearby drivers updated: $nearbyDrivers");
 
-            // Update dashboard state
-            ref
-                .read(riderDashboardProvider.notifier)
-                .updateNearbyDrivers(nearbyDrivers);
+        // Update dashboard state
+        ref
+            .read(riderDashboardProvider.notifier)
+            .updateNearbyDrivers(nearbyDrivers);
 
-            // Push notifications to drivers
-            for (var driver in nearbyDrivers) {
-              await _rtdb
-                  .child('driver_notifications/${driver['id']}/$rideId')
-                  .set({
-                    'rideId': rideId,
-                    'pickup': rideData['pickup'],
-                    'dropoff': rideData['dropoff'],
-                    'fare': rideData['fare'],
-                    'timestamp': ServerValue.timestamp,
-                  });
-            }
-          });
-        },
-      );
+        // Push notifications to drivers
+        for (var driver in nearbyDrivers) {
+          await _rtdb
+              .child('driver_notifications/${driver['id']}/$rideId')
+              .set({
+                'rideId': rideId,
+                'pickup': rideData['pickup'],
+                'dropoff': rideData['dropoff'],
+                'fare': rideData['fare'],
+                'timestamp': ServerValue.timestamp,
+              });
+        }
+      });
     } catch (e) {
       _logger.e('Failed to request ride: $e');
       throw Exception('Unable to request ride: $e');
