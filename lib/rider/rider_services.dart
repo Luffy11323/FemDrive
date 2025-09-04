@@ -19,6 +19,7 @@ import '../location/directions_service.dart';
 import 'package:femdrive/widgets/payment_services.dart';
 import '../rating_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
 
 final String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 // A reactive center for driver search (current location or pickup)
@@ -207,19 +208,40 @@ class MapService {
 
   Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
     try {
-      final result = await poly.getRouteBetweenCoordinatesV2(
-        request: RoutesApiRequest(
-          origin: PointLatLng(start.latitude, start.longitude),
-          destination: PointLatLng(end.latitude, end.longitude),
-          travelMode: TravelMode.driving,
-        ),
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/directions/json'
+        '?origin=${start.latitude},${start.longitude}'
+        '&destination=${end.latitude},${end.longitude}'
+        '&mode=driving'
+        '&key=$googleApiKey',
       );
-      if (result.routes.isEmpty) throw Exception('No route found');
-      final points = result.routes.first.polylinePoints ?? [];
-      return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
+
+      final resp = await http.get(url);
+      if (resp.statusCode != 200) {
+        _logger.e('Directions HTTP ${resp.statusCode}: ${resp.body}');
+        return const [];
+      }
+
+      final data = jsonDecode(resp.body);
+      final status = data['status'] as String? ?? 'UNKNOWN';
+      if (status != 'OK') {
+        _logger.e('Directions status=$status msg=${data['error_message']}');
+        return const [];
+      }
+
+      final routes = data['routes'] as List;
+      if (routes.isEmpty) return const [];
+
+      final encoded = routes[0]['overview_polyline']['points'] as String?;
+      if (encoded == null || encoded.isEmpty) return const [];
+
+      final decoded = decodePolyline(encoded); // List<List<num>>
+      return decoded
+          .map((e) => LatLng((e[0]).toDouble(), (e[1]).toDouble()))
+          .toList();
     } catch (e) {
-      _logger.e('Failed to fetch route: $e');
-      throw Exception('Unable to load route. Please try again.');
+      _logger.e('Failed to fetch route (Directions JSON): $e');
+      return const [];
     }
   }
 

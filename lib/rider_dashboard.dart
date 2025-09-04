@@ -658,6 +658,8 @@ class _RideFormState extends ConsumerState<RideForm> {
         _dropoffLatLng!,
         _selectedRideType ?? 'Economy',
       );
+      _logger.i('Route points: ${routePoints.length}');
+      _logger.i('Fare calc: $result');
 
       if (!mounted) return;
       setState(() {
