@@ -77,7 +77,9 @@ class RideService {
 
       ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
 
-      ref.read(nearbyDriversProvider.stream).listen((nearbyDrivers) async {
+      NearbyDriversService().streamNearbyDrivers(pickupLoc).listen((
+        nearbyDrivers,
+      ) async {
         _logger.i("Nearby drivers updated: $nearbyDrivers");
 
         // Update dashboard state
