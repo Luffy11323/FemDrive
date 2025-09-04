@@ -84,6 +84,32 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
   }
 
+  Future<void> _fitToBounds(LatLng a, LatLng b) async {
+    if (_mapController == null) return;
+    var sw = LatLng(
+      a.latitude < b.latitude ? a.latitude : b.latitude,
+      a.longitude < b.longitude ? a.longitude : b.longitude,
+    );
+    var ne = LatLng(
+      a.latitude > b.latitude ? a.latitude : b.latitude,
+      a.longitude > b.longitude ? a.longitude : b.longitude,
+    );
+
+    // nudge if identical
+    if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
+      const d = 0.0005;
+      sw = LatLng(sw.latitude - d, sw.longitude - d);
+      ne = LatLng(ne.latitude + d, ne.longitude + d);
+    }
+
+    await _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(southwest: sw, northeast: ne),
+        72,
+      ),
+    );
+  }
+
   Future<void> _panTo(LatLng? pos) async {
     if (pos == null || _mapController == null) return;
     try {
@@ -287,8 +313,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                               const LatLng(37.7749, -122.4194),
                           zoom: 14,
                         ),
-                        onMapCreated: (controller) =>
-                            _mapController = controller,
+                        padding: EdgeInsets.only(bottom: 260),
+                        onMapCreated: (controller) async {
+                          _mapController = controller;
+                        },
                         myLocationEnabled: true,
                         myLocationButtonEnabled: true,
                         markers: markers,
@@ -417,7 +445,15 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 pickupController: _pickupController,
                 dropoffController: _dropoffController,
                 onFareUpdated:
-                    (fare, eta, distanceKm, routePoints, {pickup, dropoff}) {
+                    (
+                      fare,
+                      eta,
+                      distanceKm,
+                      routePoints, {
+                      pickup,
+                      dropoff,
+                    }) async {
+                      if (!mounted) return;
                       setState(() {
                         _fare = fare;
                         _eta = eta;
@@ -429,10 +465,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             polylineId: const PolylineId('route'),
                             points: routePoints,
                             color: Colors.blue,
-                            width: 5,
+                            width: 6,
+                            startCap: Cap.roundCap,
+                            endCap: Cap.roundCap,
+                            jointType: JointType.round,
                           ),
                         };
                       });
+
+                      // Fit after state is applied
+                      if (_pickupLatLng != null && _dropoffLatLng != null) {
+                        await _fitToBounds(_pickupLatLng!, _dropoffLatLng!);
+                      }
                     },
               ),
             ),
