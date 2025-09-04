@@ -314,9 +314,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           zoom: 14,
                         ),
                         padding: EdgeInsets.only(bottom: 260),
-                        onMapCreated: (controller) async {
-                          _mapController = controller;
-                        },
+                        onMapCreated: (controller) =>
+                            _mapController = controller,
                         myLocationEnabled: true,
                         myLocationButtonEnabled: true,
                         markers: markers,
