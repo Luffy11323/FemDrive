@@ -77,6 +77,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     try {
       final loc = await MapService().currentLocation();
       setState(() => _currentLocation = loc);
+
+      ref.read(driverSearchCenterProvider.notifier).state = loc;
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
     }
@@ -146,39 +148,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       required String label,
       required bool isPickup,
     }) {
-      return TypeAheadField<String>(
-        builder: (context, controllerWidget, focusNode) {
-          controllerWidget.text = controller.text;
-          return TextField(
-            controller: controller,
-            focusNode: focusNode,
-            decoration: InputDecoration(
-              labelText: label,
-              border: const OutlineInputBorder(),
-            ),
-            onChanged: (value) async {
-              if (value.trim().isEmpty) return;
-              try {
-                final latLng = await GeocodingService.getLatLngFromAddress(
-                  value.trim(),
-                );
-                if (latLng != null) {
-                  setState(() {
-                    if (isPickup) {
-                      _pickupLatLng = latLng;
-                    } else {
-                      _dropoffLatLng = latLng;
-                    }
-                  });
-                  await _updateRouteAndFare();
-                  await _panTo(latLng);
-                }
-              } catch (e) {
-                _logger.e('Failed to update $label LatLng: $e');
-              }
-            },
-          );
-        },
+      return TypeAheadField<PlacePrediction>(
         suggestionsCallback: (query) async {
           if (query.isEmpty || _currentLocation == null) return [];
           try {
@@ -192,12 +162,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             return [];
           }
         },
-        itemBuilder: (context, suggestion) => ListTile(title: Text(suggestion)),
-        onSelected: (suggestion) async {
-          controller.text = suggestion;
+        itemBuilder: (context, prediction) =>
+            ListTile(title: Text(prediction.description)),
+        onSelected: (prediction) async {
+          controller.text = prediction.description;
           try {
-            final latLng = await GeocodingService.getLatLngFromAddress(
-              suggestion,
+            final latLng = await MapService().getLatLngFromPlaceId(
+              prediction.placeId,
             );
             if (latLng != null) {
               setState(() {
@@ -213,6 +184,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           } catch (e) {
             _logger.e('Failed to set $label LatLng on selection: $e');
           }
+        },
+        builder: (context, textEditingController, focusNode) {
+          return TextField(
+            controller: controller,
+            focusNode: focusNode,
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+            ),
+          );
         },
       );
     }
@@ -247,16 +228,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             builder: (context, ref, _) {
               final nearbyAsync = ref.watch(nearbyDriversProvider);
               return nearbyAsync.when(
-                data: (drivers) => GoogleMap(
-                  initialCameraPosition: CameraPosition(
-                    target:
-                        _currentLocation ?? const LatLng(37.7749, -122.4194),
-                    zoom: 14,
-                  ),
-                  onMapCreated: (controller) => _mapController = controller,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  markers: {
+                data: (drivers) {
+                  final markers = <Marker>{
                     if (_currentLocation != null)
                       Marker(
                         markerId: const MarkerId("me"),
@@ -281,21 +254,44 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           BitmapDescriptor.hueRed,
                         ),
                       ),
-                    ...drivers.map((d) {
+                    // Nearby driver markers (safe-guard GeoPoint & ids)
+                    ...drivers.where((d) => d['location'] != null).map((d) {
                       final gp = d['location'];
+                      if (gp is! GeoPoint) return null;
+
+                      final id = (d['id'] ?? d['uid'] ?? UniqueKey().toString())
+                          .toString();
+                      final username = (d['username'] ?? 'Driver').toString();
+                      final rating = (d['rating'] ?? '—').toString();
+                      final rideType = (d['rideType'] ?? '—').toString();
+
                       return Marker(
-                        markerId: MarkerId(
-                          d['uid'] ?? d['id'] ?? UniqueKey().toString(),
-                        ),
+                        markerId: MarkerId('driver_$id'),
                         position: LatLng(gp.latitude, gp.longitude),
                         icon: BitmapDescriptor.defaultMarkerWithHue(
                           BitmapDescriptor.hueOrange,
                         ),
+                        infoWindow: InfoWindow(
+                          title: username,
+                          snippet: '⭐ $rating • $rideType',
+                        ),
                       );
-                    }),
-                  },
-                  polylines: _polylines,
-                ),
+                    }).whereType<Marker>(),
+                  };
+
+                  return GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target:
+                          _currentLocation ?? const LatLng(37.7749, -122.4194),
+                      zoom: 14,
+                    ),
+                    onMapCreated: (controller) => _mapController = controller,
+                    myLocationEnabled: true,
+                    myLocationButtonEnabled: true,
+                    markers: markers,
+                    polylines: _polylines,
+                  );
+                },
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, st) => Center(child: Text("Map error: $e")),
               );
@@ -544,93 +540,19 @@ class _RideFormState extends ConsumerState<RideForm> {
   double? _distanceKm;
   String? _errorMessage;
 
-  Timer? _debouncePickup;
-  Timer? _debounceDropoff;
-
   @override
   void initState() {
     super.initState();
     _pickupController = widget.pickupController ?? TextEditingController();
     _dropoffController = widget.dropoffController ?? TextEditingController();
-
-    // Debounced listeners for live address changes
-    _pickupController.addListener(() {
-      _debouncePickup?.cancel();
-      _debouncePickup = Timer(
-        const Duration(milliseconds: 500),
-        _updatePickupLatLngLive,
-      );
-    });
-    _dropoffController.addListener(() {
-      _debounceDropoff?.cancel();
-      _debounceDropoff = Timer(
-        const Duration(milliseconds: 500),
-        _updateDropoffLatLngLive,
-      );
-    });
   }
 
   @override
   void dispose() {
-    _pickupController.removeListener(_updatePickupLatLngLive);
-    _dropoffController.removeListener(_updateDropoffLatLngLive);
-    _debouncePickup?.cancel();
-    _debounceDropoff?.cancel();
-
     if (widget.pickupController == null) _pickupController.dispose();
     if (widget.dropoffController == null) _dropoffController.dispose();
     _noteController.dispose();
     super.dispose();
-  }
-
-  Future<List<String>> _fetchSuggestions(String query) async {
-    if (query.isEmpty) return [];
-
-    try {
-      final currentLat = widget.currentLocation?.latitude ?? 0.0;
-      final currentLng = widget.currentLocation?.longitude ?? 0.0;
-      final suggestions = await MapService().getPlaceSuggestions(
-        query,
-        currentLat,
-        currentLng,
-      );
-      return suggestions;
-    } catch (e) {
-      _logger.e('Failed to fetch suggestions: $e');
-      return [];
-    }
-  }
-
-  Future<void> _updatePickupLatLngLive() async {
-    final text = _pickupController.text.trim();
-    if (text.isEmpty) return;
-
-    try {
-      final latLng = await GeocodingService.getLatLngFromAddress(text);
-      if (latLng != null) {
-        _pickupLatLng = latLng;
-        await _updateRouteAndFare(sendMarkers: true);
-        await _panTo(latLng);
-      }
-    } catch (e) {
-      _logger.e('Pickup update failed: $e');
-    }
-  }
-
-  Future<void> _updateDropoffLatLngLive() async {
-    final text = _dropoffController.text.trim();
-    if (text.isEmpty) return;
-
-    try {
-      final latLng = await GeocodingService.getLatLngFromAddress(text);
-      if (latLng != null) {
-        _dropoffLatLng = latLng;
-        await _updateRouteAndFare(sendMarkers: true);
-        await _panTo(latLng);
-      }
-    } catch (e) {
-      _logger.e('Dropoff update failed: $e');
-    }
   }
 
   Future<void> _panTo(LatLng? pos) async {
@@ -758,10 +680,33 @@ class _RideFormState extends ConsumerState<RideForm> {
             ),
 
             /// Pickup
-            TypeAheadField<String>(
-              suggestionsCallback: _fetchSuggestions,
+            TypeAheadField<PlacePrediction>(
+              suggestionsCallback: (query) async {
+                final lat = widget.currentLocation?.latitude ?? 0.0;
+                final lng = widget.currentLocation?.longitude ?? 0.0;
+                return await MapService().getPlaceSuggestions(query, lat, lng);
+              },
+              itemBuilder: (context, prediction) =>
+                  ListTile(title: Text(prediction.description)),
+              onSelected: (prediction) async {
+                _pickupController.text = prediction.description;
+                final latLng = await MapService().getLatLngFromPlaceId(
+                  prediction.placeId,
+                );
+                if (latLng != null) {
+                  _pickupLatLng = latLng;
+                  // Update center for nearby drivers
+                  ref.read(driverSearchCenterProvider.notifier).state = latLng;
+                  await _updateRouteAndFare(sendMarkers: true);
+                  await _panTo(latLng);
+                } else {
+                  setState(
+                    () => _errorMessage = 'Failed to locate pickup address',
+                  );
+                }
+              },
+
               builder: (context, controllerWidget, focusNode) {
-                controllerWidget.text = _pickupController.text;
                 return TextField(
                   controller: _pickupController,
                   focusNode: focusNode,
@@ -771,30 +716,34 @@ class _RideFormState extends ConsumerState<RideForm> {
                   ),
                 );
               },
-              itemBuilder: (context, suggestion) =>
-                  ListTile(title: Text(suggestion)),
-              onSelected: (suggestion) async {
-                _pickupController.text = suggestion;
-                _pickupLatLng = await GeocodingService.getLatLngFromAddress(
-                  suggestion,
-                );
-                if (_pickupLatLng != null) {
-                  await _updateRouteAndFare(sendMarkers: true);
-                  await _panTo(_pickupLatLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate pickup address',
-                  );
-                }
-              },
             ),
             const SizedBox(height: 12),
 
             /// Dropoff
-            TypeAheadField<String>(
-              suggestionsCallback: _fetchSuggestions,
+            TypeAheadField<PlacePrediction>(
+              suggestionsCallback: (query) async {
+                final lat = widget.currentLocation?.latitude ?? 0.0;
+                final lng = widget.currentLocation?.longitude ?? 0.0;
+                return await MapService().getPlaceSuggestions(query, lat, lng);
+              },
+              itemBuilder: (context, prediction) =>
+                  ListTile(title: Text(prediction.description)),
+              onSelected: (prediction) async {
+                _dropoffController.text = prediction.description;
+                final latLng = await MapService().getLatLngFromPlaceId(
+                  prediction.placeId,
+                );
+                if (latLng != null) {
+                  _dropoffLatLng = latLng;
+                  await _updateRouteAndFare(sendMarkers: true);
+                  await _panTo(latLng);
+                } else {
+                  setState(
+                    () => _errorMessage = 'Failed to locate dropoff address',
+                  );
+                }
+              },
               builder: (context, controllerWidget, focusNode) {
-                controllerWidget.text = _dropoffController.text;
                 return TextField(
                   controller: _dropoffController,
                   focusNode: focusNode,
@@ -803,22 +752,6 @@ class _RideFormState extends ConsumerState<RideForm> {
                     border: OutlineInputBorder(),
                   ),
                 );
-              },
-              itemBuilder: (context, suggestion) =>
-                  ListTile(title: Text(suggestion)),
-              onSelected: (suggestion) async {
-                _dropoffController.text = suggestion;
-                _dropoffLatLng = await GeocodingService.getLatLngFromAddress(
-                  suggestion,
-                );
-                if (_dropoffLatLng != null) {
-                  await _updateRouteAndFare(sendMarkers: true);
-                  await _panTo(_dropoffLatLng);
-                } else {
-                  setState(
-                    () => _errorMessage = 'Failed to locate dropoff address',
-                  );
-                }
               },
             ),
             const SizedBox(height: 12),
@@ -868,24 +801,6 @@ class _RideFormState extends ConsumerState<RideForm> {
               ),
             ),
             const SizedBox(height: 16),
-
-            /// Buttons
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed:
-                        (_pickupLatLng != null &&
-                            _dropoffLatLng != null &&
-                            _selectedRideType != null)
-                        ? _updateRouteAndFare
-                        : null,
-                    child: const Text('Calculate Fare & Route'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
 
             ElevatedButton(
               onPressed:

@@ -21,164 +21,21 @@ import '../rating_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 final String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
+// A reactive center for driver search (current location or pickup)
+final driverSearchCenterProvider = StateProvider<LatLng?>((ref) => null);
 
-// Top-level provider
+// Nearby drivers stream reacts to the center above
 final nearbyDriversProvider =
-    StreamProvider.family<List<Map<String, dynamic>>, LatLng>((
-      ref,
-      riderLocation,
-    ) {
-      return NearbyDriversService().streamNearbyDrivers(riderLocation);
-    });
-
-class MapService {
-  final poly = PolylinePoints(apiKey: googleApiKey);
-  final _logger = Logger();
-
-  /// Unified polyline route
-  Future<List<LatLng>> getRoutePolyline(LatLng start, LatLng end) {
-    return getRoute(start, end);
-  }
-
-  /// Current user location
-  Future<LatLng> currentLocation() async {
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-      return LatLng(position.latitude, position.longitude);
-    } catch (e) {
-      _logger.e('Failed to get current location: $e');
-      throw Exception('Unable to get current location. Check permissions.');
-    }
-  }
-
-  /// Get route polyline points between two coordinates
-  Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
-    try {
-      if (googleApiKey.isEmpty) {
-        throw Exception('Google API key is missing or invalid');
-      }
-      final result = await poly.getRouteBetweenCoordinatesV2(
-        request: RoutesApiRequest(
-          origin: PointLatLng(start.latitude, start.longitude),
-          destination: PointLatLng(end.latitude, end.longitude),
-          travelMode: TravelMode.driving,
-        ),
-      );
-      if (result.routes.isEmpty) throw Exception('No route found');
-      final route = result.routes.first;
-      final points = route.polylinePoints ?? [];
-      return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
-    } catch (e) {
-      _logger.e('Failed to fetch route: $e');
-      throw Exception('Unable to load route. Please try again.');
-    }
-  }
-
-  /// Place suggestions near given lat/lng
-  Future<List<String>> getPlaceSuggestions(
-    String query,
-    double lat,
-    double lng,
-  ) async {
-    try {
-      if (googleApiKey.isEmpty) {
-        _logger.e('Google API key is missing or invalid');
-        throw Exception('Google API key is missing or invalid');
-      }
-      _logger.i('Fetching suggestions for query: $query, location: $lat,$lng');
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/place/autocomplete/json'
-        '?input=${Uri.encodeQueryComponent(query)}'
-        '&location=$lat,$lng'
-        '&radius=50000'
-        '&key=$googleApiKey',
-      );
-      final response = await http.get(url);
-      _logger.i(
-        'Autocomplete response: ${response.statusCode}, ${response.body}',
-      );
-      final data = jsonDecode(response.body);
-      if (data['status'] != 'OK') {
-        _logger.e(
-          'Autocomplete failed: ${data['status']}, ${data['error_message']}',
+    StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
+      final center = ref.watch(driverSearchCenterProvider);
+      if (center == null) {
+        // No center yet → emit empty list once
+        return Stream<List<Map<String, dynamic>>>.value(
+          const <Map<String, dynamic>>[],
         );
-        throw Exception('Autocomplete failed: ${data['error_message']}');
       }
-      final suggestions = (data['predictions'] as List)
-          .map((p) => p['description'] as String)
-          .toList();
-      _logger.i('Suggestions: $suggestions');
-      return suggestions;
-    } catch (e) {
-      _logger.e('Failed to fetch place suggestions: $e');
-      return [];
-    }
-  }
-
-  /// Get Rate + ETA from **addresses** (uses Geocoding)
-  Future<Map<String, dynamic>> getRateAndEta(
-    String pickup,
-    String dropoff,
-    String rideType,
-  ) async {
-    try {
-      final pickupLoc = (await GeocodingService.getLatLngFromAddress(pickup))!;
-      final dropoffLoc = (await GeocodingService.getLatLngFromAddress(
-        dropoff,
-      ))!;
-      return getRateAndEtaFromCoords(pickupLoc, dropoffLoc, rideType);
-    } catch (e) {
-      _logger.e('Failed to get rate and ETA (address): $e');
-      throw Exception('Unable to calculate rate and ETA: $e');
-    }
-  }
-
-  /// Get Rate + ETA directly from **LatLng coords**
-  Future<Map<String, dynamic>> getRateAndEtaFromCoords(
-    LatLng pickup,
-    LatLng dropoff,
-    String rideType,
-  ) async {
-    try {
-      if (googleApiKey.isEmpty) {
-        throw Exception('Google API key is missing or invalid');
-      }
-      final url = Uri.parse(
-        'https://maps.googleapis.com/maps/api/distancematrix/json'
-        '?origins=${pickup.latitude},${pickup.longitude}'
-        '&destinations=${dropoff.latitude},${dropoff.longitude}'
-        '&key=$googleApiKey',
-      );
-      final response = await http.get(url);
-      final data = jsonDecode(response.body);
-      if (data['status'] != 'OK') throw Exception('Distance Matrix failed');
-      final element = data['rows'][0]['elements'][0];
-      if (element['status'] != 'OK') throw Exception('Route unavailable');
-
-      final distanceMeters = element['distance']['value'];
-      final durationSeconds = element['duration']['value'];
-      final distanceKm = distanceMeters / 1000;
-      final etaMinutes = durationSeconds / 60;
-
-      final fareBreakdown = PaymentService().calculateFareBreakdown(
-        distanceKm: distanceKm,
-        rideType: rideType,
-      );
-      return {
-        'total': fareBreakdown['total'],
-        'etaMinutes': etaMinutes.round(),
-        'distanceKm': distanceKm,
-      };
-    } catch (e) {
-      _logger.e('Failed to get rate and ETA (coords): $e');
-      throw Exception('Unable to calculate rate and ETA: $e');
-    }
-  }
-}
+      return NearbyDriversService().streamNearbyDrivers(center);
+    });
 
 class RideService {
   final _firestore = FirebaseFirestore.instance;
@@ -207,8 +64,12 @@ class RideService {
       // --- 🔹 Subscribe to nearby drivers live stream ---
       final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
 
+      // Set the reactive center so nearbyDriversProvider starts streaming
+      ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
+
+      // Listen to the reactive provider (no arguments now)
       ref.listen<AsyncValue<List<Map<String, dynamic>>>>(
-        nearbyDriversProvider(pickupLoc),
+        nearbyDriversProvider,
         (previous, next) async {
           next.whenData((nearbyDrivers) async {
             _logger.i("Nearby drivers updated: $nearbyDrivers");
@@ -299,6 +160,20 @@ class RideService {
   }
 }
 
+class PlacePrediction {
+  final String description;
+  final String placeId;
+
+  PlacePrediction({required this.description, required this.placeId});
+
+  factory PlacePrediction.fromJson(Map<String, dynamic> json) {
+    return PlacePrediction(
+      description: json['description'],
+      placeId: json['place_id'],
+    );
+  }
+}
+
 class GeocodingService {
   static Future<LatLng?> getLatLngFromAddress(String address) async {
     try {
@@ -308,6 +183,147 @@ class GeocodingService {
       return LatLng(location.latitude, location.longitude);
     } catch (e) {
       return null;
+    }
+  }
+}
+
+class MapService {
+  final poly = PolylinePoints(apiKey: googleApiKey);
+  final _logger = Logger();
+
+  Future<LatLng> currentLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      return LatLng(position.latitude, position.longitude);
+    } catch (e) {
+      _logger.e('Failed to get current location: $e');
+      throw Exception('Unable to get current location. Check permissions.');
+    }
+  }
+
+  Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
+    try {
+      final result = await poly.getRouteBetweenCoordinatesV2(
+        request: RoutesApiRequest(
+          origin: PointLatLng(start.latitude, start.longitude),
+          destination: PointLatLng(end.latitude, end.longitude),
+          travelMode: TravelMode.driving,
+        ),
+      );
+      if (result.routes.isEmpty) throw Exception('No route found');
+      final points = result.routes.first.polylinePoints ?? [];
+      return points.map((p) => LatLng(p.latitude, p.longitude)).toList();
+    } catch (e) {
+      _logger.e('Failed to fetch route: $e');
+      throw Exception('Unable to load route. Please try again.');
+    }
+  }
+
+  Future<List<PlacePrediction>> getPlaceSuggestions(
+    String query,
+    double lat,
+    double lng,
+  ) async {
+    try {
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+        '?input=${Uri.encodeQueryComponent(query)}'
+        '&location=$lat,$lng'
+        '&radius=50000'
+        '&key=$googleApiKey',
+      );
+      final response = await http.get(url);
+      final data = jsonDecode(response.body);
+      if (data['status'] != 'OK') {
+        _logger.e(
+          'Autocomplete failed: ${data['status']}, ${data['error_message']}',
+        );
+        throw Exception('Autocomplete failed: ${data['error_message']}');
+      }
+      final predictions = (data['predictions'] as List)
+          .map((p) => PlacePrediction.fromJson(p))
+          .toList();
+      return predictions;
+    } catch (e) {
+      _logger.e('Failed to fetch place suggestions: $e');
+      return [];
+    }
+  }
+
+  Future<LatLng?> getLatLngFromPlaceId(String placeId) async {
+    try {
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/place/details/json'
+        '?place_id=$placeId&key=$googleApiKey',
+      );
+      final response = await http.get(url);
+      final data = jsonDecode(response.body);
+      if (data['status'] != 'OK') throw Exception('Details API failed');
+      final loc = data['result']['geometry']['location'];
+      return LatLng(loc['lat'], loc['lng']);
+    } catch (e) {
+      _logger.e('Failed to fetch location from place_id: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> getRateAndEta(
+    String pickup,
+    String dropoff,
+    String rideType,
+  ) async {
+    try {
+      final pickupLoc = await GeocodingService.getLatLngFromAddress(pickup);
+      final dropoffLoc = await GeocodingService.getLatLngFromAddress(dropoff);
+      if (pickupLoc == null || dropoffLoc == null) {
+        throw Exception('Invalid location coordinates');
+      }
+      return getRateAndEtaFromCoords(pickupLoc, dropoffLoc, rideType);
+    } catch (e) {
+      _logger.e('Failed to get rate and ETA: $e');
+      throw Exception('Unable to calculate rate and ETA');
+    }
+  }
+
+  Future<Map<String, dynamic>> getRateAndEtaFromCoords(
+    LatLng pickup,
+    LatLng dropoff,
+    String rideType,
+  ) async {
+    try {
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/distancematrix/json'
+        '?origins=${pickup.latitude},${pickup.longitude}'
+        '&destinations=${dropoff.latitude},${dropoff.longitude}'
+        '&key=$googleApiKey',
+      );
+      final response = await http.get(url);
+      final data = jsonDecode(response.body);
+      if (data['status'] != 'OK') throw Exception('Distance Matrix failed');
+      final element = data['rows'][0]['elements'][0];
+      if (element['status'] != 'OK') throw Exception('Route unavailable');
+
+      final distanceMeters = element['distance']['value'];
+      final durationSeconds = element['duration']['value'];
+      final distanceKm = distanceMeters / 1000;
+      final etaMinutes = durationSeconds / 60;
+
+      final fareBreakdown = PaymentService().calculateFareBreakdown(
+        distanceKm: distanceKm,
+        rideType: rideType,
+      );
+      return {
+        'total': fareBreakdown['total'],
+        'etaMinutes': etaMinutes.round(),
+        'distanceKm': distanceKm,
+      };
+    } catch (e) {
+      _logger.e('Failed to get rate and ETA: $e');
+      throw Exception('Unable to calculate rate and ETA');
     }
   }
 }
