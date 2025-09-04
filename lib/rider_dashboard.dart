@@ -254,7 +254,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           BitmapDescriptor.hueRed,
                         ),
                       ),
-                    // Nearby driver markers (safe-guard GeoPoint & ids)
                     ...drivers.where((d) => d['location'] != null).map((d) {
                       final gp = d['location'];
                       if (gp is! GeoPoint) return null;
@@ -279,17 +278,46 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     }).whereType<Marker>(),
                   };
 
-                  return GoogleMap(
-                    initialCameraPosition: CameraPosition(
-                      target:
-                          _currentLocation ?? const LatLng(37.7749, -122.4194),
-                      zoom: 14,
-                    ),
-                    onMapCreated: (controller) => _mapController = controller,
-                    myLocationEnabled: true,
-                    myLocationButtonEnabled: true,
-                    markers: markers,
-                    polylines: _polylines,
+                  return Stack(
+                    children: [
+                      GoogleMap(
+                        initialCameraPosition: CameraPosition(
+                          target:
+                              _currentLocation ??
+                              const LatLng(37.7749, -122.4194),
+                          zoom: 14,
+                        ),
+                        onMapCreated: (controller) =>
+                            _mapController = controller,
+                        myLocationEnabled: true,
+                        myLocationButtonEnabled: true,
+                        markers: markers,
+                        polylines: _polylines,
+                      ),
+
+                      if (drivers.isEmpty)
+                        Positioned(
+                          top: 20,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.6),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Text(
+                                'No nearby drivers available',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   );
                 },
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -574,16 +602,22 @@ class _RideFormState extends ConsumerState<RideForm> {
         _pickupLatLng!,
         _dropoffLatLng!,
       );
-      final result = await MapService().getRateAndEta(
-        _pickupController.text.trim(),
-        _dropoffController.text.trim(),
+      if (routePoints.isEmpty) {
+        _logger.w('No route points returned for the selected locations');
+        return;
+      }
+
+      final result = await MapService().getRateAndEtaFromCoords(
+        _pickupLatLng!,
+        _dropoffLatLng!,
         _selectedRideType ?? 'Economy',
       );
 
+      if (!mounted) return;
       setState(() {
-        _fare = result['total']?.toDouble();
-        _eta = result['etaMinutes']?.toInt();
-        _distanceKm = result['distanceKm']?.toDouble();
+        _fare = (result['total'] as num?)?.toDouble();
+        _eta = (result['etaMinutes'] as num?)?.toInt();
+        _distanceKm = (result['distanceKm'] as num?)?.toDouble();
       });
 
       widget.onFareUpdated?.call(
@@ -596,18 +630,26 @@ class _RideFormState extends ConsumerState<RideForm> {
       );
 
       if (widget.mapController != null) {
-        final bounds = LatLngBounds(
-          southwest: LatLng(
-            min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
-            min(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
-          ),
-          northeast: LatLng(
-            max(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
-            max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
-          ),
+        var sw = LatLng(
+          min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+          min(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
         );
+        var ne = LatLng(
+          max(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
+          max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
+        );
+
+        if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
+          const d = 0.0005; // ~50m
+          sw = LatLng(sw.latitude - d, sw.longitude - d);
+          ne = LatLng(ne.latitude + d, ne.longitude + d);
+        }
+
         await widget.mapController!.animateCamera(
-          CameraUpdate.newLatLngBounds(bounds, 50),
+          CameraUpdate.newLatLngBounds(
+            LatLngBounds(southwest: sw, northeast: ne),
+            50,
+          ),
         );
       }
     } catch (e) {
@@ -682,21 +724,34 @@ class _RideFormState extends ConsumerState<RideForm> {
             /// Pickup
             TypeAheadField<PlacePrediction>(
               suggestionsCallback: (query) async {
+                if (query.trim().isEmpty) return const [];
                 final lat = widget.currentLocation?.latitude ?? 0.0;
                 final lng = widget.currentLocation?.longitude ?? 0.0;
-                return await MapService().getPlaceSuggestions(query, lat, lng);
+                final res = await MapService().getPlaceSuggestions(
+                  query,
+                  lat,
+                  lng,
+                );
+                _logger.i(
+                  '[AC] pickup query="$query" -> ${res.length} results',
+                );
+                return res;
               },
               itemBuilder: (context, prediction) =>
                   ListTile(title: Text(prediction.description)),
               onSelected: (prediction) async {
+                // keep both controllers in sync
                 _pickupController.text = prediction.description;
+
                 final latLng = await MapService().getLatLngFromPlaceId(
                   prediction.placeId,
                 );
                 if (latLng != null) {
                   _pickupLatLng = latLng;
-                  // Update center for nearby drivers
+
+                  // re-center nearby drivers on pickup
                   ref.read(driverSearchCenterProvider.notifier).state = latLng;
+
                   await _updateRouteAndFare(sendMarkers: true);
                   await _panTo(latLng);
                 } else {
@@ -705,10 +760,18 @@ class _RideFormState extends ConsumerState<RideForm> {
                   );
                 }
               },
-
-              builder: (context, controllerWidget, focusNode) {
+              // IMPORTANT: use the controller provided by TypeAheadField
+              builder: (context, providedController, focusNode) {
+                // (optional) keep provided controller prefilled with your state
+                if (providedController.text != _pickupController.text) {
+                  providedController.text = _pickupController.text;
+                  providedController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: providedController.text.length),
+                  );
+                }
                 return TextField(
-                  controller: _pickupController,
+                  controller:
+                      providedController, // <-- use provided, not _pickupController
                   focusNode: focusNode,
                   decoration: const InputDecoration(
                     labelText: 'Pickup Location',
@@ -722,14 +785,24 @@ class _RideFormState extends ConsumerState<RideForm> {
             /// Dropoff
             TypeAheadField<PlacePrediction>(
               suggestionsCallback: (query) async {
+                if (query.trim().isEmpty) return const [];
                 final lat = widget.currentLocation?.latitude ?? 0.0;
                 final lng = widget.currentLocation?.longitude ?? 0.0;
-                return await MapService().getPlaceSuggestions(query, lat, lng);
+                final res = await MapService().getPlaceSuggestions(
+                  query,
+                  lat,
+                  lng,
+                );
+                _logger.i(
+                  '[AC] dropoff query="$query" -> ${res.length} results',
+                );
+                return res;
               },
               itemBuilder: (context, prediction) =>
                   ListTile(title: Text(prediction.description)),
               onSelected: (prediction) async {
                 _dropoffController.text = prediction.description;
+
                 final latLng = await MapService().getLatLngFromPlaceId(
                   prediction.placeId,
                 );
@@ -743,9 +816,16 @@ class _RideFormState extends ConsumerState<RideForm> {
                   );
                 }
               },
-              builder: (context, controllerWidget, focusNode) {
+              builder: (context, providedController, focusNode) {
+                if (providedController.text != _dropoffController.text) {
+                  providedController.text = _dropoffController.text;
+                  providedController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: providedController.text.length),
+                  );
+                }
                 return TextField(
-                  controller: _dropoffController,
+                  controller:
+                      providedController, // <-- use provided, not _dropoffController
                   focusNode: focusNode,
                   decoration: const InputDecoration(
                     labelText: 'Dropoff Location',
