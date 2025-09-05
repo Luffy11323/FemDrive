@@ -10,8 +10,6 @@ import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingSer
 import 'package:femdrive/widgets/payment_services.dart';
 import 'package:femdrive/widgets/share_service.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -276,12 +274,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                           markers: markers,
                           polylines: _polylines,
-                          gestureRecognizers:
-                              <Factory<OneSequenceGestureRecognizer>>{
-                                Factory<EagerGestureRecognizer>(
-                                  () => EagerGestureRecognizer(),
-                                ),
-                              },
                         ),
                         Positioned(
                           top: 16,
@@ -352,29 +344,26 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 top: 72,
                 left: 12,
                 right: 12,
-                child: IgnorePointer(
-                  ignoring: true,
-                  child: Row(
-                    children: [
-                      _InfoPill(
-                        icon: Icons.attach_money_rounded,
-                        label: 'Fare',
-                        value: '\$${_fare!.toStringAsFixed(2)}',
-                      ),
-                      const SizedBox(width: 8),
-                      _InfoPill(
-                        icon: Icons.schedule_rounded,
-                        label: 'ETA',
-                        value: '${_eta!} min',
-                      ),
-                      const SizedBox(width: 8),
-                      _InfoPill(
-                        icon: Icons.route_rounded,
-                        label: 'Distance',
-                        value: '${_distanceKm!.toStringAsFixed(1)} km',
-                      ),
-                    ],
-                  ),
+                child: Row(
+                  children: [
+                    _InfoPill(
+                      icon: Icons.attach_money_rounded,
+                      label: 'Fare',
+                      value: '\$${_fare!.toStringAsFixed(2)}',
+                    ),
+                    const SizedBox(width: 8),
+                    _InfoPill(
+                      icon: Icons.schedule_rounded,
+                      label: 'ETA',
+                      value: '${_eta!} min',
+                    ),
+                    const SizedBox(width: 8),
+                    _InfoPill(
+                      icon: Icons.route_rounded,
+                      label: 'Distance',
+                      value: '${_distanceKm!.toStringAsFixed(1)} km',
+                    ),
+                  ],
                 ),
               ),
 
