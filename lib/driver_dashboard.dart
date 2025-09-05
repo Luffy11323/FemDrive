@@ -146,36 +146,59 @@ class EarningsSummaryWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final e = ref.watch(earningsProvider);
-    return Card(
-      margin: const EdgeInsets.all(16),
+    return Card.filled(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Today\'s Rides: ${e.asData?.value.totalRides ?? 0}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+              child: AnimatedSwitcher(
+                duration: 250.ms,
+                child: Column(
+                  key: ValueKey(e.hashCode),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Today\'s Rides',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Today\'s Earnings: \$${e.asData?.value.totalEarnings.toStringAsFixed(2) ?? '0.00'}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+                    const SizedBox(height: 4),
+                    Text(
+                      '${e.asData?.value.totalRides ?? 0}',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    Text(
+                      'Today\'s Earnings',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '\$${(e.asData?.value.totalEarnings ?? 0).toStringAsFixed(2)}',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const Icon(
-              Icons.account_balance_wallet,
-              color: Colors.green,
-              size: 40,
+            const SizedBox(width: 12),
+            Tooltip(
+              message: 'Wallet',
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.1 * 255),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.account_balance_wallet, size: 36),
+              ),
             ),
           ],
         ),
@@ -197,47 +220,78 @@ class PastRidesListWidget extends ConsumerWidget {
             child: Text('No past rides yet.'),
           ).animate().fadeIn(duration: 400.ms);
         }
-        return ListView.separated(
-          padding: const EdgeInsets.all(8),
-          itemCount: qSnap.docs.length,
-          separatorBuilder: (_, _) => const Divider(height: 1),
-          itemBuilder: (ctx, i) {
-            final raw = qSnap.docs[i].data();
-            final fare = (raw[AppFields.fare] as num?)?.toDouble();
-            final ts = raw[AppFields.completedAt] as Timestamp?;
-            final dt = ts?.toDate();
-            final fareStr = fare != null
-                ? '\$${fare.toStringAsFixed(2)}'
-                : '--';
-            final dateStr = dt != null ? dt.toLocal().toString() : '-';
-            final status = (raw[AppFields.status] ?? '')
-                .toString()
-                .toUpperCase();
-            return Card(
-              margin: const EdgeInsets.symmetric(vertical: 4),
-              child: ListTile(
-                dense: true,
-                title: Text(
-                  '${raw[AppFields.pickup] ?? '-'} → ${raw[AppFields.dropoff] ?? '-'}',
-                ),
-                subtitle: Text('Fare: $fareStr • $dateStr'),
-                trailing: Chip(
-                  label: Text(
-                    status,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+        return RefreshIndicator(
+          onRefresh: () async => ref.invalidate(pastRidesProvider),
+          child: ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+            itemCount: qSnap.docs.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (ctx, i) {
+              final raw = qSnap.docs[i].data();
+              final fare = (raw[AppFields.fare] as num?)?.toDouble();
+              final ts = raw[AppFields.completedAt] as Timestamp?;
+              final dt = ts?.toDate();
+              final fareStr = fare != null
+                  ? '\$${fare.toStringAsFixed(2)}'
+                  : '--';
+              final dateStr = dt != null
+                  ? '${dt.toLocal()}'.split('.').first
+                  : '-';
+              final status = (raw[AppFields.status] ?? '')
+                  .toString()
+                  .toUpperCase();
+
+              final isCancelled = status == RideStatus.cancelled;
+              final chipColor = isCancelled
+                  ? Colors.red.withValues(alpha: 0.12 * 255)
+                  : Colors.green.withValues(alpha: 0.14 * 255);
+
+              return Card(
+                clipBehavior: Clip.antiAlias,
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
                   ),
-                  backgroundColor: status == RideStatus.cancelled
-                      ? Colors.red.shade100
-                      : Colors.green.shade100,
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.primary.withValues(alpha: 0.12 * 255),
+                    child: const Icon(Icons.directions_car),
+                  ),
+                  title: Text(
+                    '${raw[AppFields.pickup] ?? '-'} → ${raw[AppFields.dropoff] ?? '-'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('Fare: $fareStr • $dateStr'),
+                  ),
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: chipColor,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      status,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
                 ),
-              ),
-            ).animate().slideX(
-              begin: 0.1 * (i % 2 == 0 ? 1 : -1),
-              end: 0,
-              duration: 400.ms,
-              delay: (100 * i).ms,
-            );
-          },
+              ).animate().slideX(
+                begin: 0.1 * (i % 2 == 0 ? 1 : -1),
+                end: 0,
+                duration: 400.ms,
+                delay: (90 * i).ms,
+              );
+            },
+          ),
         );
       },
       loading: () => const Center(
@@ -264,52 +318,80 @@ class EarningsPage extends ConsumerWidget {
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              Card(
+              Card.filled(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text(
-                        'Total Rides: ${summary.totalRides}',
-                        style: Theme.of(context).textTheme.titleLarge,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Total Rides',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${summary.totalRides}',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Total Earnings',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '\$${summary.totalEarnings.toStringAsFixed(2)}',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Total Earnings: \$${summary.totalEarnings.toStringAsFixed(2)}',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
+                      const Icon(Icons.stacked_line_chart, size: 40),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                'Weekly Breakdown',
-                style: Theme.of(context).textTheme.titleMedium,
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Weekly Breakdown',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
               const SizedBox(height: 8),
               weekly.when(
-                data: (map) => Table(
-                  border: TableBorder.all(),
-                  children: map.entries
-                      .map(
-                        (e) => TableRow(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Text(e.key),
+                data: (map) => Card(
+                  child: SingleChildScrollView(
+                    child: DataTable(
+                      columns: const [
+                        DataColumn(label: Text('Date')),
+                        DataColumn(label: Text('Earnings')),
+                      ],
+                      rows: map.entries
+                          .map(
+                            (e) => DataRow(
+                              cells: [
+                                DataCell(Text(e.key)),
+                                DataCell(
+                                  Text('\$${e.value.toStringAsFixed(2)}'),
+                                ),
+                              ],
                             ),
-                            Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Text('\$${e.value.toStringAsFixed(2)}'),
-                            ),
-                          ],
-                        ),
-                      )
-                      .toList(),
+                          )
+                          .toList(),
+                    ),
+                  ),
                 ),
-                loading: () => const CircularProgressIndicator(),
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(12.0),
+                  child: CircularProgressIndicator(),
+                ),
                 error: (e, _) => Text('Failed to load weekly earnings: $e'),
               ),
               const SizedBox(height: 16),
@@ -378,6 +460,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             title: const Text('Profile'),
             actions: [
               IconButton(
+                tooltip: _isEditing ? 'Save changes' : 'Edit profile',
                 icon: Icon(_isEditing ? Icons.save : Icons.edit),
                 onPressed: _isSaving
                     ? null
@@ -391,15 +474,47 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               ),
             ],
           ),
-          body: Padding(
+          body: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Form(
               key: _formKey,
               child: Column(
                 children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 28,
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.primary,
+                            child: const Icon(
+                              Icons.person,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(
+                              data[AppFields.username] ?? 'Driver',
+                              style: Theme.of(context).textTheme.titleLarge,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   TextFormField(
                     controller: _nameController,
-                    decoration: const InputDecoration(labelText: 'Name'),
+                    decoration: const InputDecoration(
+                      labelText: 'Name',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
                     enabled: _isEditing,
                     validator: (value) =>
                         value?.isEmpty == true ? 'Required' : null,
@@ -407,7 +522,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _phoneController,
-                    decoration: const InputDecoration(labelText: 'Phone'),
+                    decoration: const InputDecoration(
+                      labelText: 'Phone',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                    ),
                     enabled: _isEditing,
                     validator: (value) =>
                         value?.isEmpty == true ? 'Required' : null,
@@ -417,9 +535,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     controller: _vehicleController,
                     decoration: const InputDecoration(
                       labelText: 'Vehicle Info',
+                      prefixIcon: Icon(Icons.directions_car_outlined),
                     ),
                     enabled: _isEditing,
                   ),
+                  const SizedBox(height: 12),
                   if (_isSaving) const CircularProgressIndicator(),
                 ],
               ),
@@ -468,8 +588,15 @@ class EmergencyPage extends ConsumerWidget {
       body: activeRide.when(
         data: (doc) => doc != null
             ? Center(
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.sos),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 22,
+                      vertical: 14,
+                    ),
+                  ),
                   onPressed: () async {
                     final rideId = doc.id;
                     final currentUid = await getDriverUid();
@@ -493,7 +620,7 @@ class EmergencyPage extends ConsumerWidget {
                       }
                     }
                   },
-                  child: const Text('Send Emergency Alert'),
+                  label: const Text('Send Emergency Alert'),
                 ),
               )
             : const Center(child: Text('No active ride for emergency')),
@@ -548,43 +675,72 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // keep AlertDialog (called by showDialog in dashboard) but modernize its internals
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('New Ride Request'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+      title: Row(
         children: [
-          if (widget.request.pickupLabel != null)
-            Text('From: ${widget.request.pickupLabel}'),
-          if (widget.request.dropoffLabel != null)
-            Text('To: ${widget.request.dropoffLabel}'),
-          Text(
-            'Pickup: ${widget.request.pickupLat.toStringAsFixed(4)}, ${widget.request.pickupLng.toStringAsFixed(4)}',
-          ),
-          Text(
-            'Dropoff: ${widget.request.dropoffLat.toStringAsFixed(4)}, ${widget.request.dropoffLng.toStringAsFixed(4)}',
-          ),
-          if (estimatedDistance != null)
-            Text('Distance: ${estimatedDistance!.toStringAsFixed(2)} km'),
-          if (widget.request.fare != null)
-            Text(
-              'Suggested Fare: \$${widget.request.fare!.toStringAsFixed(2)}',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          TextField(
-            controller: fareController,
-            decoration: const InputDecoration(
-              labelText: 'Counter Fare (optional)',
-            ),
-            keyboardType: TextInputType.number,
-          ),
-          if (errorMessage != null)
-            Text(errorMessage!, style: const TextStyle(color: Colors.red)),
+          const Icon(Icons.local_taxi_outlined),
+          const SizedBox(width: 8),
+          const Text('New Ride Request'),
         ],
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.request.pickupLabel != null)
+              _kv('From', widget.request.pickupLabel!),
+            if (widget.request.dropoffLabel != null)
+              _kv('To', widget.request.dropoffLabel!),
+            _kv(
+              'Pickup',
+              '${widget.request.pickupLat.toStringAsFixed(4)}, ${widget.request.pickupLng.toStringAsFixed(4)}',
+            ),
+            _kv(
+              'Dropoff',
+              '${widget.request.dropoffLat.toStringAsFixed(4)}, ${widget.request.dropoffLng.toStringAsFixed(4)}',
+            ),
+            if (estimatedDistance != null)
+              _kv('Distance', '${estimatedDistance!.toStringAsFixed(2)} km'),
+            const SizedBox(height: 6),
+            if (widget.request.fare != null)
+              Container(
+                padding: const EdgeInsets.all(10),
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.08 * 255),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'Suggested Fare: \$${widget.request.fare!.toStringAsFixed(2)}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            TextField(
+              controller: fareController,
+              decoration: const InputDecoration(
+                labelText: 'Counter Fare (optional)',
+                prefixIcon: Icon(Icons.attach_money),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            if (errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  errorMessage!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -604,7 +760,7 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
           },
           child: const Text('Decline'),
         ),
-        ElevatedButton(
+        FilledButton(
           onPressed: isSubmitting
               ? null
               : () async {
@@ -643,7 +799,7 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
                     if (mounted) setState(() => isSubmitting = false);
                   }
                 },
-          style: ElevatedButton.styleFrom(
+          style: FilledButton.styleFrom(
             backgroundColor: Colors.green,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -659,6 +815,24 @@ class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
         ),
       ],
     ).animate().scale(duration: 300.ms);
+  }
+
+  Widget _kv(String k, String v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 74,
+            child: Text(k, style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(v, maxLines: 2, overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -860,16 +1034,37 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           actions: [
             Row(
               children: [
-                Text(
-                  _isOnline ? 'Online' : 'Offline',
-                  style: Theme.of(context).textTheme.bodyMedium,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        (_isOnline
+                                ? Colors.green
+                                : Theme.of(context).colorScheme.error)
+                            .withValues(alpha: 0.15 * 255),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(_isOnline ? Icons.wifi : Icons.wifi_off, size: 16),
+                      const SizedBox(width: 6),
+                      Text(_isOnline ? 'Online' : 'Offline'),
+                    ],
+                  ),
                 ),
                 const SizedBox(width: 8),
-                Switch(
-                  value: _isOnline,
-                  onChanged: _toggleOnline,
-                  activeThumbColor: Theme.of(context).colorScheme.primary,
+                Tooltip(
+                  message: 'Toggle availability',
+                  child: Switch(
+                    value: _isOnline,
+                    onChanged: _toggleOnline,
+                    activeThumbColor: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
+                const SizedBox(width: 8),
               ],
             ),
           ],
@@ -880,18 +1075,24 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           selectedIndex: _selectedIndex,
           onDestinationSelected: _onItemTapped,
           destinations: const [
-            NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              label: 'Home',
+            ),
             NavigationDestination(
               icon: Icon(Icons.history),
               label: 'Past Rides',
             ),
             NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet),
+              icon: Icon(Icons.account_balance_wallet_outlined),
               label: 'Earnings',
             ),
-            NavigationDestination(icon: Icon(Icons.person), label: 'Profile'),
             NavigationDestination(
-              icon: Icon(Icons.emergency),
+              icon: Icon(Icons.person_outline),
+              label: 'Profile',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.emergency_outlined),
               label: 'Emergency',
             ),
           ],
@@ -1024,6 +1225,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
             child: Center(
               child: Text(
                 'Go online to view your location and receive ride requests.',
+                textAlign: TextAlign.center,
               ),
             ),
           ),
@@ -1113,6 +1315,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           left: 16,
           right: 16,
           child: Card(
+            elevation: 4,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -1122,17 +1325,35 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Ride: ${data[AppFields.pickup] ?? '-'} → ${data[AppFields.dropoff] ?? '-'}',
+                          'Ride',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${data[AppFields.pickup] ?? '-'} → ${data[AppFields.dropoff] ?? '-'}',
                           style: Theme.of(context).textTheme.titleMedium,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 8),
-                        Text(
-                          'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Row(
+                          children: [
+                            const Icon(Icons.attach_money, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
+                            ),
+                          ],
                         ),
-                        Text(
-                          'Status: ${data[AppFields.status]?.toString().toUpperCase() ?? '-'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(Icons.flag_circle_outlined, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Status: ${data[AppFields.status]?.toString().toUpperCase() ?? '-'}',
+                            ),
+                          ],
                         ),
                       ],
                     ),

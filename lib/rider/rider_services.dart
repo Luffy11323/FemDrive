@@ -325,9 +325,32 @@ class GeocodingService {
     try {
       final locations = await locationFromAddress(address);
       if (locations.isEmpty) return null;
-      final location = locations.first;
-      return LatLng(location.latitude, location.longitude);
-    } catch (e) {
+      final l = locations.first;
+      return LatLng(l.latitude, l.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // NEW: reverse geocode lat/lng -> a readable address string
+  static Future<String?> reverseGeocode({
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      final placemarks = await placemarkFromCoordinates(lat, lng);
+      if (placemarks.isEmpty) return null;
+      final p = placemarks.first;
+
+      // Build a concise line (tweak to taste)
+      final parts = <String>[
+        if ((p.name ?? '').isNotEmpty) p.name!,
+        if ((p.subLocality ?? '').isNotEmpty) p.subLocality!,
+        if ((p.locality ?? '').isNotEmpty) p.locality!,
+        if ((p.administrativeArea ?? '').isNotEmpty) p.administrativeArea!,
+      ];
+      return parts.where((s) => s.trim().isNotEmpty).join(', ');
+    } catch (_) {
       return null;
     }
   }

@@ -79,12 +79,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   double? _fare;
   int? _eta;
   double? _distanceKm;
-  final String _selectedRideType = 'Economy';
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
-
-  // UI state (purely visual)
-  bool _showHelp = true;
 
   @override
   void initState() {
@@ -102,12 +98,21 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   Future<void> _loadCurrentLocation() async {
     try {
       final loc = await MapService().currentLocation();
+
+      // Resolve a human-readable address for the pickup field
+      String? addr = await GeocodingService.reverseGeocode(
+        lat: loc.latitude,
+        lng: loc.longitude,
+      );
+      addr ??= 'My location'; // fallback label
+
       setState(() {
         _currentLocation = loc;
         _pickupLatLng = loc;
-        _pickupController.text = "Current Location"; // or reverse geocode here
+        _pickupController.text = addr!; // <-- real address now
       });
 
+      // Keep nearby driver query centered around the pickup
       ref.read(driverSearchCenterProvider.notifier).state = loc;
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
@@ -137,147 +142,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         LatLngBounds(southwest: sw, northeast: ne),
         72,
       ),
-    );
-  }
-
-  Future<void> _panTo(LatLng? pos) async {
-    if (pos == null || _mapController == null) return;
-    try {
-      await _mapController!.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
-    } catch (e) {
-      _logger.e('Map pan failed: $e');
-    }
-  }
-
-  Future<void> _updateRouteAndFare() async {
-    if (_pickupLatLng == null || _dropoffLatLng == null) return;
-
-    try {
-      final routePoints = await MapService().getRoute(
-        _pickupLatLng!,
-        _dropoffLatLng!,
-      );
-
-      final result = await MapService().getRateAndEtaFromCoords(
-        _pickupLatLng!,
-        _dropoffLatLng!,
-        _selectedRideType,
-      );
-
-      setState(() {
-        _fare = (result['total'] as num?)?.toDouble();
-        _eta = (result['etaMinutes'] as num?)?.toInt();
-        _distanceKm = (result['distanceKm'] as num?)?.toDouble();
-        _polylines = {
-          Polyline(
-            polylineId: const PolylineId('route'),
-            points: routePoints,
-            color: Colors.blue,
-            width: 5,
-          ),
-        };
-      });
-
-      if (_mapController != null) {
-        var sw = LatLng(
-          math.min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
-          math.min(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
-        );
-        var ne = LatLng(
-          math.max(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
-          math.max(_pickupLatLng!.longitude, _dropoffLatLng!.longitude),
-        );
-
-        // nudge if identical
-        if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
-          const d = 0.0005; // ~50m
-          sw = LatLng(sw.latitude - d, sw.longitude - d);
-          ne = LatLng(ne.latitude + d, ne.longitude + d);
-        }
-
-        await _mapController!.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(southwest: sw, northeast: ne),
-            50,
-          ),
-        );
-      }
-    } catch (e) {
-      _logger.e('Failed to update route/fare: $e');
-    }
-  }
-
-  Widget _buildLocationPicker() {
-    Widget buildTypeAheadField({
-      required TextEditingController controller,
-      required String label,
-      required bool isPickup,
-    }) {
-      return TypeAheadField<PlacePrediction>(
-        suggestionsCallback: (query) async {
-          if (query.isEmpty || _currentLocation == null) return [];
-          try {
-            return await MapService().getPlaceSuggestions(
-              query,
-              _currentLocation!.latitude,
-              _currentLocation!.longitude,
-            );
-          } catch (e) {
-            _logger.e('Autocomplete error: $e');
-            return [];
-          }
-        },
-        itemBuilder: (context, prediction) =>
-            ListTile(title: Text(prediction.description)),
-        onSelected: (prediction) async {
-          controller.text = prediction.description;
-          try {
-            final latLng = await MapService().getLatLngFromPlaceId(
-              prediction.placeId,
-            );
-            if (latLng != null) {
-              setState(() {
-                if (isPickup) {
-                  _pickupLatLng = latLng;
-                  ref.read(driverSearchCenterProvider.notifier).state = latLng;
-                } else {
-                  _dropoffLatLng = latLng;
-                }
-              });
-              await _updateRouteAndFare();
-              await _panTo(latLng);
-            }
-          } catch (e) {
-            _logger.e('Failed to set $label LatLng on selection: $e');
-          }
-        },
-        builder: (context, textEditingController, focusNode) {
-          return TextField(
-            controller: controller,
-            focusNode: focusNode,
-            decoration: InputDecoration(
-              labelText: label,
-              border: const OutlineInputBorder(),
-            ),
-          );
-        },
-      );
-    }
-
-    return Column(
-      children: [
-        buildTypeAheadField(
-          controller: _pickupController,
-          label: 'Pickup Location',
-          isPickup: true,
-        ),
-        const SizedBox(height: 8),
-        buildTypeAheadField(
-          controller: _dropoffController,
-          label: 'Dropoff Location',
-          isPickup: false,
-        ),
-      ],
     );
   }
 
@@ -482,39 +346,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 );
               },
             ),
-
-            // --- Dismissible "how to" style banner like ref #1 ---
-            if (_showHelp && !hasActive)
-              Positioned(
-                top: 12,
-                left: 12,
-                right: 12,
-                child: Dismissible(
-                  key: const ValueKey('help_banner'),
-                  direction: DismissDirection.up,
-                  onDismissed: (_) => setState(() => _showHelp = false),
-                  child: _Frosted(
-                    child: Row(
-                      children: [
-                        const Icon(Icons.live_help_outlined, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'How to use FemDrive? Tap the green button to pick addresses and request a ride.',
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: () => setState(() => _showHelp = false),
-                          child: const Text('Got it'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
             // --- Fare/ETA/Distance pill (like route summary) ---
             if (_fare != null && _eta != null && _distanceKm != null)
               Positioned(
@@ -767,24 +598,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               ),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          showModalBottomSheet(
-            context: context,
-            showDragHandle: true,
-            useSafeArea: true,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
-            builder: (context) => Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-              child: _buildLocationPicker(),
-            ),
-          );
-        },
-        label: const Text('Where to?'),
-        icon: const Icon(Icons.add_location_alt_rounded),
       ),
     );
   }
