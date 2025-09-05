@@ -28,6 +28,21 @@ final locationPermissionProvider = FutureProvider<bool>((ref) async {
   final permission = await Permission.location.request();
   return permission == PermissionStatus.granted;
 });
+final driverLocationProvider = StreamProvider.family<LatLng?, String>((
+  ref,
+  driverId,
+) {
+  return FirebaseFirestore.instance
+      .collection('users')
+      .doc(driverId)
+      .snapshots()
+      .map((snap) {
+        if (!snap.exists) return null;
+        final data = snap.data();
+        final gp = data?['location'] as GeoPoint?;
+        return gp != null ? LatLng(gp.latitude, gp.longitude) : null;
+      });
+});
 
 /// Provides nearby online drivers (live updates) for the map overlay
 final nearbyDriversProvider =
@@ -76,7 +91,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   Future<void> _loadCurrentLocation() async {
     try {
       final loc = await MapService().currentLocation();
-      setState(() => _currentLocation = loc);
+      setState(() {
+        _currentLocation = loc;
+        _pickupLatLng = loc;
+        _pickupController.text = "Current Location"; // or reverse geocode here
+      });
 
       ref.read(driverSearchCenterProvider.notifier).state = loc;
     } catch (e) {
@@ -246,6 +265,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final ridesAsync = ref.watch(riderDashboardProvider);
     final rideData = ridesAsync.value;
     final status = (rideData?['status'] ?? '').toString();
+
+    // driver live location (do not override rideData)
+    LatLng? driverLatLng;
+    if (rideData != null && rideData['driverId'] != null) {
+      final driverLocAsync = ref.watch(
+        driverLocationProvider(rideData['driverId']),
+      );
+      driverLatLng = driverLocAsync.value;
+    }
+
     final hasActive = const {
       'pending',
       'searching',
@@ -265,7 +294,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               return nearbyAsync.when(
                 data: (drivers) {
                   final markers = <Marker>{
-                    if (_currentLocation != null)
+                    if (_currentLocation != null &&
+                        _pickupLatLng == null &&
+                        _dropoffLatLng == null)
                       Marker(
                         markerId: const MarkerId("me"),
                         position: _currentLocation!,
@@ -289,6 +320,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           BitmapDescriptor.hueRed,
                         ),
                       ),
+                    if (driverLatLng != null)
+                      Marker(
+                        markerId: const MarkerId('driver_live'),
+                        position: driverLatLng,
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueOrange,
+                        ),
+                        infoWindow: const InfoWindow(title: 'Driver'),
+                      ),
+
                     ...drivers.where((d) => d['location'] != null).map((d) {
                       final gp = d['location'];
                       if (gp is! GeoPoint) return null;
@@ -396,6 +437,73 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               final ride = rideData;
               final status = (ride['status'] ?? '').toString();
 
+              LatLng? driverLatLng;
+              final driverId = (ride['driverId'] as String?);
+              if (driverId != null && driverId.isNotEmpty) {
+                driverLatLng = ref
+                    .watch(driverLocationProvider(driverId))
+                    .value;
+              }
+              if (ride['driverLocation'] != null &&
+                  ride['driverLocation'] is GeoPoint) {
+                final gp = ride['driverLocation'] as GeoPoint;
+                driverLatLng = LatLng(gp.latitude, gp.longitude);
+              }
+
+              /// Draw polylines depending on status
+              // Driver → Pickup when accepted (driver assigned, on the way)
+              if (status == 'accepted' &&
+                  driverLatLng != null &&
+                  _pickupLatLng != null) {
+                MapService().getRoute(driverLatLng, _pickupLatLng!).then((
+                  points,
+                ) {
+                  if (!mounted) return;
+                  setState(() {
+                    _polylines = {
+                      Polyline(
+                        polylineId: const PolylineId('driver_to_pickup'),
+                        points: points,
+                        color: Colors.orange,
+                        width: 6,
+                      ),
+                    };
+                  });
+                });
+              }
+
+              // Pickup → Dropoff during trip
+              if ((status == 'in_progress' || status == 'onTrip') &&
+                  _pickupLatLng != null &&
+                  _dropoffLatLng != null) {
+                MapService().getRoute(_pickupLatLng!, _dropoffLatLng!).then((
+                  points,
+                ) {
+                  if (!mounted) return;
+                  setState(() {
+                    _polylines = {
+                      Polyline(
+                        polylineId: const PolylineId('trip_route'),
+                        points: points,
+                        color: Colors.blue,
+                        width: 6,
+                      ),
+                    };
+                  });
+                });
+              }
+
+              if (status == 'completed') {
+                Future.delayed(const Duration(seconds: 4), () {
+                  if (mounted) {
+                    Navigator.pushReplacement(
+                      // ignore: use_build_context_synchronously
+                      context,
+                      MaterialPageRoute(builder: (_) => const RiderDashboard()),
+                    );
+                  }
+                });
+              }
               return Stack(
                 children: [
                   Align(
@@ -406,13 +514,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     Align(
                       alignment: Alignment.topRight,
                       child: DriverDetailsWidget(driverId: ride['driverId']),
-                    ),
-                  if (ride['counterFare'] != null &&
-                      status != 'completed' &&
-                      status != 'cancelled')
-                    Align(
-                      alignment: Alignment.center,
-                      child: CounterFareWidget(rideId: ride['id']),
                     ),
                   if (status == 'accepted' ||
                       status == 'in_progress' ||
@@ -950,22 +1051,19 @@ class _RideFormState extends ConsumerState<RideForm> {
             ),
             const SizedBox(height: 12),
 
-            /// Ride Type
-            DropdownButtonFormField<String>(
-              initialValue: _selectedRideType,
-              decoration: const InputDecoration(
-                labelText: 'Ride Type',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                'Economy',
-                'Premium',
-                'XL',
-                'Electric',
-              ].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            // Ride Type (horizontal selector)
+            RideTypePicker(
+              options: const [
+                RideOption('Economy', 'Ride', Icons.directions_car_rounded),
+                RideOption('Premium', 'Comfort', Icons.time_to_leave_rounded),
+                RideOption('XL', 'Courier', Icons.local_shipping_rounded),
+                RideOption('Electric', 'City to city', Icons.place_rounded),
+                // add more if you like…
+              ],
+              selected: _selectedRideType ?? 'Economy',
               onChanged: (v) async {
                 setState(() => _selectedRideType = v);
-                await _updateRouteAndFare();
+                await _updateRouteAndFare(); // recalc fare/ETA when user switches
               },
             ),
             const SizedBox(height: 12),
@@ -1265,108 +1363,6 @@ class DriverDetailsWidget extends StatelessWidget {
   }
 }
 
-/// ---------------- Counter Fare (accept / reject) ----------------
-class CounterFareWidget extends ConsumerWidget {
-  final String rideId;
-  const CounterFareWidget({super.key, required this.rideId});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('rides')
-          .doc(rideId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || snapshot.data?.data() == null) {
-          return const SizedBox.shrink();
-        }
-        final ride = snapshot.data!.data()! as Map<String, dynamic>;
-        final cf = (ride['counterFare'] as num?)?.toDouble();
-        if (cf == null) return const SizedBox.shrink();
-
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Driver Counter-Offer',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text('Proposed Fare: \$${cf.toStringAsFixed(2)}'),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          try {
-                            await ref
-                                .read(riderDashboardProvider.notifier)
-                                .handleCounterFare(rideId, cf, true);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Counter-offer accepted'),
-                                ),
-                              );
-                            }
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error: $e')),
-                              );
-                            }
-                          }
-                        },
-                        child: const Text('Accept'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          try {
-                            await ref
-                                .read(riderDashboardProvider.notifier)
-                                .handleCounterFare(rideId, cf, false);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Counter-offer rejected'),
-                                ),
-                              );
-                            }
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error: $e')),
-                              );
-                            }
-                          }
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        child: const Text('Reject'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ).animate().fadeIn(duration: 250.ms);
-      },
-    );
-  }
-}
-
 /// ---------------- Share Trip ----------------
 class ShareTripButton extends StatelessWidget {
   final String rideId;
@@ -1609,6 +1605,90 @@ class _CounterFareDialog extends ConsumerWidget {
           child: const Text('Accept'),
         ),
       ],
+    );
+  }
+}
+
+class RideOption {
+  final String key; // "Economy", "Premium", etc.
+  final String label; // visible label
+  final IconData icon; // leading icon
+  const RideOption(this.key, this.label, this.icon);
+}
+
+class RideTypePicker extends StatelessWidget {
+  final List<RideOption> options;
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  const RideTypePicker({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return SizedBox(
+      height: 72,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        itemCount: options.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final opt = options[i];
+          final isSelected = opt.key == selected;
+
+          return InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => onChanged(opt.key),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: isSelected ? cs.primary.withAlpha(26) : cs.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isSelected ? cs.primary : cs.outlineVariant,
+                  width: isSelected ? 1.6 : 1,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: cs.primary.withAlpha(31),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : const [],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    opt.icon,
+                    color: isSelected ? cs.primary : cs.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    opt.label,
+                    style: TextStyle(
+                      color: isSelected ? cs.primary : cs.onSurface,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
