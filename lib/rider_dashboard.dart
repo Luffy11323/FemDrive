@@ -244,6 +244,15 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   @override
   Widget build(BuildContext context) {
     final ridesAsync = ref.watch(riderDashboardProvider);
+    final rideData = ridesAsync.value;
+    final status = (rideData?['status'] ?? '').toString();
+    final hasActive = const {
+      'pending',
+      'searching',
+      'accepted',
+      'in_progress',
+      'onTrip',
+    }.contains(status);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Rider Dashboard')),
@@ -431,55 +440,86 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             error: (e, st) => const SizedBox.shrink(),
           ),
 
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: DraggableScrollableSheet(
-              initialChildSize: 0.35,
-              minChildSize: 0.2,
-              maxChildSize: 0.88,
-              builder: (_, controller) => RideForm(
-                mapController: _mapController,
-                scrollController: controller,
-                currentLocation: _currentLocation,
-                pickupController: _pickupController,
-                dropoffController: _dropoffController,
-                onFareUpdated:
-                    (
-                      fare,
-                      eta,
-                      distanceKm,
-                      routePoints, {
-                      pickup,
-                      dropoff,
-                    }) async {
-                      if (!mounted) return;
-                      setState(() {
-                        _fare = fare;
-                        _eta = eta;
-                        _distanceKm = distanceKm;
-                        if (pickup != null) _pickupLatLng = pickup;
-                        if (dropoff != null) _dropoffLatLng = dropoff;
-                        _polylines = {
-                          Polyline(
-                            polylineId: const PolylineId('route'),
-                            points: routePoints,
-                            color: Colors.blue,
-                            width: 6,
-                            startCap: Cap.roundCap,
-                            endCap: Cap.roundCap,
-                            jointType: JointType.round,
-                          ),
-                        };
-                      });
-
-                      // Fit after state is applied
-                      if (_pickupLatLng != null && _dropoffLatLng != null) {
-                        await _fitToBounds(_pickupLatLng!, _dropoffLatLng!);
-                      }
-                    },
+          // 1) Radar while searching
+          if (rideData != null &&
+              (status == 'pending' || status == 'searching'))
+            Positioned.fill(
+              child: RadarSearchingOverlay(
+                message: 'Finding a driver near you…',
+                onCancel: () async {
+                  try {
+                    await ref
+                        .read(riderDashboardProvider.notifier)
+                        .cancelRide(rideData['id']);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Ride cancelled')),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to cancel: $e')),
+                      );
+                    }
+                  }
+                },
               ),
             ),
-          ),
+          if (rideData != null &&
+              rideData['counterFare'] != null &&
+              status != 'completed' &&
+              status != 'cancelled')
+            CounterFareModalLauncher(ride: rideData),
+          // 2) Show RideForm only when no active ride
+          if (!hasActive)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: DraggableScrollableSheet(
+                initialChildSize: 0.35,
+                minChildSize: 0.2,
+                maxChildSize: 0.88,
+                builder: (_, controller) => RideForm(
+                  mapController: _mapController,
+                  scrollController: controller,
+                  currentLocation: _currentLocation,
+                  pickupController: _pickupController,
+                  dropoffController: _dropoffController,
+                  onFareUpdated:
+                      (
+                        fare,
+                        eta,
+                        distanceKm,
+                        routePoints, {
+                        pickup,
+                        dropoff,
+                      }) async {
+                        if (!mounted) return;
+                        setState(() {
+                          _fare = fare;
+                          _eta = eta;
+                          _distanceKm = distanceKm;
+                          if (pickup != null) _pickupLatLng = pickup;
+                          if (dropoff != null) _dropoffLatLng = dropoff;
+                          _polylines = {
+                            Polyline(
+                              polylineId: const PolylineId('route'),
+                              points: routePoints,
+                              color: Colors.blue,
+                              width: 6,
+                              startCap: Cap.roundCap,
+                              endCap: Cap.roundCap,
+                              jointType: JointType.round,
+                            ),
+                          };
+                        });
+                        if (_pickupLatLng != null && _dropoffLatLng != null) {
+                          await _fitToBounds(_pickupLatLng!, _dropoffLatLng!);
+                        }
+                      },
+                ),
+              ),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -1461,6 +1501,114 @@ class PastRidesListWidget extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class CounterFareModalLauncher extends StatefulWidget {
+  final Map<String, dynamic> ride;
+  const CounterFareModalLauncher({super.key, required this.ride});
+
+  @override
+  State<CounterFareModalLauncher> createState() =>
+      _CounterFareModalLauncherState();
+}
+
+class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShow());
+  }
+
+  @override
+  void didUpdateWidget(covariant CounterFareModalLauncher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _maybeShow();
+  }
+
+  void _maybeShow() {
+    if (_shown) return;
+    final cf = (widget.ride['counterFare'] as num?)?.toDouble();
+    if (cf == null) return;
+    _shown = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CounterFareDialog(ride: widget.ride),
+    ).then((_) => _shown = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+class _CounterFareDialog extends ConsumerWidget {
+  final Map<String, dynamic> ride;
+  const _CounterFareDialog({required this.ride});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cf = (ride['counterFare'] as num?)?.toDouble() ?? 0;
+    final baseFare = (ride['fare'] as num?)?.toDouble() ?? 0;
+    final pickup = (ride['pickup'] ?? '—').toString();
+    final dropoff = (ride['dropoff'] ?? '—').toString();
+
+    return AlertDialog(
+      title: const Text('Driver Counter-Offer'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('From: $pickup'),
+          Text('To:   $dropoff'),
+          const SizedBox(height: 8),
+          Text('Your fare:  \$${baseFare.toStringAsFixed(2)}'),
+          Text(
+            'Counter:   \$${cf.toStringAsFixed(2)}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            try {
+              await ref
+                  .read(riderDashboardProvider.notifier)
+                  .handleCounterFare(ride['id'], cf, false);
+              if (context.mounted) Navigator.pop(context);
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Error: $e')));
+              }
+            }
+          },
+          style: TextButton.styleFrom(foregroundColor: Colors.red),
+          child: const Text('Reject'),
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            try {
+              await ref
+                  .read(riderDashboardProvider.notifier)
+                  .handleCounterFare(ride['id'], cf, true);
+              if (context.mounted) Navigator.pop(context);
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Error: $e')));
+              }
+            }
+          },
+          child: const Text('Accept'),
+        ),
+      ],
     );
   }
 }

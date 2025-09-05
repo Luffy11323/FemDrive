@@ -1,6 +1,7 @@
 // ignore_for_file: unused_import
 
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -37,6 +38,145 @@ final nearbyDriversProvider =
       }
       return NearbyDriversService().streamNearbyDrivers(center);
     });
+
+class RadarSearchingOverlay extends StatefulWidget {
+  final String message;
+  final VoidCallback onCancel;
+  const RadarSearchingOverlay({
+    super.key,
+    required this.message,
+    required this.onCancel,
+  });
+
+  @override
+  State<RadarSearchingOverlay> createState() => _RadarSearchingOverlayState();
+}
+
+class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: false,
+      child: Container(
+        color: Colors.black.withAlpha((0.15 * 255).round()),
+        child: Stack(
+          children: [
+            // Pulses
+            Center(
+              child: AnimatedBuilder(
+                animation: _ctl,
+                builder: (_, _) {
+                  return CustomPaint(
+                    painter: _RadarPainter(progress: _ctl.value),
+                    size: const Size(220, 220),
+                  );
+                },
+              ),
+            ),
+            // Message
+            Positioned(
+              bottom: 140,
+              left: 24,
+              right: 24,
+              child: Column(
+                children: [
+                  Text(
+                    widget.message,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Cancel
+            Positioned(
+              bottom: 60,
+              left: 24,
+              right: 24,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.close),
+                label: const Text('Cancel ride'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RadarPainter extends CustomPainter {
+  final double progress;
+  _RadarPainter({required this.progress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final maxR = math.min(size.width, size.height) / 2;
+    final bg = Paint()..color = Colors.white.withAlpha((0.15 * 255).round());
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..color = Colors.white.withAlpha((0.7 * 255).round());
+
+    // base dot
+    canvas.drawCircle(center, 6, Paint()..color = Colors.white);
+
+    // 3 expanding rings
+    for (var i = 0; i < 3; i++) {
+      final t = (progress + i / 3) % 1.0;
+      final r = 12 + t * (maxR - 12);
+      final alpha = (1 - t).clamp(0.0, 1.0);
+      ring.color = Colors.white.withAlpha(((0.35 * alpha) * 255).round());
+      canvas.drawCircle(center, r, ring);
+      canvas.drawCircle(center, r, bg);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
+      oldDelegate.progress != progress;
+}
 
 class RideService {
   final _firestore = FirebaseFirestore.instance;
