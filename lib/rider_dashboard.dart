@@ -1,10 +1,4 @@
 // rider_dashboard.dart
-//
-// 🔒 All logic, names, providers, and method signatures preserved.
-// 🎨 UI/UX refreshed to modern Material 3: cleaner spacing, cards, chips, badges,
-//     draggable sheet polish, contextual banner, and better feedback.
-// ⚠️ No business logic or identifiers were changed.
-
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
@@ -15,6 +9,9 @@ import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
 import 'package:femdrive/widgets/payment_services.dart';
 import 'package:femdrive/widgets/share_service.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -39,16 +36,13 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
   ref,
   driverId,
 ) {
-  return FirebaseFirestore.instance
-      .collection('users')
-      .doc(driverId)
-      .snapshots()
-      .map((snap) {
-        if (!snap.exists) return null;
-        final data = snap.data();
-        final gp = data?['location'] as GeoPoint?;
-        return gp != null ? LatLng(gp.latitude, gp.longitude) : null;
-      });
+  final refDb = FirebaseDatabase.instance.ref('drivers/$driverId/location');
+  return refDb.onValue.map((e) {
+    final data = (e.snapshot.value as Map?) ?? {};
+    final lat = (data['lat'] as num?)?.toDouble();
+    final lng = (data['lng'] as num?)?.toDouble();
+    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  });
 });
 
 /// Provides nearby online drivers (live updates) for the map overlay
@@ -282,6 +276,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                           markers: markers,
                           polylines: _polylines,
+                          gestureRecognizers:
+                              <Factory<OneSequenceGestureRecognizer>>{
+                                Factory<EagerGestureRecognizer>(
+                                  () => EagerGestureRecognizer(),
+                                ),
+                              },
                         ),
                         Positioned(
                           top: 16,
@@ -352,26 +352,29 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 top: 72,
                 left: 12,
                 right: 12,
-                child: Row(
-                  children: [
-                    _InfoPill(
-                      icon: Icons.attach_money_rounded,
-                      label: 'Fare',
-                      value: '\$${_fare!.toStringAsFixed(2)}',
-                    ),
-                    const SizedBox(width: 8),
-                    _InfoPill(
-                      icon: Icons.schedule_rounded,
-                      label: 'ETA',
-                      value: '${_eta!} min',
-                    ),
-                    const SizedBox(width: 8),
-                    _InfoPill(
-                      icon: Icons.route_rounded,
-                      label: 'Distance',
-                      value: '${_distanceKm!.toStringAsFixed(1)} km',
-                    ),
-                  ],
+                child: IgnorePointer(
+                  ignoring: true,
+                  child: Row(
+                    children: [
+                      _InfoPill(
+                        icon: Icons.attach_money_rounded,
+                        label: 'Fare',
+                        value: '\$${_fare!.toStringAsFixed(2)}',
+                      ),
+                      const SizedBox(width: 8),
+                      _InfoPill(
+                        icon: Icons.schedule_rounded,
+                        label: 'ETA',
+                        value: '${_eta!} min',
+                      ),
+                      const SizedBox(width: 8),
+                      _InfoPill(
+                        icon: Icons.route_rounded,
+                        label: 'Distance',
+                        value: '${_distanceKm!.toStringAsFixed(1)} km',
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -749,6 +752,9 @@ class _RideFormState extends ConsumerState<RideForm> {
     super.initState();
     _pickupController = widget.pickupController ?? TextEditingController();
     _dropoffController = widget.dropoffController ?? TextEditingController();
+    if (_pickupLatLng == null && widget.currentLocation != null) {
+      _pickupLatLng = widget.currentLocation;
+    }
   }
 
   @override
