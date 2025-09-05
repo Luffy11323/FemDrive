@@ -901,6 +901,21 @@ class _RideFormState extends ConsumerState<RideForm> {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
+            // Ride Type (horizontal selector)
+            RideTypePicker(
+              options: const [
+                RideOption('Economy', 'Ride', Icons.directions_car_rounded),
+                RideOption('Premium', 'Comfort', Icons.time_to_leave_rounded),
+                RideOption('XL', 'Courier', Icons.local_shipping_rounded),
+                RideOption('Electric', 'City to city', Icons.place_rounded),
+              ],
+              selected: _selectedRideType!,
+              onChanged: (v) async {
+                setState(() => _selectedRideType = v);
+                await _updateRouteAndFare(); // recalc fare/ETA when user switches
+              },
+            ),
+            const SizedBox(height: 12),
 
             /// Pickup
             Material(
@@ -1026,22 +1041,6 @@ class _RideFormState extends ConsumerState<RideForm> {
                   );
                 },
               ),
-            ),
-            const SizedBox(height: 12),
-
-            // Ride Type (horizontal selector)
-            RideTypePicker(
-              options: const [
-                RideOption('Economy', 'Ride', Icons.directions_car_rounded),
-                RideOption('Premium', 'Comfort', Icons.time_to_leave_rounded),
-                RideOption('XL', 'Courier', Icons.local_shipping_rounded),
-                RideOption('Electric', 'City to city', Icons.place_rounded),
-              ],
-              selected: _selectedRideType!,
-              onChanged: (v) async {
-                setState(() => _selectedRideType = v);
-                await _updateRouteAndFare(); // recalc fare/ETA when user switches
-              },
             ),
             const SizedBox(height: 12),
 
