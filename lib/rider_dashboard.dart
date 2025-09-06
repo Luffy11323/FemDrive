@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
 
+import 'package:async/async.dart';
 import 'package:femdrive/emergency_service.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
@@ -10,12 +11,14 @@ import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingSer
 import 'package:femdrive/widgets/payment_services.dart';
 import 'package:femdrive/widgets/share_service.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter/gestures.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -34,12 +37,57 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
   ref,
   driverId,
 ) {
-  final refDb = FirebaseDatabase.instance.ref('drivers/$driverId/location');
-  return refDb.onValue.map((e) {
-    final data = (e.snapshot.value as Map?) ?? {};
-    final lat = (data['lat'] as num?)?.toDouble();
-    final lng = (data['lng'] as num?)?.toDouble();
+  final root = FirebaseDatabase.instance.ref();
+  // Canonical
+  final a = root.child('driverLocations/$driverId').onValue.map((e) {
+    final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
+    final lat = (m?['lat'] as num?)?.toDouble();
+    final lng = (m?['lng'] as num?)?.toDouble();
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  });
+  // Legacy fallback
+  final b = root.child('drivers/$driverId/location').onValue.map((e) {
+    final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
+    final lat = (m?['lat'] as num?)?.toDouble();
+    final lng = (m?['lng'] as num?)?.toDouble();
+    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  });
+  // Prefer A; if it emits nulls, continue listening to both and pick the first non-null
+  return StreamZip<LatLng?>([
+    a,
+    b,
+  ]).map((vals) => vals.firstWhere((v) => v != null, orElse: () => null));
+});
+
+/// Live ride status + (optionally) driver live lat/lng from RTDB
+class RideLive {
+  final String status;
+  final String? driverId;
+  final LatLng? driverLatLng;
+  final int? etaSecs;
+  RideLive({
+    required this.status,
+    this.driverId,
+    this.driverLatLng,
+    this.etaSecs,
+  });
+}
+
+final rtdbRideLiveProvider = StreamProvider.family<RideLive?, String>((
+  ref,
+  rideId,
+) {
+  final liveRef = FirebaseDatabase.instance.ref('ridesLive/$rideId');
+  return liveRef.onValue.map((event) {
+    final data = (event.snapshot.value as Map?)?.cast<String, dynamic>();
+    if (data == null) return null;
+    return RideLive(
+      status: (data['status'] ?? '').toString(),
+      driverId: data['driverId'] as String?,
+      driverLatLng:
+          null, // ← keep null; location comes from driverLocationProvider
+      etaSecs: (data['etaSecs'] as num?)?.toInt(),
+    );
   });
 });
 
@@ -47,7 +95,9 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
 final nearbyDriversProvider =
     StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) async* {
       final loc = await MapService().currentLocation();
-      yield* NearbyDriversService().streamNearbyDrivers(loc);
+      yield* NearbyDriversService().streamNearbyDriversFast(
+        loc,
+      ); // RTDB version
     });
 
 /// Rider Dashboard Main Page
@@ -141,11 +191,31 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   Widget build(BuildContext context) {
     final ridesAsync = ref.watch(riderDashboardProvider);
     final rideData = ridesAsync.value;
-    final status = (rideData?['status'] ?? '').toString();
     final assignedDriverId = (rideData?['driverId'] as String?);
-    // driver live location (do not override rideData)
-    LatLng? driverLatLng;
-    if (assignedDriverId != null && assignedDriverId.isNotEmpty) {
+    final rideId = (rideData?['id'] as String?);
+    final staticStatus = (rideData?['status'] ?? '').toString();
+
+    // Pull live overlay (fast) if ride exists
+    RideLive? live;
+    if (rideId != null) {
+      live = ref.watch(rtdbRideLiveProvider(rideId)).value;
+    }
+
+    // Prefer live status if present
+    final status = (live?.status.isNotEmpty == true)
+        ? live!.status
+        : staticStatus;
+
+    // Prefer live driver lat/lng
+    LatLng? driverLatLng = live?.driverLatLng;
+
+    // Fallback to driver stream if live didn’t include coords
+    final dlat = (rideData?['driverLat'] as num?)?.toDouble();
+    final dlng = (rideData?['driverLng'] as num?)?.toDouble();
+    if (dlat != null && dlng != null) {
+      driverLatLng = LatLng(dlat, dlng);
+    } else if (assignedDriverId != null && assignedDriverId.isNotEmpty) {
+      // fallback to driver location provider
       driverLatLng = ref.watch(driverLocationProvider(assignedDriverId)).value;
     }
 
@@ -224,7 +294,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           .map((d) {
                             final gp = d['location'];
                             if (gp is! GeoPoint) return null;
-
+                            final loc = d['location'];
+                            LatLng? pos;
+                            if (loc is GeoPoint) {
+                              pos = LatLng(loc.latitude, loc.longitude);
+                            } else if (loc is LatLng) {
+                              pos = loc;
+                            }
+                            if (pos == null) return null;
                             final id =
                                 (d['id'] ?? d['uid'] ?? UniqueKey().toString())
                                     .toString();
@@ -235,7 +312,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                             return Marker(
                               markerId: MarkerId('driver_$id'),
-                              position: LatLng(gp.latitude, gp.longitude),
+                              position: pos,
                               icon: BitmapDescriptor.defaultMarkerWithHue(
                                 BitmapDescriptor.hueOrange,
                               ),
@@ -274,6 +351,23 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                           markers: markers,
                           polylines: _polylines,
+                          gestureRecognizers: {
+                            Factory<PanGestureRecognizer>(
+                              () => PanGestureRecognizer(),
+                            ),
+                            Factory<ScaleGestureRecognizer>(
+                              () => ScaleGestureRecognizer(),
+                            ),
+                            Factory<TapGestureRecognizer>(
+                              () => TapGestureRecognizer(),
+                            ),
+                            Factory<VerticalDragGestureRecognizer>(
+                              () => VerticalDragGestureRecognizer(),
+                            ),
+                            Factory<OneSequenceGestureRecognizer>(
+                              () => EagerGestureRecognizer(),
+                            ),
+                          },
                         ),
                         Positioned(
                           top: 16,

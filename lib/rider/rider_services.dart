@@ -188,56 +188,59 @@ class RideService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      // Firestore-specific map
+      // Firestore doc
       final firestoreRide = {
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(), // ✅ Firestore timestamp
+        'createdAt': FieldValue.serverTimestamp(),
       };
-
-      // Save ride to Firestore
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
 
-      // RTDB-specific map
+      // Rider mirror (optional; keep if your UI still reads it)
       final rtdbRide = {
         'id': rideId,
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
-        'createdAt': ServerValue.timestamp, // ✅ RTDB timestamp
+        'createdAt': ServerValue.timestamp,
       };
-
-      // Mirror ride in Realtime DB
       await _rtdb.child('rides/$currentUid/$rideId').set(rtdbRide);
 
-      // --- 🔹 Subscribe to nearby drivers live stream ---
-      final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
+      // ✅ Seed ridesLive for all live listeners
+      await _rtdb.child('ridesLive/$rideId').set({
+        'status': 'pending',
+        'riderId': currentUid,
+        'pickupLat': rideData['pickupLat'],
+        'pickupLng': rideData['pickupLng'],
+        'dropoffLat': rideData['dropoffLat'],
+        'dropoffLng': rideData['dropoffLng'],
+        'fare': rideData['fare'],
+        'rideType': rideData['rideType'],
+        'createdAt': ServerValue.timestamp,
+      });
 
+      // Begin driver notifications (unchanged)
+      final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
       ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
 
       NearbyDriversService().streamNearbyDrivers(pickupLoc).listen((
-        nearbyDrivers,
+        drivers,
       ) async {
-        _logger.i("Nearby drivers updated: $nearbyDrivers");
+        _logger.i("Nearby drivers updated: $drivers");
 
-        // Update dashboard state
-        ref
-            .read(riderDashboardProvider.notifier)
-            .updateNearbyDrivers(nearbyDrivers);
+        // If you still want to reflect this in controller:
+        ref.read(riderDashboardProvider.notifier).updateNearbyDrivers(drivers);
 
-        // Push notifications to drivers
-        for (var driver in nearbyDrivers) {
-          await _rtdb
-              .child('driver_notifications/${driver['id']}/$rideId')
-              .set({
-                'rideId': rideId,
-                'pickup': rideData['pickup'],
-                'dropoff': rideData['dropoff'],
-                'fare': rideData['fare'],
-                'timestamp': ServerValue.timestamp,
-              });
+        for (var d in drivers) {
+          await _rtdb.child('driver_notifications/${d['id']}/$rideId').set({
+            'rideId': rideId,
+            'pickup': rideData['pickup'],
+            'dropoff': rideData['dropoff'],
+            'fare': rideData['fare'],
+            'timestamp': ServerValue.timestamp,
+          });
         }
       });
     } catch (e) {
@@ -250,36 +253,55 @@ class RideService {
     try {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
+
+      // Firestore: mark cancelled
       await _firestore.collection('rides').doc(rideId).update({
         'status': 'cancelled',
+        'cancelledAt': FieldValue.serverTimestamp(),
       });
-      await _rtdb.child('rides/$currentUid/$rideId').remove();
-      final snapshot = await _rtdb
-          .child('driver_notifications')
-          .orderByChild('rideId')
-          .equalTo(rideId)
-          .get();
 
-      for (var child in snapshot.children) {
-        await child.ref.remove();
+      // Rider mirror: remove (optional if you keep using it)
+      await _rtdb.child('rides/$currentUid/$rideId').remove();
+
+      // ✅ Live broadcast
+      await _rtdb.child('ridesLive/$rideId').update({
+        'status': 'cancelled',
+        'cancelledAt': ServerValue.timestamp,
+      });
+
+      // Clean driver notifications
+      final snapshot = await _rtdb.child('driver_notifications').get();
+      for (final driverNode in snapshot.children) {
+        final notifRef = driverNode.ref.child(rideId);
+        final notif = await notifRef.get();
+        if (notif.exists) {
+          await notifRef.remove();
+        }
       }
     } catch (e) {
-      _logger.e('Failed to cancel ride: $e');
+      Logger().e('Failed to cancel ride: $e');
       throw Exception('Unable to cancel ride: $e');
     }
   }
 
   Future<void> acceptCounterFare(String rideId, double counterFare) async {
     try {
-      final currentUid = FirebaseAuth.instance.currentUser?.uid;
-      if (currentUid == null) throw Exception('User not logged in');
+      // Firestore
       await _firestore.collection('rides').doc(rideId).update({
         'fare': counterFare,
         'counterFare': null,
         'status': 'accepted',
+        'acceptedAt': FieldValue.serverTimestamp(),
+      });
+
+      // ✅ Live
+      await _rtdb.child('ridesLive/$rideId').update({
+        'status': 'accepted',
+        'fare': counterFare,
+        'acceptedAt': ServerValue.timestamp,
       });
     } catch (e) {
-      _logger.e('Failed to accept counter-fare: $e');
+      Logger().e('Failed to accept counter-fare: $e');
       throw Exception('Unable to accept counter-fare: $e');
     }
   }
@@ -299,8 +321,8 @@ class RideService {
         rating: rating,
         comment: comment,
       );
-    } catch (e) {
-      _logger.e('Failed to submit rating: $e');
+    } catch (e, st) {
+      _logger.e('Failed to submit rating', error: e, stackTrace: st);
       throw Exception('Unable to submit rating: $e');
     }
   }

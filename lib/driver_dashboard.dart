@@ -26,9 +26,99 @@ class EarningsSummary {
   });
 }
 
+final LocationSettings locationSettings = LocationSettings(
+  accuracy: LocationAccuracy.high, // This replaces desiredAccuracy
+  distanceFilter:
+      0, // Optional: minimum distance (in meters) for location updates
+);
+
+final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
+  ref,
+) {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return const Stream<List<PendingRequest>>.empty();
+
+  final refBase = FirebaseDatabase.instance.ref('driver_notifications/$uid');
+
+  return refBase.onValue.map((ev) {
+    final v = ev.snapshot.value as Map?;
+    if (v == null) return <PendingRequest>[];
+
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    const ttlMs = 60 * 1000; // 60s TTL - tweak as needed
+
+    final list = <PendingRequest>[];
+    v.forEach((rideId, payload) {
+      if (payload is! Map) return;
+      // TTL (if your rider wrote timestamp)
+      final ts = (payload['timestamp'] as num?)?.toInt();
+      if (ts != null && (nowMs - ts) > ttlMs) return;
+
+      list.add(
+        PendingRequest.fromMap(
+          rideId.toString(),
+          Map<String, dynamic>.from(payload),
+        ),
+      );
+    });
+
+    // Most recent first (if you have a timestamp)
+    list.sort((a, b) {
+      final at = (a.raw['timestamp'] as num?)?.toInt() ?? 0;
+      final bt = (b.raw['timestamp'] as num?)?.toInt() ?? 0;
+      return bt.compareTo(at);
+    });
+    return list;
+  });
+});
+
+// === Ride status contract (match driver) ===
+class RideStatus {
+  static const pending = 'pending';
+  static const searching = 'searching';
+  static const accepted = 'accepted';
+  static const driverArrived = 'driver_arrived';
+  static const inProgress = 'in_progress';
+  static const onTrip = 'onTrip';
+  static const completed = 'completed';
+  static const cancelled = 'cancelled';
+
+  static const ongoingSet = <String>{
+    accepted,
+    driverArrived,
+    inProgress,
+    onTrip,
+  };
+
+  static const terminalSet = <String>{completed, cancelled};
+}
+
+final _rtdb = FirebaseDatabase.instance.ref();
+
+/// Live ride snapshot used by both rider & driver UIs
+Stream<Map<String, dynamic>?> ridesLiveStream(String rideId) {
+  return _rtdb.child('ridesLive/$rideId').onValue.map((e) {
+    final v = e.snapshot.value;
+    if (v is Map) return Map<String, dynamic>.from(v.cast<String, dynamic>());
+    return null;
+  });
+}
+
+/// Driver’s live location — rider map marker
+Stream<LatLng?> driverLocationStream(String driverId) {
+  return _rtdb.child('driverLocations/$driverId').onValue.map((e) {
+    final v = e.snapshot.value;
+    if (v is! Map) return null;
+    final m = Map<String, dynamic>.from(v.cast<String, dynamic>());
+    final lat = (m['lat'] as num?)?.toDouble();
+    final lng = (m['lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    return LatLng(lat, lng);
+  });
+}
+
 final _auth = FirebaseAuth.instance;
 final _fire = FirebaseFirestore.instance;
-final _rtdb = FirebaseDatabase.instance.ref();
 
 String? universalUid;
 
@@ -670,6 +760,10 @@ class DriverDashboard extends ConsumerStatefulWidget {
 }
 
 class _DriverDashboardState extends ConsumerState<DriverDashboard> {
+  String? _detailsPushedFor; // track last rideId for which we pushed details
+  StreamSubscription? _liveRideSub; // <— NEW
+  bool _detailsPushed = false; // <— NEW
+  String? _liveWatchingRideId;
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
   final _geoHasher = GeoHasher();
@@ -753,6 +847,97 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           }
         }
       });
+      // React to the driver’s "active ride" doc -> then follow RTDB /ridesLive/{rideId}
+      ref.listen<AsyncValue<DocumentSnapshot?>>(driverDashboardProvider, (
+        prev,
+        next,
+      ) {
+        final doc = next.asData?.value;
+        final newRideId = doc?.id;
+        if (newRideId == null) {
+          // No active ride -> stop watching live status and reset.
+          _liveRideSub?.cancel();
+          _liveRideSub = null;
+          _liveWatchingRideId = null;
+          _detailsPushed = false;
+          return;
+        }
+        if (_liveWatchingRideId == newRideId) return; // already watching
+        _attachLiveRide(newRideId);
+      });
+    });
+    ref.listen<
+      AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>
+    >(driverDashboardProvider, (prev, next) {
+      final doc = next.asData?.value;
+      if (doc == null) {
+        _detailsPushedFor = null; // reset when no active ride
+        return;
+      }
+      final data = doc.data();
+      if (data == null) return;
+      final rideId = doc.id;
+      final status = (data[AppFields.status] ?? '').toString();
+
+      // Open details when it reaches any ongoing state and we haven't pushed yet
+      if (RideStatus.ongoingSet.contains(status) &&
+          _detailsPushedFor != rideId) {
+        _detailsPushedFor = rideId;
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => DriverRideDetailsPage(rideId: rideId),
+            ),
+          );
+        }
+      }
+    });
+  }
+
+  void _attachLiveRide(String rideId) {
+    _liveRideSub?.cancel();
+    _liveWatchingRideId = rideId;
+    _detailsPushed = false;
+
+    _liveRideSub = ridesLiveStream(rideId).listen((live) {
+      if (!mounted) return;
+      final status = (live?['status'] ?? '').toString();
+      final driverId = (live?['driverId'] ?? '').toString();
+
+      if (RideStatus.ongoingSet.contains(status) &&
+          _detailsPushedFor != rideId) {
+        _detailsPushedFor = rideId;
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => DriverRideDetailsPage(rideId: rideId),
+            ),
+          );
+        }
+      }
+      // Only respond when this ride is assigned to THIS driver (or driverId is not set yet)
+      final me = _auth.currentUser?.uid;
+      if (driverId.isNotEmpty && me != null && driverId != me) return;
+
+      final isActive =
+          status == RideStatus.accepted ||
+          status == RideStatus.driverArrived ||
+          status == RideStatus.inProgress ||
+          status == RideStatus.onTrip;
+
+      if (isActive && !_detailsPushed) {
+        _detailsPushed = true;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DriverRideDetailsPage(rideId: rideId),
+          ),
+        );
+      }
+
+      // Optional: if completed/cancelled, close details and reset
+      if (status == RideStatus.completed || status == RideStatus.cancelled) {
+        _detailsPushed = false;
+      }
     });
   }
 
@@ -781,28 +966,56 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   }
 
   void _startLocationUpdates() {
+    // If this gets called more than once, prevent multiple timers.
+    _locationUpdateTimer?.cancel();
+
     _locationUpdateTimer = Timer.periodic(const Duration(seconds: 1), (
       timer,
     ) async {
       if (!_isOnline) return;
+
       try {
-        final pos = await Geolocator.getCurrentPosition();
-        setState(() {
-          _currentPosition = pos;
-        });
-        final uid = await getDriverUid();
+        // 1) Get current GPS position → this is the `pos` you asked about
+        final Position pos = await Geolocator.getCurrentPosition(
+          locationSettings:
+              locationSettings, // Pass locationSettings instead of desiredAccuracy
+        );
+
+        // Keep UI in sync
+        if (mounted) {
+          setState(() {
+            _currentPosition = pos;
+          });
+        }
+
+        // 2) Resolve current driver uid → this is the `uid` you asked about
+        final String? uid = await getDriverUid();
         if (uid != null) {
+          // Encode geohash for discovery radius features (already in your code)
+          final String gh = _geoHasher.encode(
+            pos.latitude,
+            pos.longitude,
+            precision: GeoCfg.driverHashPrecision,
+          );
+
+          // 3) Update the canonical "who is online & where" node
           await _rtdb.child(AppPaths.driversOnline).child(uid).update({
             AppFields.lat: pos.latitude,
             AppFields.lng: pos.longitude,
-            AppFields.geohash: _geoHasher.encode(
-              pos.latitude,
-              pos.longitude,
-              precision: GeoCfg.driverHashPrecision,
-            ),
+            AppFields.geohash: gh,
+            AppFields.updatedAt: ServerValue.timestamp,
+          });
+
+          // 4) ALSO update the rider-facing live location node
+          //    (this is what the Rider app prefers to watch)
+          await _rtdb.child(AppPaths.driverLocations).child(uid).update({
+            AppFields.lat: pos.latitude,
+            AppFields.lng: pos.longitude,
             AppFields.updatedAt: ServerValue.timestamp,
           });
         }
+
+        // 5) Smoothly pan the map to the latest position if visible
         if (_mapController != null && _currentPosition != null) {
           _mapController!.animateCamera(
             CameraUpdate.newLatLng(
@@ -811,7 +1024,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           );
         }
       } catch (e) {
-        if (kDebugMode) print('Location update failed: $e');
+        if (kDebugMode) {
+          print('Location update failed: $e');
+        }
       }
     });
   }
@@ -822,6 +1037,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     _pendingSub?.cancel();
     _locationUpdateTimer?.cancel();
     _mapController?.dispose();
+    _liveRideSub?.cancel(); // <— NEW
     super.dispose();
   }
 
@@ -1130,9 +1346,21 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                           'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
-                        Text(
-                          'Status: ${data[AppFields.status]?.toString().toUpperCase() ?? '-'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        StreamBuilder<Map<String, dynamic>?>(
+                          stream: ridesLiveStream(rideId), // <-- RTDB live node
+                          builder: (_, snap) {
+                            final live = snap.data;
+                            final liveStatus =
+                                (live?['status'] ??
+                                        data[AppFields.status] ??
+                                        '-')
+                                    .toString()
+                                    .toUpperCase();
+                            return Text(
+                              'Status: $liveStatus',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            );
+                          },
                         ),
                       ],
                     ),

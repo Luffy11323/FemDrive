@@ -1,9 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:logger/logger.dart';
 
 class PaymentService {
   final _firestore = FirebaseFirestore.instance;
+  final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
+
+  /// Convert Firestore numeric (int/double) safely to double
+  double _numToDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
+  }
 
   Future<bool> processPayment({
     required String rideId,
@@ -13,16 +22,35 @@ class PaymentService {
   }) async {
     try {
       if (paymentMethod == 'Cash') {
+        // Firestore
         await _firestore.collection('rides').doc(rideId).update({
           'paymentStatus': 'pending_driver_confirmation',
           'paymentMethod': paymentMethod,
           'amount': amount,
         });
+
+        // RTDB mirrors (fast UI)
+        await Future.wait([
+          _rtdb.child('ridesLive/$rideId/payment').update({
+            'status': 'pending_driver_confirmation',
+            'method': paymentMethod,
+            'amount': amount,
+          }),
+          _rtdb.child('payments/$rideId').update({
+            'status': 'pending_driver_confirmation',
+            'method': paymentMethod,
+            'amount': amount,
+            'userId': userId,
+            'updatedAt': ServerValue.timestamp,
+          }),
+        ]);
+
         return true;
       } else {
-        // Simulated payment gateway
+        // Simulated gateway delay
         await Future.delayed(const Duration(seconds: 2));
 
+        // Firestore: mark paid
         await _firestore.collection('rides').doc(rideId).update({
           'paymentStatus': 'completed',
           'paymentMethod': paymentMethod,
@@ -30,16 +58,29 @@ class PaymentService {
           'paymentTimestamp': FieldValue.serverTimestamp(),
         });
 
-        // Credit driver
-        final ride = await _firestore.collection('rides').doc(rideId).get();
-        final driverId = ride.data()?['driverId'] as String?;
-        if (driverId != null) {
-          await _firestore.collection('users').doc(driverId).update({
-            'earnings': FieldValue.increment(amount * 0.8),
-          });
-        }
+        // Credit driver (if already assigned) WITH a transaction
+        await _firestore.runTransaction((txn) async {
+          final rideSnap = await txn.get(
+            _firestore.collection('rides').doc(rideId),
+          );
+          if (!rideSnap.exists) return;
 
-        // Store receipt
+          final data = rideSnap.data()!;
+          final driverId = data['driverId'] as String?;
+          final amt = _numToDouble(data['amount']);
+
+          if (driverId != null && amt > 0) {
+            final driverRef = _firestore.collection('users').doc(driverId);
+            txn.update(driverRef, {
+              'earnings': FieldValue.increment(amt * 0.8),
+            });
+          }
+        });
+
+        // Firestore: store receipt
+        final rideSnap = await _firestore.collection('rides').doc(rideId).get();
+        final driverId = rideSnap.data()?['driverId'] as String?;
+
         await _firestore.collection('receipts').doc(rideId).set({
           'rideId': rideId,
           'userId': userId,
@@ -49,10 +90,28 @@ class PaymentService {
           'timestamp': FieldValue.serverTimestamp(),
         });
 
+        // RTDB mirrors (fast UI + history)
+        await Future.wait([
+          _rtdb.child('ridesLive/$rideId/payment').update({
+            'status': 'completed',
+            'method': paymentMethod,
+            'amount': amount,
+            'timestamp': ServerValue.timestamp,
+          }),
+          _rtdb.child('payments/$rideId').update({
+            'status': 'completed',
+            'method': paymentMethod,
+            'amount': amount,
+            'userId': userId,
+            'driverId': driverId,
+            'timestamp': ServerValue.timestamp,
+          }),
+        ]);
+
         return true;
       }
-    } catch (e) {
-      _logger.e('Payment processing failed: $e');
+    } catch (e, st) {
+      _logger.e('Payment processing failed: $e', stackTrace: st);
       rethrow;
     }
   }
@@ -62,32 +121,51 @@ class PaymentService {
     required String driverId,
   }) async {
     try {
+      // Firestore: mark completed
       await _firestore.collection('rides').doc(rideId).update({
         'paymentStatus': 'completed',
         'paymentTimestamp': FieldValue.serverTimestamp(),
       });
 
-      final amount =
-          (await _firestore.collection('rides').doc(rideId).get())
-                  .data()!['amount']
-              as double;
+      // Read amount defensively
+      final rideSnap = await _firestore.collection('rides').doc(rideId).get();
+      final amt = _numToDouble(rideSnap.data()?['amount']);
 
-      await _firestore.collection('users').doc(driverId).update({
-        'earnings': FieldValue.increment(amount * 0.8),
+      // Credit driver (transaction)
+      await _firestore.runTransaction((txn) async {
+        final driverRef = _firestore.collection('users').doc(driverId);
+        txn.update(driverRef, {'earnings': FieldValue.increment(amt * 0.8)});
       });
 
-      // Record receipt
+      // Firestore receipt
       await _firestore.collection('receipts').doc(rideId).set({
         'rideId': rideId,
         'driverId': driverId,
-        'amount': amount,
+        'amount': amt,
         'method': 'Cash',
         'timestamp': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
+
+      // RTDB mirrors
+      await Future.wait([
+        _rtdb.child('ridesLive/$rideId/payment').update({
+          'status': 'completed',
+          'method': 'Cash',
+          'amount': amt,
+          'timestamp': ServerValue.timestamp,
+        }),
+        _rtdb.child('payments/$rideId').update({
+          'status': 'completed',
+          'method': 'Cash',
+          'amount': amt,
+          'driverId': driverId,
+          'timestamp': ServerValue.timestamp,
+        }),
+      ]);
 
       return true;
-    } catch (e) {
-      _logger.e('Cash payment confirmation failed: $e');
+    } catch (e, st) {
+      _logger.e('Cash payment confirmation failed: $e', stackTrace: st);
       rethrow;
     }
   }
@@ -99,10 +177,6 @@ class PaymentService {
     double baseFare, perKmRate;
 
     switch (rideType) {
-      case 'Economy':
-        baseFare = 2.0;
-        perKmRate = 0.5;
-        break;
       case 'Premium':
         baseFare = 5.0;
         perKmRate = 1.0;
@@ -115,6 +189,7 @@ class PaymentService {
         baseFare = 4.0;
         perKmRate = 0.8;
         break;
+      case 'Economy':
       default:
         baseFare = 2.0;
         perKmRate = 0.5;
@@ -124,7 +199,7 @@ class PaymentService {
       (distanceKm * perKmRate).toStringAsFixed(2),
     );
     final tax = double.parse(
-      ((baseFare + distanceFare) * 0.1).toStringAsFixed(2),
+      ((baseFare + distanceFare) * 0.10).toStringAsFixed(2),
     );
     final total = double.parse(
       (baseFare + distanceFare + tax).toStringAsFixed(2),
