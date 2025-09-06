@@ -780,6 +780,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void initState() {
     super.initState();
+
+    // 1. Internet status listener
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
           results.contains(ConnectivityResult.mobile) ||
@@ -789,6 +791,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       }
     });
 
+    // 2. Driver verification listener
     getDriverUid().then((uid) {
       if (uid == null) return;
       _fire.collection('users').doc(uid).snapshots().listen((snap) async {
@@ -808,90 +811,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       });
     });
 
-    _startLocationUpdates();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
-        prev,
-        next,
-      ) async {
-        if (!_isOnline) return;
-        final list = next.asData?.value ?? const <PendingRequest>[];
-        if (list.isEmpty) return;
-
-        await _ensureDriverHashPrefix();
-
-        for (final req in list) {
-          if (_shownRequestIds.contains(req.rideId)) continue;
-          final prefix = _driverGeoHashPrefix;
-          bool isNearby = true;
-          if (prefix != null && prefix.isNotEmpty) {
-            try {
-              final ph = _geoHasher.encode(
-                req.pickupLat,
-                req.pickupLng,
-                precision: GeoCfg.popupProximityPrecision,
-              );
-              final checkLen = min(prefix.length, 4);
-              isNearby = ph.startsWith(prefix.substring(0, checkLen));
-            } catch (_) {}
-          }
-
-          if (isNearby && mounted) {
-            _shownRequestIds.add(req.rideId);
-            showDialog(
-              context: context,
-              builder: (_) => RidePopupWidget(request: req),
-            );
-            break;
-          }
-        }
-      });
-      // React to the driver’s "active ride" doc -> then follow RTDB /ridesLive/{rideId}
-      ref.listen<AsyncValue<DocumentSnapshot?>>(driverDashboardProvider, (
-        prev,
-        next,
-      ) {
-        final doc = next.asData?.value;
-        final newRideId = doc?.id;
-        if (newRideId == null) {
-          // No active ride -> stop watching live status and reset.
-          _liveRideSub?.cancel();
-          _liveRideSub = null;
-          _liveWatchingRideId = null;
-          _detailsPushed = false;
-          return;
-        }
-        if (_liveWatchingRideId == newRideId) return; // already watching
-        _attachLiveRide(newRideId);
-      });
-    });
-    ref.listen<
-      AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>
-    >(driverDashboardProvider, (prev, next) {
-      final doc = next.asData?.value;
-      if (doc == null) {
-        _detailsPushedFor = null; // reset when no active ride
-        return;
-      }
-      final data = doc.data();
-      if (data == null) return;
-      final rideId = doc.id;
-      final status = (data[AppFields.status] ?? '').toString();
-
-      // Open details when it reaches any ongoing state and we haven't pushed yet
-      if (RideStatus.ongoingSet.contains(status) &&
-          _detailsPushedFor != rideId) {
-        _detailsPushedFor = rideId;
-        if (mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => DriverRideDetailsPage(rideId: rideId),
-            ),
-          );
-        }
-      }
-    });
+    _startLocationUpdates(); // Your existing GPS stream logic
   }
 
   void _attachLiveRide(String rideId) {
@@ -1055,8 +975,103 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     setState(() => _selectedIndex = index);
   }
 
+  bool _hasAttachedListeners = false; // Add this at the top of your class
+
   @override
   Widget build(BuildContext context) {
+    // 🛡 Ensure ref.listen(...) is called only once
+    if (!_hasAttachedListeners) {
+      _hasAttachedListeners = true;
+
+      // 1. Handle incoming ride requests
+      ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
+        prev,
+        next,
+      ) async {
+        if (!_isOnline) return;
+        final list = next.asData?.value ?? const <PendingRequest>[];
+        if (list.isEmpty) return;
+
+        await _ensureDriverHashPrefix();
+
+        for (final req in list) {
+          if (_shownRequestIds.contains(req.rideId)) continue;
+          final prefix = _driverGeoHashPrefix;
+          bool isNearby = true;
+          if (prefix != null && prefix.isNotEmpty) {
+            try {
+              final ph = _geoHasher.encode(
+                req.pickupLat,
+                req.pickupLng,
+                precision: GeoCfg.popupProximityPrecision,
+              );
+              final checkLen = min(prefix.length, 4);
+              isNearby = ph.startsWith(prefix.substring(0, checkLen));
+            } catch (_) {}
+          }
+
+          if (isNearby && mounted) {
+            _shownRequestIds.add(req.rideId);
+            showDialog(
+              // ignore: use_build_context_synchronously
+              context: context,
+              builder: (_) => RidePopupWidget(request: req),
+            );
+            break;
+          }
+        }
+      });
+
+      // 2. Watch live ride document
+      ref.listen<AsyncValue<DocumentSnapshot?>>(driverDashboardProvider, (
+        prev,
+        next,
+      ) {
+        final doc = next.asData?.value;
+        final newRideId = doc?.id;
+
+        if (newRideId == null) {
+          _liveRideSub?.cancel();
+          _liveRideSub = null;
+          _liveWatchingRideId = null;
+          _detailsPushed = false;
+          return;
+        }
+
+        if (_liveWatchingRideId == newRideId) return;
+        _attachLiveRide(newRideId);
+      });
+
+      // 3. Push ride details page
+      ref.listen<AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>>(
+        driverDashboardProvider,
+        (prev, next) {
+          final doc = next.asData?.value;
+          if (doc == null) {
+            _detailsPushedFor = null;
+            return;
+          }
+
+          final data = doc.data();
+          if (data == null) return;
+          final rideId = doc.id;
+          final status = (data[AppFields.status] ?? '').toString();
+
+          if (RideStatus.ongoingSet.contains(status) &&
+              _detailsPushedFor != rideId) {
+            _detailsPushedFor = rideId;
+            if (mounted) {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => DriverRideDetailsPage(rideId: rideId),
+                ),
+              );
+            }
+          }
+        },
+      );
+    }
+
     final pages = [
       _buildHomePage(),
       const PastRidesListWidget(),
