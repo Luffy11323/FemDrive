@@ -11,14 +11,12 @@ import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingSer
 import 'package:femdrive/widgets/payment_services.dart';
 import 'package:femdrive/widgets/share_service.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:flutter/gestures.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -292,16 +290,19 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             (d) => (d['id'] ?? d['uid']) != assignedDriverId,
                           ) // avoid duplicate
                           .map((d) {
-                            final gp = d['location'];
-                            if (gp is! GeoPoint) return null;
                             final loc = d['location'];
                             LatLng? pos;
                             if (loc is GeoPoint) {
+                              print('Driver ${d['id']} location: $loc');
                               pos = LatLng(loc.latitude, loc.longitude);
                             } else if (loc is LatLng) {
+                              print('Driver ${d['id']} location: $loc');
                               pos = loc;
+                            } else {
+                              print('Driver ${d['id']} location: unknown');
+                              return null; // unknown type
                             }
-                            if (pos == null) return null;
+
                             final id =
                                 (d['id'] ?? d['uid'] ?? UniqueKey().toString())
                                     .toString();
@@ -351,23 +352,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                           markers: markers,
                           polylines: _polylines,
-                          gestureRecognizers: {
-                            Factory<PanGestureRecognizer>(
-                              () => PanGestureRecognizer(),
-                            ),
-                            Factory<ScaleGestureRecognizer>(
-                              () => ScaleGestureRecognizer(),
-                            ),
-                            Factory<TapGestureRecognizer>(
-                              () => TapGestureRecognizer(),
-                            ),
-                            Factory<VerticalDragGestureRecognizer>(
-                              () => VerticalDragGestureRecognizer(),
-                            ),
-                            Factory<OneSequenceGestureRecognizer>(
-                              () => EagerGestureRecognizer(),
-                            ),
-                          },
                         ),
                         Positioned(
                           top: 16,
