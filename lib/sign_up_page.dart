@@ -169,7 +169,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   Future<void> sendOtp() async {
     if (isSubmitting) return; // guard
-    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     if (role == 'driver') {
@@ -219,7 +218,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
     if (isSubmitting) return; // guard
-    FocusScope.of(context).unfocus();
     setState(() => isSubmitting = true);
 
     try {
@@ -611,13 +609,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           child: (isSubmitting || isOtpSent)
                               ? _LoadingCar(
                                   key: ValueKey(
-                                    isSubmitting ? 'loading' : 'awaiting_otp',
+                                    isSubmitting ? 'sending' : 'awaiting_otp',
                                   ),
                                   label: isSubmitting
                                       ? (isOtpSent
                                             ? 'Verifying & Registering...'
-                                            : 'Sending OTP...')
-                                      : 'Verify & Register', // when isOtpSent && !isSubmitting
+                                            : 'Sending OTP...') // sending state
+                                      : 'Enter OTP to register', // waiting-for-otp state
                                 )
                               : const Text('Send OTP', key: ValueKey('idle')),
                         ),

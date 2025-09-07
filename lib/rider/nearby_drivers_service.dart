@@ -18,40 +18,47 @@ class NearbyDriversService {
   ///    Reads driver docs (role=driver, isOnline=true) and filters by GeoPoint.
   /// --------------------------------------------------------------------------
   Stream<List<Map<String, dynamic>>> streamNearbyDrivers(LatLng riderLocation) {
+    print(
+      '[NearbyDriversService] Streaming nearby drivers from Firestore for location: $riderLocation',
+    );
+
     return _firestore
         .collection('users')
         .where('role', isEqualTo: 'driver')
         .where('isOnline', isEqualTo: true)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs
-              .where((doc) {
-                final data = doc.data();
-                final driverLocation = data['location'] as GeoPoint?;
-                if (driverLocation == null) return false;
+          final filtered = snapshot.docs.where((doc) {
+            final data = doc.data();
+            final location = data['location'] as GeoPoint?;
+            if (location == null) return false;
 
-                final distanceKm =
-                    Geolocator.distanceBetween(
-                      riderLocation.latitude,
-                      riderLocation.longitude,
-                      driverLocation.latitude,
-                      driverLocation.longitude,
-                    ) /
-                    1000.0;
+            final distanceKm =
+                Geolocator.distanceBetween(
+                  riderLocation.latitude,
+                  riderLocation.longitude,
+                  location.latitude,
+                  location.longitude,
+                ) /
+                1000.0;
 
-                return distanceKm <= _searchRadiusKm;
-              })
-              .map((doc) {
-                final data = doc.data();
-                return {
-                  'id': doc.id,
-                  'username': data['username'] ?? 'Unknown Driver',
-                  'location': data['location'], // GeoPoint (Firestore)
-                  'rideType': data['availableRideType'] ?? 'Economy',
-                  'rating': data['rating'] ?? 0,
-                };
-              })
-              .toList();
+            return distanceKm <= _searchRadiusKm;
+          }).toList();
+
+          print(
+            '[NearbyDriversService] Firestore nearby drivers in radius: ${filtered.length}',
+          );
+
+          return filtered.map((doc) {
+            final data = doc.data();
+            return {
+              'id': doc.id,
+              'username': data['username'] ?? 'Unknown Driver',
+              'location': data['location'],
+              'rideType': data['availableRideType'] ?? 'Economy',
+              'rating': data['rating'] ?? 0,
+            };
+          }).toList();
         });
   }
 
@@ -67,19 +74,10 @@ class NearbyDriversService {
   Stream<List<Map<String, dynamic>>> streamNearbyDriversFast(
     LatLng riderLocation,
   ) {
-    // Firestore online drivers (metadata)
-    final fsOnlineDriversStream = _firestore
-        .collection('users')
-        .where('role', isEqualTo: 'driver')
-        .where('isOnline', isEqualTo: true)
-        .snapshots();
+    print(
+      '[NearbyDriversService] Entering streamNearbyDriversFast with location: $riderLocation',
+    );
 
-    // RTDB live driver locations (single listener)
-    final rtdbLocationsStream = _rtdb
-        .child('driverLocations')
-        .onValue; // {driverId: {lat,lng}}
-
-    // Combine both streams manually
     final controller = StreamController<List<Map<String, dynamic>>>.broadcast();
 
     QuerySnapshot<Map<String, dynamic>>? latestFs;
@@ -88,13 +86,11 @@ class NearbyDriversService {
     void emitIfReady() {
       if (latestFs == null || latestRtdb == null) return;
 
-      // Build metadata map from Firestore (id -> metadata)
       final metaById = <String, Map<String, dynamic>>{};
       for (final doc in latestFs!.docs) {
         metaById[doc.id] = doc.data();
       }
 
-      // Extract RTDB locations
       final raw = latestRtdb!.snapshot.value;
       final locMap = (raw is Map ? raw.cast<dynamic, dynamic>() : const {}).map(
         (k, v) => MapEntry(k.toString(), (v as Map).cast<String, dynamic>()),
@@ -107,7 +103,6 @@ class NearbyDriversService {
         final lng = (m['lng'] as num?)?.toDouble();
         if (lat == null || lng == null) return;
 
-        // Only keep if driver is currently online in Firestore
         final meta = metaById[driverId];
         if (meta == null) return;
 
@@ -124,7 +119,7 @@ class NearbyDriversService {
           out.add({
             'id': driverId,
             'username': meta['username'] ?? 'Unknown Driver',
-            'location': LatLng(lat, lng), // RTDB live location
+            'location': LatLng(lat, lng),
             'rideType': meta['availableRideType'] ?? 'Economy',
             'rating': meta['rating'] ?? 0,
             'distanceKm': distanceKm,
@@ -132,37 +127,26 @@ class NearbyDriversService {
         }
       });
 
-      // (Optional) sort by distance
-      out.sort(
-        (a, b) =>
-            (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
+      print(
+        '[NearbyDriversService] Nearby drivers in RTDB after merge: ${out.length}',
       );
-
       controller.add(out);
     }
 
-    // Subscriptions
-    final subA = fsOnlineDriversStream.listen(
-      (snap) {
-        latestFs = snap;
-        emitIfReady();
-      },
-      onError: (e, st) {
-        _logger.e('FS online drivers stream error: $e', stackTrace: st);
-        controller.addError(e, st);
-      },
-    );
+    final subA = _firestore
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .where('isOnline', isEqualTo: true)
+        .snapshots()
+        .listen((snap) {
+          latestFs = snap;
+          emitIfReady();
+        });
 
-    final subB = rtdbLocationsStream.listen(
-      (evt) {
-        latestRtdb = evt;
-        emitIfReady();
-      },
-      onError: (e, st) {
-        _logger.e('RTDB locations stream error: $e', stackTrace: st);
-        controller.addError(e, st);
-      },
-    );
+    final subB = _rtdb.child('driverLocations').onValue.listen((evt) {
+      latestRtdb = evt;
+      emitIfReady();
+    });
 
     controller.onCancel = () {
       subA.cancel();

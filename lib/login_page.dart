@@ -159,8 +159,6 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   }
 
   Future<void> sendOtp() async {
-    if (loading) return; // <-- guard
-    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     final formattedPhone = _formatPakistaniPhone(phoneController.text);
@@ -200,8 +198,6 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   }
 
   Future<void> verifyOtp({PhoneAuthCredential? autoCredential}) async {
-    if (loading) return; // <-- guard
-    FocusScope.of(context).unfocus();
     if (autoCredential == null &&
         (verificationId == null || otpController.text.trim().length != 6)) {
       return _showError("Please enter the full 6-digit OTP.");
@@ -410,12 +406,11 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                       child: (loading || otpSent)
                           ? _LoadingCar(
                               key: ValueKey(
-                                loading ? 'loading' : 'awaiting_otp',
+                                loading ? 'sending' : 'awaiting_otp',
                               ),
-                              // Show a sensible label in each phase:
                               label: loading
-                                  ? (otpSent ? 'Verifying...' : 'Sending...')
-                                  : 'Verify OTP', // when otpSent && !loading
+                                  ? 'Sending OTP...' // sending state
+                                  : 'Enter OTP to verify', // waiting-for-otp state (fields visible)
                             )
                           : const Text('Send OTP', key: ValueKey('idle')),
                     ),

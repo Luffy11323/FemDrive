@@ -122,7 +122,7 @@ class RiderDashboardController
   }) async {
     final riderId = uid;
     if (riderId == null) throw Exception('User not logged in');
-
+    print('[createRide] Calling RideService.requestRide...');
     try {
       await RideService().requestRide({
         'pickup': pickup,
@@ -135,6 +135,7 @@ class RiderDashboardController
         'rideType': rideType,
         'note': note,
       }, ref);
+      print('[createRide] RideService.requestRide completed ✅');
 
       // Optimistic state: the RTDB stream will take over shortly
       state = AsyncData({
