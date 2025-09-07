@@ -4,7 +4,6 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:logger/logger.dart';
@@ -102,7 +101,9 @@ class NearbyDriversService {
       List<Map<String, dynamic>> candidates = [];
 
       // These counters are for logging insight
+      // ignore: unused_local_variable
       int staleSkipped = 0;
+      // ignore: unused_local_variable
       int metaMissing = 0;
 
       while (currentRadius <= _searchRadiusKm && candidates.isEmpty) {
@@ -160,15 +161,6 @@ class NearbyDriversService {
         (a, b) =>
             (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
       );
-
-      // Final summary log
-      if (kDebugMode) {
-        print(
-          '[NearbyDriversService] (FAST) RTDB /drivers_online total=${locMap.length} '
-          'emitting=${candidates.length} within<=${currentRadius.clamp(2.0, _searchRadiusKm)}km '
-          '(fresh<=${_freshMs}ms, staleSkipped=$staleSkipped, metaMissing=$metaMissing)',
-        );
-      }
 
       controller.add(candidates);
     }
