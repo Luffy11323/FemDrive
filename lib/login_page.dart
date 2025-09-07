@@ -159,6 +159,8 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   }
 
   Future<void> sendOtp() async {
+    if (loading) return; // <-- guard
+    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     final formattedPhone = _formatPakistaniPhone(phoneController.text);
@@ -198,6 +200,8 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   }
 
   Future<void> verifyOtp({PhoneAuthCredential? autoCredential}) async {
+    if (loading) return; // <-- guard
+    FocusScope.of(context).unfocus();
     if (autoCredential == null &&
         (verificationId == null || otpController.text.trim().length != 6)) {
       return _showError("Please enter the full 6-digit OTP.");
@@ -354,7 +358,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                     keyboardType: TextInputType.phone,
                     inputFormatters: [PhoneNumberHyphenFormatter()],
                     validator: _validatePakistaniPhone,
-                    enabled: !otpSent,
+                    enabled: !otpSent && !loading,
                   ).animate().slideX(begin: -0.1, end: 0, duration: 400.ms),
                   if (otpSent) ...[
                     const SizedBox(height: 16),
@@ -362,6 +366,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                       controller: otpController,
                       keyboardType: TextInputType.number,
                       maxLength: 6,
+                      enabled: !loading,
                       decoration: const InputDecoration(
                         labelText: 'Enter OTP',
                         prefixIcon: Icon(Icons.lock),
@@ -385,7 +390,9 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                           ),
                         ),
                         TextButton(
-                          onPressed: enableResend ? sendOtp : null,
+                          onPressed: (!loading && enableResend)
+                              ? sendOtp
+                              : null,
                           child: const Text('Resend OTP'),
                         ),
                       ],
@@ -395,30 +402,23 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                   ElevatedButton(
                     onPressed: loading
                         ? null
-                        : otpSent
-                        ? verifyOtp
-                        : sendOtp,
-                    child: loading
-                        ? Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(otpSent ? 'Verifying...' : 'Sending...'),
-                            ],
-                          )
-                        : Text(otpSent ? 'Verify OTP' : 'Send OTP'),
-                  ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+                        : (otpSent ? () => verifyOtp() : () => sendOtp()),
+                    child: AnimatedSwitcher(
+                      duration: 250.ms,
+                      transitionBuilder: (child, anim) =>
+                          FadeTransition(opacity: anim, child: child),
+                      child: loading
+                          ? _LoadingCar(
+                              key: const ValueKey('loading'),
+                              label: otpSent ? 'Verifying...' : 'Sending...',
+                            )
+                          : Text(
+                              otpSent ? 'Verify OTP' : 'Send OTP',
+                              key: const ValueKey('idle'),
+                            ),
+                    ),
+                  ),
+
                   const SizedBox(height: 16),
                   Center(
                     child: TextButton(
@@ -432,6 +432,26 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LoadingCar extends StatelessWidget {
+  final String label;
+  const _LoadingCar({super.key, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.directions_car)
+            .animate(onPlay: (c) => c.repeat(reverse: true))
+            .moveX(begin: -6, end: 6, duration: 700.ms),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
     );
   }
 }

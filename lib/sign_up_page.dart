@@ -21,8 +21,13 @@ class SignUpPage extends StatefulWidget {
 class OtpInputField extends StatefulWidget {
   final int length;
   final void Function(String) onCompleted;
-
-  const OtpInputField({super.key, this.length = 6, required this.onCompleted});
+  final bool enabled;
+  const OtpInputField({
+    super.key,
+    this.length = 6,
+    required this.onCompleted,
+    this.enabled = true,
+  });
 
   @override
   State<OtpInputField> createState() => _OtpInputFieldState();
@@ -40,6 +45,7 @@ class _OtpInputFieldState extends State<OtpInputField> {
   @override
   Widget build(BuildContext context) {
     return TextField(
+      enabled: widget.enabled,
       controller: _controller,
       keyboardType: TextInputType.number,
       maxLength: widget.length,
@@ -117,6 +123,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   void startResendTimer() {
+    _resendTimer?.cancel();
     setState(() {
       canResend = false;
       resendSeconds = 60;
@@ -161,6 +168,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Future<void> sendOtp() async {
+    if (isSubmitting) return; // guard
+    FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     if (role == 'driver') {
@@ -209,6 +218,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Future<void> confirmOtp({PhoneAuthCredential? autoCredential}) async {
+    if (isSubmitting) return; // guard
+    FocusScope.of(context).unfocus();
     setState(() => isSubmitting = true);
 
     try {
@@ -330,6 +341,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Future<void> _captureDocument(bool isLicense) async {
+    if (isSubmitting) return; // guard
     try {
       final file = await Navigator.push<File?>(
         context,
@@ -438,6 +450,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       const SizedBox(height: 24),
                       TextFormField(
                         controller: usernameController,
+                        enabled: !isSubmitting,
                         decoration: const InputDecoration(
                           labelText: 'Username',
                           prefixIcon: Icon(Icons.person),
@@ -448,6 +461,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       const SizedBox(height: 16),
                       TextFormField(
                         controller: phoneController,
+                        enabled: !isSubmitting, // <—
                         decoration: const InputDecoration(
                           labelText: 'Phone (e.g. 0300-1234567)',
                           prefixIcon: Icon(Icons.phone),
@@ -483,7 +497,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                               ),
                             ),
                             TextButton(
-                              onPressed: canResend ? sendOtp : null,
+                              onPressed: (!isSubmitting && canResend)
+                                  ? sendOtp
+                                  : null,
                               child: const Text('Resend OTP'),
                             ),
                           ],
@@ -504,7 +520,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           labelText: 'Register as',
                           prefixIcon: Icon(Icons.person_pin),
                         ),
-                        onChanged: (v) => setState(() => role = v!),
+                        onChanged: isSubmitting
+                            ? null
+                            : (v) => setState(() => role = v!),
                       ).animate().slideX(
                         begin: -0.1,
                         end: 0,
@@ -525,8 +543,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                                     DropdownMenuItem(value: t, child: Text(t)),
                               )
                               .toList(),
-                          onChanged: (v) =>
-                              setState(() => selectedCarType = v!),
+                          onChanged: isSubmitting
+                              ? null
+                              : (v) => setState(() => selectedCarType = v!),
                         ).animate().slideX(
                           begin: 0.1,
                           end: 0,
@@ -536,6 +555,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: carModelController,
+                          enabled: !isSubmitting,
                           decoration: const InputDecoration(
                             labelText: 'Car Model',
                             prefixIcon: Icon(Icons.car_rental),
@@ -551,6 +571,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: altContactController,
+                          enabled: !isSubmitting,
                           decoration: const InputDecoration(
                             labelText: 'Alternate Number',
                             prefixIcon: Icon(Icons.phone),
@@ -580,30 +601,25 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       ElevatedButton(
                         onPressed: isSubmitting
                             ? null
-                            : isOtpSent
-                            ? confirmOtp
-                            : sendOtp,
-                        child: isSubmitting
-                            ? Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: const [
-                                  SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(width: 12),
-                                  Text("Please wait..."),
-                                ],
-                              )
-                            : Text(
-                                isOtpSent ? 'Verify & Register' : 'Send OTP',
-                              ),
+                            : (isOtpSent
+                                  ? () => confirmOtp()
+                                  : () => sendOtp()),
+                        child: AnimatedSwitcher(
+                          duration: 250.ms,
+                          transitionBuilder: (child, anim) =>
+                              FadeTransition(opacity: anim, child: child),
+                          child: isSubmitting
+                              ? _LoadingCar(
+                                  key: const ValueKey('loading'),
+                                  label: isOtpSent
+                                      ? 'Verifying & Registering...'
+                                      : 'Sending OTP...',
+                                )
+                              : Text(
+                                  isOtpSent ? 'Verify & Register' : 'Send OTP',
+                                  key: const ValueKey('idle'),
+                                ),
+                        ),
                       ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
                     ],
                   ),
@@ -634,6 +650,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Widget _buildOtpFields() {
     return OtpInputField(
       length: otpLength,
+      enabled: !isSubmitting,
       onCompleted: (code) {
         setState(() => enteredOtp = code);
       },
@@ -657,7 +674,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
               Row(
                 children: [
                   TextButton(
-                    onPressed: () => _captureDocument(isLicense),
+                    onPressed: isSubmitting
+                        ? null
+                        : () => _captureDocument(isLicense),
                     child: const Text("Retake"),
                   ),
                   const SizedBox(width: 8),
@@ -675,7 +694,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           )
         else
           ElevatedButton.icon(
-            onPressed: () => _captureDocument(isLicense),
+            onPressed: isSubmitting ? null : () => _captureDocument(isLicense),
             icon: const Icon(Icons.camera_alt),
             label: Text(
               isLicense ? "Capture License" : "Capture Birth Certificate",
@@ -864,6 +883,26 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
             : null,
         floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       ),
+    );
+  }
+}
+
+class _LoadingCar extends StatelessWidget {
+  final String label;
+  const _LoadingCar({super.key, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.directions_car)
+            .animate(onPlay: (c) => c.repeat(reverse: true))
+            .moveX(begin: -6, end: 6, duration: 700.ms),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
     );
   }
 }
