@@ -125,7 +125,7 @@ class RiderDashboardController
     if (riderId == null) throw Exception('User not logged in');
 
     try {
-      await RideService().requestRide({
+      final rideId = await RideService().requestRide({
         'pickup': pickup,
         'dropoff': dropoff,
         'pickupLat': pickupLocation.latitude,
@@ -135,10 +135,11 @@ class RiderDashboardController
         'fare': fare,
         'rideType': rideType,
         'note': note,
-      });
+      }, ref);
 
       // Optimistic state: the RTDB stream will take over shortly
       state = AsyncData({
+        'id': rideId,
         'pickup': pickup,
         'dropoff': dropoff,
         'pickupLat': pickupLocation.latitude,

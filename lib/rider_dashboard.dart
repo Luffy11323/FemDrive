@@ -293,13 +293,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             final loc = d['location'];
                             LatLng? pos;
                             if (loc is GeoPoint) {
-                              print('Driver ${d['id']} location: $loc');
                               pos = LatLng(loc.latitude, loc.longitude);
                             } else if (loc is LatLng) {
-                              print('Driver ${d['id']} location: $loc');
                               pos = loc;
                             } else {
-                              print('Driver ${d['id']} location: unknown');
                               return null; // unknown type
                             }
 
@@ -569,9 +566,23 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   message: 'Finding a driver near you…',
                   onCancel: () async {
                     try {
+                      final id = (rideData['id'] as String?);
+                      if (id == null || id.isEmpty) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Please wait a moment… setting up ride',
+                              ),
+                            ),
+                          );
+                        }
+                        return; // don’t call cancelRide without an id
+                      }
+
                       await ref
                           .read(riderDashboardProvider.notifier)
-                          .cancelRide(rideData['id']);
+                          .cancelRide(id);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Ride cancelled')),

@@ -184,32 +184,32 @@ class RideService {
   final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
 
-  Future<void> requestRide(Map<String, dynamic> rideData) async {
+  Future<String> requestRide(
+    Map<String, dynamic> rideData,
+    WidgetRef ref,
+  ) async {
     try {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      // Firestore doc
       final firestoreRide = {
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       };
+
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
 
-      // Rider mirror (optional)
-      final rtdbRide = {
+      await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
         'createdAt': ServerValue.timestamp,
-      };
-      await _rtdb.child('rides/$currentUid/$rideId').set(rtdbRide);
+      });
 
-      // ✅ Seed ridesLive for all live listeners
       await _rtdb.child('ridesLive/$rideId').set({
         'status': 'pending',
         'riderId': currentUid,
@@ -222,8 +222,8 @@ class RideService {
         'createdAt': ServerValue.timestamp,
       });
 
-      // Begin driver notifications
       final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
+      ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
 
       NearbyDriversService().streamNearbyDrivers(pickupLoc).listen((
         drivers,
@@ -240,6 +240,7 @@ class RideService {
           });
         }
       });
+      return rideId; // ← NEW
     } catch (e) {
       _logger.e('Failed to request ride: $e');
       throw Exception('Unable to request ride: $e');
