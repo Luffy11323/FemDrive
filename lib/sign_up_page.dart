@@ -897,9 +897,10 @@ class _LoadingCar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Icon(Icons.directions_car)
-            .animate(onPlay: (c) => c.repeat(reverse: true))
-            .moveX(begin: -6, end: 6, duration: 700.ms),
+        Animate(
+          onPlay: (controller) => controller.repeat(reverse: true),
+          child: const Icon(Icons.directions_car),
+        ).moveX(begin: -12, end: 12, duration: 1000.ms),
         const SizedBox(width: 12),
         Text(label),
       ],
