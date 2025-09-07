@@ -1,6 +1,7 @@
 //rider_services.dart
 // ignore_for_file: unused_import
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:femdrive/rider/nearby_drivers_service.dart';
@@ -41,12 +42,17 @@ final nearbyDriversProvider =
     });
 
 class RadarSearchingOverlay extends StatefulWidget {
+  final LatLng pickup;
   final String message;
   final VoidCallback onCancel;
+  final GoogleMapController? mapController; // pass controller down
+
   const RadarSearchingOverlay({
     super.key,
+    required this.pickup,
     required this.message,
     required this.onCancel,
+    this.mapController,
   });
 
   @override
@@ -56,6 +62,20 @@ class RadarSearchingOverlay extends StatefulWidget {
 class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctl;
+  Timer? _zoomTimer;
+  int _step = 0;
+
+  // Define zoom sequence
+  final List<double> _zoomSequence = [
+    19, // ~50m
+    18, // ~100m
+    17, // ~200m
+    16, // ~500m
+    15, // ~1km
+    14, // ~2km
+    13.5, // ~3km
+    13, // ~5km
+  ];
 
   @override
   void initState() {
@@ -64,11 +84,27 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+
+    // Start auto zoom timer
+    _zoomTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (widget.mapController == null) return;
+
+      if (_step < _zoomSequence.length) {
+        final zoom = _zoomSequence[_step];
+        widget.mapController!.animateCamera(
+          CameraUpdate.newLatLngZoom(widget.pickup, zoom),
+        );
+        _step++;
+      } else {
+        _zoomTimer?.cancel(); // stop after max radius reached
+      }
+    });
   }
 
   @override
   void dispose() {
     _ctl.dispose();
+    _zoomTimer?.cancel();
     super.dispose();
   }
 
@@ -92,7 +128,7 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
                 },
               ),
             ),
-            // Message
+            // Message + progress
             Positioned(
               bottom: 140,
               left: 24,

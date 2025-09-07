@@ -135,6 +135,38 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     super.dispose();
   }
 
+  Future<void> _drawRoute({
+    required LatLng from,
+    required LatLng to,
+    required String id,
+    required Color color,
+    int width = 6,
+  }) async {
+    try {
+      final points = await MapService().getRoute(from, to);
+      _logger.i(
+        '[route] ${from.latitude},${from.longitude} -> ${to.latitude},${to.longitude} | pts=${points.length}',
+      );
+      if (!mounted || points.isEmpty) return;
+      setState(() {
+        _polylines = {
+          Polyline(
+            polylineId: PolylineId(id),
+            points: points,
+            color: color,
+            width: width,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+          ),
+        };
+      });
+      await _fitToBounds(from, to);
+    } catch (e) {
+      _logger.e('Failed to draw route "$id": $e');
+    }
+  }
+
   Future<void> _loadCurrentLocation() async {
     try {
       final loc = await MapService().currentLocation();
@@ -192,6 +224,22 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final assignedDriverId = (rideData?['driverId'] as String?);
     final rideId = (rideData?['id'] as String?);
     final staticStatus = (rideData?['status'] ?? '').toString();
+    final dash = ref.watch(riderDashboardProvider);
+    final rideDataa = dash.asData?.value;
+    final statuss = (rideData?['status'] as String?) ?? '';
+
+    // ✅ side-effect: keep camera centered on pickup while searching
+    if (_mapController != null && rideDataa != null && statuss == 'searching') {
+      final pLat = (rideDataa['pickupLat'] as num?)?.toDouble();
+      final pLng = (rideDataa['pickupLng'] as num?)?.toDouble();
+      if (pLat != null && pLng != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _mapController!.animateCamera(
+            CameraUpdate.newLatLngZoom(LatLng(pLat, pLng), 16),
+          );
+        });
+      }
+    }
 
     // Pull live overlay (fast) if ride exists
     RideLive? live;
@@ -225,7 +273,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       'onTrip',
     }.contains(status);
 
-    if (!hasActive && _polylines.isNotEmpty) {
+    if (!hasActive &&
+        _pickupLatLng == null &&
+        _dropoffLatLng == null &&
+        _polylines.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _polylines = {});
       });
@@ -451,68 +502,87 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                 final ride = rideData;
                 final status = (ride['status'] ?? '').toString();
-
-                /// Draw polylines depending on status (unchanged)
-                if (status == 'accepted' &&
-                    driverLatLng != null &&
-                    _pickupLatLng != null) {
-                  MapService().getRoute(driverLatLng, _pickupLatLng!).then((
-                    points,
-                  ) {
-                    if (!mounted) return;
-                    setState(() {
-                      _polylines = {
-                        Polyline(
-                          polylineId: const PolylineId('driver_to_pickup'),
-                          points: points,
-                          color: Colors.orange,
-                          width: 6,
-                        ),
-                      };
-                    });
-                    _fitToBounds(driverLatLng!, _pickupLatLng!);
-                  });
-                }
-
-                if ((status == 'in_progress' || status == 'onTrip') &&
-                    _pickupLatLng != null &&
-                    _dropoffLatLng != null) {
-                  MapService().getRoute(_pickupLatLng!, _dropoffLatLng!).then((
-                    points,
-                  ) {
-                    if (!mounted) return;
-                    setState(() {
-                      _polylines = {
-                        Polyline(
-                          polylineId: const PolylineId('trip_route'),
-                          points: points,
-                          color: Colors.blue,
-                          width: 6,
-                        ),
-                      };
-                    });
-                    _fitToBounds(_pickupLatLng!, _dropoffLatLng!);
-                  });
-                }
-
-                if (status == 'completed') {
-                  Future.delayed(const Duration(seconds: 4), () {
-                    if (mounted) {
-                      Navigator.pushReplacement(
-                        // ignore: use_build_context_synchronously
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const RiderDashboard(),
-                        ),
+                // --- Route switching logic ---
+                switch (status) {
+                  case 'accepted':
+                    // Replace planning polyline with driver → pickup
+                    if (driverLatLng != null && _pickupLatLng != null) {
+                      _drawRoute(
+                        from: driverLatLng,
+                        to: _pickupLatLng!,
+                        id: 'driver_to_pickup',
+                        color: Colors.orange,
                       );
+                    } else {
+                      // No driver yet: keep map clean (avoid stale planning line)
+                      if (_polylines.isNotEmpty) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) setState(() => _polylines = {});
+                        });
+                      }
                     }
-                  });
+                    break;
+
+                  case 'in_progress':
+                  case 'onTrip':
+                    // Show current driver (live) → dropoff; fallback to current/pickup if needed
+                    if (_dropoffLatLng != null) {
+                      final origin =
+                          driverLatLng ?? _currentLocation ?? _pickupLatLng;
+                      if (origin != null) {
+                        _drawRoute(
+                          from: origin,
+                          to: _dropoffLatLng!,
+                          id: 'to_dropoff_live',
+                          color: Colors.blue,
+                        );
+                      }
+                    }
+                    break;
+
+                  case 'searching':
+                    // Optional: keep the map clean during searching
+                    if (_polylines.isNotEmpty) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _polylines = {});
+                      });
+                    }
+                    break;
+
+                  case 'completed':
+                    // After a short delay, you navigate; clear line now to avoid flash
+                    if (_polylines.isNotEmpty) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _polylines = {});
+                      });
+                    }
+                    Future.delayed(const Duration(seconds: 4), () {
+                      if (mounted) {
+                        if (!context.mounted) return;
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const RiderDashboard(),
+                          ),
+                        );
+                      }
+                    });
+                    break;
+
+                  case 'cancelled':
+                    if (_polylines.isNotEmpty) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _polylines = {});
+                      });
+                    }
+                    break;
+
+                  default:
+                    // Idle/planning state: do nothing here.
+                    // The planning polyline is drawn by RideForm.onFareUpdated (pickup+dropoff set).
+                    break;
                 }
-                if (status == 'cancelled' && _polylines.isNotEmpty) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() => _polylines = {});
-                  });
-                }
+
                 return Stack(
                   children: [
                     Align(
@@ -557,12 +627,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               loading: () => const SizedBox.shrink(),
               error: (e, st) => const SizedBox.shrink(),
             ),
-
             // 1) Radar while searching
-            if (rideData != null &&
-                (status == 'pending' || status == 'searching'))
+            if (rideData != null && status == 'searching')
               Positioned.fill(
                 child: RadarSearchingOverlay(
+                  pickup: LatLng(rideData['pickupLat'], rideData['pickupLng']),
                   message: 'Finding a driver near you…',
                   onCancel: () async {
                     try {
@@ -596,6 +665,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       }
                     }
                   },
+                  mapController: _mapController,
                 ),
               ),
 
