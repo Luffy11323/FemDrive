@@ -608,17 +608,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           duration: 250.ms,
                           transitionBuilder: (child, anim) =>
                               FadeTransition(opacity: anim, child: child),
-                          child: isSubmitting
+                          child: (isSubmitting || isOtpSent)
                               ? _LoadingCar(
-                                  key: const ValueKey('loading'),
-                                  label: isOtpSent
-                                      ? 'Verifying & Registering...'
-                                      : 'Sending OTP...',
+                                  key: ValueKey(
+                                    isSubmitting ? 'loading' : 'awaiting_otp',
+                                  ),
+                                  label: isSubmitting
+                                      ? (isOtpSent
+                                            ? 'Verifying & Registering...'
+                                            : 'Sending OTP...')
+                                      : 'Verify & Register', // when isOtpSent && !isSubmitting
                                 )
-                              : Text(
-                                  isOtpSent ? 'Verify & Register' : 'Send OTP',
-                                  key: const ValueKey('idle'),
-                                ),
+                              : const Text('Send OTP', key: ValueKey('idle')),
                         ),
                       ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
                     ],

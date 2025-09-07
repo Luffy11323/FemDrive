@@ -407,15 +407,17 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                       duration: 250.ms,
                       transitionBuilder: (child, anim) =>
                           FadeTransition(opacity: anim, child: child),
-                      child: loading
+                      child: (loading || otpSent)
                           ? _LoadingCar(
-                              key: const ValueKey('loading'),
-                              label: otpSent ? 'Verifying...' : 'Sending...',
+                              key: ValueKey(
+                                loading ? 'loading' : 'awaiting_otp',
+                              ),
+                              // Show a sensible label in each phase:
+                              label: loading
+                                  ? (otpSent ? 'Verifying...' : 'Sending...')
+                                  : 'Verify OTP', // when otpSent && !loading
                             )
-                          : Text(
-                              otpSent ? 'Verify OTP' : 'Send OTP',
-                              key: const ValueKey('idle'),
-                            ),
+                          : const Text('Send OTP', key: ValueKey('idle')),
                     ),
                   ),
 
