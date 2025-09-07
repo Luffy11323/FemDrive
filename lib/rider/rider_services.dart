@@ -1,3 +1,4 @@
+//rider_services.dart
 // ignore_for_file: unused_import
 
 import 'dart:convert';
@@ -30,7 +31,6 @@ final driverSearchCenterProvider = StateProvider<LatLng?>((ref) => null);
 final nearbyDriversProvider =
     StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
       final center = ref.watch(driverSearchCenterProvider);
-      print('[Provider] Watching driverSearchCenter: $center');
       if (center == null) {
         // No center yet → emit empty list once
         return Stream<List<Map<String, dynamic>>>.value(
@@ -184,35 +184,32 @@ class RideService {
   final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
 
-  Future<void> requestRide(Map<String, dynamic> rideData, WidgetRef ref) async {
-    print('[RideService] 🟢 Entering requestRide with data: $rideData');
-
+  Future<void> requestRide(Map<String, dynamic> rideData) async {
     try {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
-      print('[RideService] ✅ UID found: $currentUid');
+
+      // Firestore doc
       final firestoreRide = {
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       };
-
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
-      print('[RideService] ✅ Firestore ride created with ID: $rideId');
 
-      print('[RideService] Created Firestore ride with ID: $rideId');
-
-      await _rtdb.child('rides/$currentUid/$rideId').set({
+      // Rider mirror (optional)
+      final rtdbRide = {
         'id': rideId,
         ...rideData,
         'riderId': currentUid,
         'status': 'pending',
         'createdAt': ServerValue.timestamp,
-      });
-      print('[RideService] ✅ RTDB ride mirror written');
+      };
+      await _rtdb.child('rides/$currentUid/$rideId').set(rtdbRide);
 
+      // ✅ Seed ridesLive for all live listeners
       await _rtdb.child('ridesLive/$rideId').set({
         'status': 'pending',
         'riderId': currentUid,
@@ -224,21 +221,16 @@ class RideService {
         'rideType': rideData['rideType'],
         'createdAt': ServerValue.timestamp,
       });
-      print('[RideService] ✅ ridesLive/$rideId seeded');
+
+      // Begin driver notifications
       final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
-      ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
-      print('[RideService] 📍 Pickup location set: $pickupLoc');
-      print('[RideService] 🔍 Starting streamNearbyDrivers...');
 
       NearbyDriversService().streamNearbyDrivers(pickupLoc).listen((
         drivers,
       ) async {
-        print('[RideService] Nearby drivers found: ${drivers.length}');
-
-        ref.read(riderDashboardProvider.notifier).updateNearbyDrivers(drivers);
+        _logger.i("Nearby drivers updated: $drivers");
 
         for (var d in drivers) {
-          print('[RideService] Notifying driver ${d['id']} for ride: $rideId');
           await _rtdb.child('driver_notifications/${d['id']}/$rideId').set({
             'rideId': rideId,
             'pickup': rideData['pickup'],
@@ -246,7 +238,6 @@ class RideService {
             'fare': rideData['fare'],
             'timestamp': ServerValue.timestamp,
           });
-          print('[RideService] ✅ Notification sent to driver ${d['id']}');
         }
       });
     } catch (e) {

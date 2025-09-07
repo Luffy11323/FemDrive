@@ -44,9 +44,6 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
     final lat = (m?['lat'] as num?)?.toDouble();
     final lng = (m?['lng'] as num?)?.toDouble();
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-    print(
-      '[driverLocationProvider] 🔁 Driver $driverId: location update: $lat, $lng',
-    );
   });
   // Legacy fallback
   final b = root.child('drivers/$driverId/location').onValue.map((e) {
@@ -54,9 +51,6 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
     final lat = (m?['lat'] as num?)?.toDouble();
     final lng = (m?['lng'] as num?)?.toDouble();
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-    print(
-      '[driverLocationProvider] 🔁 Driver $driverId: location update: $lat, $lng',
-    );
   });
   // Prefer A; if it emits nulls, continue listening to both and pick the first non-null
   return StreamZip<LatLng?>([
@@ -87,9 +81,6 @@ final rtdbRideLiveProvider = StreamProvider.family<RideLive?, String>((
   return liveRef.onValue.map((event) {
     final data = (event.snapshot.value as Map?)?.cast<String, dynamic>();
     if (data == null) return null;
-    print(
-      '[rtdbRideLiveProvider] rideId=$rideId, snapshot=${event.snapshot.value}',
-    );
     return RideLive(
       status: (data['status'] ?? '').toString(),
       driverId: data['driverId'] as String?,
@@ -107,7 +98,6 @@ final nearbyDriversProvider =
       yield* NearbyDriversService().streamNearbyDriversFast(
         loc,
       ); // RTDB version
-      print('[nearbyDriversProvider] Streaming nearby drivers for loc: $loc');
     });
 
 /// Rider Dashboard Main Page

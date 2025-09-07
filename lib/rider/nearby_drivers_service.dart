@@ -1,8 +1,10 @@
 // nearby_drivers_service.dart
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:logger/logger.dart';
@@ -11,21 +13,22 @@ class NearbyDriversService {
   final _firestore = FirebaseFirestore.instance;
   final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
+
+  // === Config ===
   static const double _searchRadiusKm = 5.0;
+  static const int _freshMs =
+      60 * 1000; // consider driver "online" if updated within last 60s
 
   /// --------------------------------------------------------------------------
   /// A) CURRENT (Firestore) – unchanged behavior
   ///    Reads driver docs (role=driver, isOnline=true) and filters by GeoPoint.
+  ///    NOTE: If you don't have an 'isOnline' bool, prefer using streamNearbyDriversFast().
   /// --------------------------------------------------------------------------
   Stream<List<Map<String, dynamic>>> streamNearbyDrivers(LatLng riderLocation) {
-    print(
-      '[NearbyDriversService] Streaming nearby drivers from Firestore for location: $riderLocation',
-    );
-
     return _firestore
         .collection('users')
         .where('role', isEqualTo: 'driver')
-        .where('isOnline', isEqualTo: true)
+        .where('isOnline', isEqualTo: true) // keep for backward compat
         .snapshots()
         .map((snapshot) {
           final filtered = snapshot.docs.where((doc) {
@@ -45,10 +48,6 @@ class NearbyDriversService {
             return distanceKm <= _searchRadiusKm;
           }).toList();
 
-          print(
-            '[NearbyDriversService] Firestore nearby drivers in radius: ${filtered.length}',
-          );
-
           return filtered.map((doc) {
             final data = doc.data();
             return {
@@ -64,86 +63,128 @@ class NearbyDriversService {
 
   /// ----------------------------------------------------------------------------
   /// B) FAST (RTDB) – recommended for live markers
-  ///     1) Watches Firestore for online drivers (metadata).
-  ///     2) Watches RTDB /driverLocations for {lat,lng} in real time.
-  ///     3) Merges both and filters by radius using the RTDB location.
+  ///     1) Watches Firestore for driver metadata (name, rating, type, etc.).
+  ///     2) Watches RTDB /drivers_online for {lat,lng,updatedAt[,geohash]} live.
+  ///     3) Merges both and filters by freshness + Haversine radius (<= 5 km),
+  ///        using a progressive sweep from 2km → 5km until drivers are found.
   ///
-  /// Usage: replace the call site to use this method for faster updates:
-  ///   NearbyDriversService().streamNearbyDriversFast(center)
+  /// Usage in UI: NearbyDriversService().streamNearbyDriversFast(center)
   /// ----------------------------------------------------------------------------
   Stream<List<Map<String, dynamic>>> streamNearbyDriversFast(
     LatLng riderLocation,
   ) {
-    print(
-      '[NearbyDriversService] Entering streamNearbyDriversFast with location: $riderLocation',
-    );
-
     final controller = StreamController<List<Map<String, dynamic>>>.broadcast();
 
-    QuerySnapshot<Map<String, dynamic>>? latestFs;
-    DatabaseEvent? latestRtdb;
+    QuerySnapshot<Map<String, dynamic>>? latestFs; // driver metadata
+    DatabaseEvent? latestRtdb; // live locations: drivers_online
 
     void emitIfReady() {
       if (latestFs == null || latestRtdb == null) return;
 
+      // --- Build metadata map by driverId from Firestore ---
       final metaById = <String, Map<String, dynamic>>{};
       for (final doc in latestFs!.docs) {
         metaById[doc.id] = doc.data();
       }
 
+      // --- Read RTDB drivers_online snapshot ---
       final raw = latestRtdb!.snapshot.value;
-      final locMap = (raw is Map ? raw.cast<dynamic, dynamic>() : const {}).map(
-        (k, v) => MapEntry(k.toString(), (v as Map).cast<String, dynamic>()),
-      );
+      final locMap = (raw is Map ? raw.cast<dynamic, dynamic>() : const {})
+          .map<String, Map<String, dynamic>>(
+            (k, v) =>
+                MapEntry(k.toString(), (v as Map).cast<String, dynamic>()),
+          );
 
-      final out = <Map<String, dynamic>>[];
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-      locMap.forEach((driverId, m) {
-        final lat = (m['lat'] as num?)?.toDouble();
-        final lng = (m['lng'] as num?)?.toDouble();
-        if (lat == null || lng == null) return;
+      // Progressive radius: 2km → 5km
+      double currentRadius = 2.0;
+      List<Map<String, dynamic>> candidates = [];
 
-        final meta = metaById[driverId];
-        if (meta == null) return;
+      // These counters are for logging insight
+      int staleSkipped = 0;
+      int metaMissing = 0;
 
-        final distanceKm =
-            Geolocator.distanceBetween(
-              riderLocation.latitude,
-              riderLocation.longitude,
-              lat,
-              lng,
-            ) /
-            1000.0;
+      while (currentRadius <= _searchRadiusKm && candidates.isEmpty) {
+        final temp = <Map<String, dynamic>>[];
 
-        if (distanceKm <= _searchRadiusKm) {
-          out.add({
-            'id': driverId,
-            'username': meta['username'] ?? 'Unknown Driver',
-            'location': LatLng(lat, lng),
-            'rideType': meta['availableRideType'] ?? 'Economy',
-            'rating': meta['rating'] ?? 0,
-            'distanceKm': distanceKm,
-          });
+        locMap.forEach((driverId, m) {
+          final lat = (m['lat'] as num?)?.toDouble();
+          final lng = (m['lng'] as num?)?.toDouble();
+          final updatedAt = (m['updatedAt'] as num?)?.toInt() ?? 0;
+          if (lat == null || lng == null) return;
+
+          // Freshness gate
+          if ((nowMs - updatedAt) > _freshMs) {
+            staleSkipped++;
+            return;
+          }
+
+          final meta = metaById[driverId];
+          if (meta == null) {
+            metaMissing++;
+            // Could still show, but we’ll skip to keep labels consistent
+            return;
+          }
+
+          // Distance check with Haversine
+          final distanceKm = _haversineKm(
+            riderLocation.latitude,
+            riderLocation.longitude,
+            lat,
+            lng,
+          );
+
+          if (distanceKm <= currentRadius) {
+            temp.add({
+              'id': driverId,
+              'username': meta['username'] ?? 'Unknown Driver',
+              'location': LatLng(lat, lng),
+              'rideType': meta['availableRideType'] ?? 'Economy',
+              'rating': meta['rating'] ?? 0,
+              'distanceKm': distanceKm,
+              'updatedAt': updatedAt,
+            });
+          }
+        });
+
+        if (temp.isNotEmpty) {
+          candidates = temp;
+        } else {
+          currentRadius += 1.0; // expand search window
         }
-      });
+      }
 
-      print(
-        '[NearbyDriversService] Nearby drivers in RTDB after merge: ${out.length}',
+      // Sort nearest first (stable UI)
+      candidates.sort(
+        (a, b) =>
+            (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
       );
-      controller.add(out);
+
+      // Final summary log
+      if (kDebugMode) {
+        print(
+          '[NearbyDriversService] (FAST) RTDB /drivers_online total=${locMap.length} '
+          'emitting=${candidates.length} within<=${currentRadius.clamp(2.0, _searchRadiusKm)}km '
+          '(fresh<=${_freshMs}ms, staleSkipped=$staleSkipped, metaMissing=$metaMissing)',
+        );
+      }
+
+      controller.add(candidates);
     }
 
+    // Firestore: driver metadata (no isOnline filter; freshness comes from RTDB)
     final subA = _firestore
         .collection('users')
         .where('role', isEqualTo: 'driver')
-        .where('isOnline', isEqualTo: true)
         .snapshots()
         .listen((snap) {
           latestFs = snap;
           emitIfReady();
         });
 
-    final subB = _rtdb.child('driverLocations').onValue.listen((evt) {
+    // RTDB: live presence & location for drivers
+    final subB = _rtdb.child('drivers_online').onValue.listen((evt) {
       latestRtdb = evt;
       emitIfReady();
     });
@@ -181,4 +222,19 @@ class NearbyDriversService {
       rethrow;
     }
   }
+}
+
+// --- Haversine helper (used by FAST stream) ---
+double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
+  const R = 6371.0;
+  final dLat = (lat2 - lat1) * math.pi / 180.0;
+  final dLon = (lon2 - lon1) * math.pi / 180.0;
+  final a =
+      math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(lat1 * math.pi / 180.0) *
+          math.cos(lat2 * math.pi / 180.0) *
+          math.sin(dLon / 2) *
+          math.sin(dLon / 2);
+  final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+  return R * c;
 }
