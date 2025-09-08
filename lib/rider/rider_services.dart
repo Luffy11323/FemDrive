@@ -138,7 +138,7 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
             Center(
               child: AnimatedBuilder(
                 animation: _ctl,
-                builder: (_, __) {
+                builder: (_, _) {
                   return CustomPaint(
                     painter: _RadarPainter(progress: _ctl.value),
                     size: const Size(220, 220),
