@@ -111,13 +111,13 @@ class RiderDashboardController
   }
 
   /// Creates ride via service; also seeds state with a quick optimistic value.
+  // RiderDashboardController.dart
   Future<void> createRide(
     String pickup,
     String dropoff,
     double fare,
     GeoPoint pickupLocation,
-    GeoPoint dropoffLocation,
-    WidgetRef ref, {
+    GeoPoint dropoffLocation, {
     required String rideType,
     String note = '',
   }) async {
@@ -135,9 +135,9 @@ class RiderDashboardController
         'fare': fare,
         'rideType': rideType,
         'note': note,
-      }, ref);
+      });
 
-      // Optimistic state: the RTDB stream will take over shortly
+      // Optimistic state; RTDB/FS streams will update shortly
       state = AsyncData({
         'id': rideId,
         'pickup': pickup,

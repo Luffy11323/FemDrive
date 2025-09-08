@@ -223,15 +223,12 @@ class RideService {
   final _rtdb = FirebaseDatabase.instance.ref();
   final _logger = Logger();
 
-  Future<String> requestRide(
-    Map<String, dynamic> rideData,
-    WidgetRef ref,
-  ) async {
+  Future<String> requestRide(Map<String, dynamic> rideData) async {
     try {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      // --- 1) Firestore ride doc ---
+      // --- 1) Firestore ride doc (canonical) ---
       final firestoreRide = {
         ...rideData,
         'riderId': currentUid,
@@ -241,7 +238,7 @@ class RideService {
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
 
-      // --- 2) RTDB mirrors ---
+      // --- 2) RTDB mirrors for fast UI / dispatch ---
       await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
         ...rideData,
@@ -262,25 +259,33 @@ class RideService {
         'createdAt': ServerValue.timestamp,
       });
 
-      // --- 3) Update search center ---
-      final pickupLoc = LatLng(rideData['pickupLat'], rideData['pickupLng']);
-      ref.read(driverSearchCenterProvider.notifier).state = pickupLoc;
+      // --- 3) Nearby drivers (single snapshot) & fan-out notifications ---
+      final pickupLoc = LatLng(
+        (rideData['pickupLat'] as num).toDouble(),
+        (rideData['pickupLng'] as num).toDouble(),
+      );
 
-      // --- 4) Fetch nearby drivers once and notify all ---
       final drivers = await NearbyDriversService()
           .streamNearbyDriversFast(pickupLoc)
           .first
-          .timeout(const Duration(seconds: 5), onTimeout: () => []);
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => <Map<String, dynamic>>[],
+          );
 
       if (drivers.isEmpty) {
         await _rtdb.child('ridesLive/$rideId').update({'status': 'searching'});
-        print('[RideService] No drivers found → ride marked as searching');
+        _logger.i(
+          '[RideService] No drivers found → ride $rideId marked as searching',
+        );
       } else {
         final Map<String, Object?> updates = {};
+        var count = 0;
         for (final d in drivers) {
-          final driverId = (d['id'] ?? '').toString();
-          if (driverId.isEmpty) continue;
-          final payload = {
+          final driverId = (d['id'] ?? d['uid'])?.toString();
+          if (driverId == null || driverId.isEmpty) continue;
+
+          updates['driver_notifications/$driverId/$rideId'] = {
             'rideId': rideId,
             'pickup': rideData['pickup'],
             'dropoff': rideData['dropoff'],
@@ -291,18 +296,17 @@ class RideService {
             'fare': rideData['fare'],
             'timestamp': ServerValue.timestamp,
           };
-          updates['driver_notifications/$driverId/$rideId'] = payload;
-          print('[RideService] Queued notify → $driverId for ride=$rideId');
+          count++;
         }
-        await _rtdb.update(updates);
-        print(
-          '[RideService] ✅ Notified ${updates.length} drivers for ride=$rideId',
-        );
+        if (updates.isNotEmpty) {
+          await _rtdb.update(updates);
+        }
+        _logger.i('[RideService] ✅ Notified $count drivers for ride $rideId');
       }
 
       return rideId;
-    } catch (e) {
-      _logger.e('Failed to request ride: $e');
+    } catch (e, st) {
+      _logger.e('requestRide failed', error: e, stackTrace: st);
       throw Exception('Unable to request ride: $e');
     }
   }

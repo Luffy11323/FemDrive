@@ -1019,7 +1019,6 @@ class _RideFormState extends ConsumerState<RideForm> {
         _fare!,
         GeoPoint(_pickupLatLng!.latitude, _pickupLatLng!.longitude),
         GeoPoint(_dropoffLatLng!.latitude, _dropoffLatLng!.longitude),
-        ref,
         rideType: _selectedRideType!,
         note: _noteController.text.trim(),
       );
