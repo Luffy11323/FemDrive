@@ -6,6 +6,7 @@ import 'package:dart_geohash/dart_geohash.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/driver/driver_ride_details_page.dart';
 import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/shared/notifications.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -569,6 +570,7 @@ class EmergencyPage extends ConsumerWidget {
                           currentUid: currentUid,
                           otherUid: riderId,
                         );
+                        showEmergencyAlert(rideId: rideId);
                         // ignore: use_build_context_synchronously
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Emergency sent')),
@@ -661,7 +663,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       if (!mounted) return;
       final status = (live?['status'] ?? '').toString();
       final driverId = (live?['driverId'] ?? '').toString();
-
+      if (status == RideStatus.cancelled && _shownRequestIds.add(rideId)) {
+        showCancelled(rideId: rideId);
+      }
       if (RideStatus.ongoingSet.contains(status) &&
           _detailsPushedFor != rideId) {
         _detailsPushedFor = rideId;
@@ -896,7 +900,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
                       // Pick the most recent offer (your provider already sorts by timestamp desc)
                       final active = offers.first;
-
+                      if (_shownRequestIds.add(active.rideId)) {
+                        showIncomingRide(rideId: active.rideId);
+                      }
                       return Align(
                         alignment: Alignment.bottomCenter,
                         child: Padding(
@@ -907,6 +913,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .acceptRide(active.rideId, context: active);
+                              showAccepted(rideId: active.rideId);
                               // optional: start background location tied to this ride
                               await DriverLocationService().startOnlineMode(
                                 rideId: active.rideId,

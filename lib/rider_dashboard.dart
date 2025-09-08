@@ -8,6 +8,7 @@ import 'package:femdrive/emergency_service.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
+import 'package:femdrive/shared/notifications.dart';
 import 'package:femdrive/widgets/payment_services.dart';
 import 'package:femdrive/widgets/share_service.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -121,6 +122,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   double? _distanceKm;
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
+  final Set<String> _acceptedNotified = {};
+  final Set<String> _cancelNotified = {};
+  //  final Set<String> _counterNotified = {};
+  //  final Set<String> _emergencyNotified = {};
 
   @override
   void initState() {
@@ -515,6 +520,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 // --- Route switching logic ---
                 switch (status) {
                   case 'accepted':
+                    if (_acceptedNotified.add(ride['id'])) {
+                      showAccepted(rideId: ride['id']);
+                    }
+
                     // Replace planning polyline with driver → pickup
                     if (driverLatLng != null && _pickupLatLng != null) {
                       _drawRoute(
@@ -580,6 +589,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     break;
 
                   case 'cancelled':
+                    if (_cancelNotified.add(ride['id'])) {
+                      showCancelled(rideId: ride['id']);
+                    }
+
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
