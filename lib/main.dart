@@ -35,8 +35,12 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   await initRideNotifs();
+
+  await _setupFcmAndToken();
 
   // Initialize location permissions at app startup
   final logger = Logger();
@@ -61,6 +65,110 @@ void main() async {
   runApp(const ProviderScope(child: FemDriveApp()));
 }
 
+Future<void> _setupFcmAndToken() async {
+  final fbm = FirebaseMessaging.instance;
+
+  // A) Ask runtime permission (Android 13+ / iOS)
+  await fbm.requestPermission(alert: true, badge: true, sound: true);
+
+  // B) iOS: show alert+sound in foreground
+  await fbm.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  // C) Ensure we store the token for the current user (if logged in now)
+  await _storeCurrentTokenIfLoggedIn();
+
+  // D) If user logs in/out later, keep token in sync
+  FirebaseAuth.instance.authStateChanges().listen((user) async {
+    if (user != null) {
+      await _storeCurrentTokenIfLoggedIn();
+    }
+  });
+
+  // E) If the token rotates, re-upload for whoever is logged in
+  fbm.onTokenRefresh.listen((newToken) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(uid).set({
+          'fcmToken': newToken,
+        }, SetOptions(merge: true));
+        debugPrint('🔁 FCM token refreshed & saved');
+      } catch (e) {
+        debugPrint('❗ Error saving refreshed token: $e');
+      }
+    }
+  });
+
+  // F) Optional: keep your SnackBar preview (or remove—your notifications.dart will show proper sounds)
+  FirebaseMessaging.onMessage.listen((msg) {
+    final notif = msg.notification;
+    if (notif != null) {
+      debugPrint('📨 FG msg: ${notif.title} — ${notif.body}');
+      // Lightweight preview; your notifications.dart will also play channel sounds.
+      // You can remove this SnackBar if it feels duplicate.
+    }
+  });
+
+  // G) Handle when user taps a notification to open app
+  FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
+
+  // H) If the app was launched by a notification (cold start)
+  final initial = await fbm.getInitialMessage();
+  if (initial != null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _handleNotificationNavigation(initial);
+    });
+  }
+}
+
+Future<void> _storeCurrentTokenIfLoggedIn() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+  try {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token != null && token.isNotEmpty) {
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'fcmToken': token,
+      }, SetOptions(merge: true));
+      debugPrint('✅ Saved FCM token for $uid');
+    }
+  } catch (e, st) {
+    debugPrint('❗ FCM token save failed: $e\n$st');
+  }
+}
+
+Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
+  final data = msg.data;
+  final action = data['action'];
+  final rideId = data['rideId'];
+
+  if (action == 'NEW_REQUEST') {
+    navigatorKey.currentState?.pushNamed(
+      '/driver-ride-details',
+      arguments: rideId,
+    );
+  } else if (action == 'RIDER_STATUS') {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      if (doc.exists) {
+        final role = doc['role'];
+        if (role == 'driver') {
+          navigatorKey.currentState?.pushNamed('/driver-dashboard');
+        } else {
+          navigatorKey.currentState?.pushNamed('/dashboard');
+        }
+      }
+    }
+  }
+}
 // Riverpod providers:
 
 /// Provides the current Firebase user (null if not logged in)
