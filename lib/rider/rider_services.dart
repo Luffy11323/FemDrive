@@ -237,7 +237,7 @@ class RideService {
       };
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
-
+      print('[RideService.requestRide] Created rideId=$rideId data=$rideData');
       // --- 2) RTDB mirrors for fast UI / dispatch ---
       await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
@@ -281,6 +281,9 @@ class RideService {
       } else {
         final Map<String, Object?> updates = {};
         var count = 0;
+        print(
+          '[RideService.requestRide] Notifying ${drivers.length} drivers for rideId=$rideId -> ids=${drivers.map((d) => d['id']).toList()}',
+        );
         for (final d in drivers) {
           final driverId = (d['id'] ?? d['uid'])?.toString();
           if (driverId == null || driverId.isEmpty) continue;
@@ -316,30 +319,50 @@ class RideService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      // Firestore: mark cancelled
+      // 1) Firestore: mark cancelled (keep existing timestamps)
       await _firestore.collection('rides').doc(rideId).update({
         'status': 'cancelled',
         'cancelledAt': FieldValue.serverTimestamp(),
+        // Optionally clear driver fields if they were set while rider cancelled early
+        'driverId': FieldValue.delete(),
+        'driverName': FieldValue.delete(),
       });
 
-      // Rider mirror: remove (optional if you keep using it)
-      await _rtdb.child('rides/$currentUid/$rideId').remove();
+      // 2) Rider's RTDB mirror (optional if you don't rely on it anymore)
+      try {
+        await _rtdb.child('rides/$currentUid/$rideId').remove();
+      } catch (_) {}
 
-      // ✅ Live broadcast
+      // 3) Live broadcast: ridesLive
       await _rtdb.child('ridesLive/$rideId').update({
         'status': 'cancelled',
         'cancelledAt': ServerValue.timestamp,
+        'updatedAt': ServerValue.timestamp,
       });
 
-      // Clean driver notifications
-      final snapshot = await _rtdb.child('driver_notifications').get();
-      for (final driverNode in snapshot.children) {
-        final notifRef = driverNode.ref.child(rideId);
-        final notif = await notifRef.get();
-        if (notif.exists) {
-          await notifRef.remove();
-        }
+      // 4) 🔥 Fan-out delete this ride from ALL driver_notifications
+      final notifsSnap = await _rtdb.child('driver_notifications').get();
+      final updates = <String, Object?>{};
+      if (notifsSnap.exists && notifsSnap.value is Map) {
+        final map = notifsSnap.value as Map;
+        map.forEach((driverKey, ridesMap) {
+          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
+            updates['driver_notifications/$driverKey/$rideId'] = null;
+          }
+        });
       }
+      if (updates.isNotEmpty) {
+        await _rtdb.update(updates);
+      }
+
+      // 5) (Optional) also clear your legacy broadcast queues if you still use them
+      //    This prevents lingering entries in aggregated queues.
+      await _rtdb
+          .child('rides_pending/$rideId')
+          .remove(); // AppPaths.ridesPendingA
+      await _rtdb
+          .child('rideRequests/$rideId')
+          .remove(); // AppPaths.ridesPendingB
     } catch (e) {
       Logger().e('Failed to cancel ride: $e');
       throw Exception('Unable to cancel ride: $e');

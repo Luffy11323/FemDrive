@@ -420,6 +420,37 @@ class DriverService {
         'acceptedAt': FieldValue.serverTimestamp(),
       });
     });
+    // --- NEW: fan-out delete this rideId from ALL driver_notifications ---
+    try {
+      print(
+        '[DriverService.acceptRide] Fan-out removing notifications for ride=$rideId from all drivers...',
+      );
+      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
+      final updates = <String, Object?>{};
+
+      if (notifsSnap.exists && notifsSnap.value is Map) {
+        final map = notifsSnap.value as Map;
+        map.forEach((driverKey, ridesMap) {
+          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
+            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
+                null;
+          }
+        });
+      }
+
+      if (updates.isNotEmpty) {
+        await _rtdb.update(updates);
+        print(
+          '[DriverService.acceptRide] ✅ Removed ${updates.length} ride notifications for ride=$rideId',
+        );
+      } else {
+        print(
+          '[DriverService.acceptRide] No other pending notifications found for ride=$rideId',
+        );
+      }
+    } catch (e) {
+      print('[DriverService.acceptRide] ⚠️ Fan-out delete failed: $e');
+    }
 
     final riderId =
         (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
@@ -654,11 +685,6 @@ class DriverDashboardController
     if (uid != null) await _service.sendMessage(rideId, message, uid);
   }
 }
-
-final pendingRequestsProvider =
-    StreamProvider.autoDispose<List<PendingRequest>>((ref) {
-      return DriverService().listenPendingRequestsMerged();
-    });
 
 // ---------------- Driver Map widget (polyline adapter added) -----------------
 class DriverMapWidget extends ConsumerStatefulWidget {
@@ -1242,6 +1268,9 @@ class DriverOffer {
   }
 }
 
+// config
+const int kOfferExpiryMs = 60 * 1000; // 60s
+
 Stream<List<DriverOffer>> listenDriverOffers(String driverId) {
   final ref = FirebaseDatabase.instance.ref(
     '${AppPaths.driverNotifications}/$driverId',
@@ -1249,10 +1278,21 @@ Stream<List<DriverOffer>> listenDriverOffers(String driverId) {
   return ref.onValue.map((ev) {
     final v = ev.snapshot.value;
     if (v is! Map) return <DriverOffer>[];
+    final now = DateTime.now().millisecondsSinceEpoch;
+
     final out = <DriverOffer>[];
     v.forEach((k, raw) {
-      if (raw is Map) out.add(DriverOffer.fromRTDB(k.toString(), raw));
+      if (raw is Map) {
+        final offer = DriverOffer.fromRTDB(k.toString(), raw);
+
+        // 🔹 prune stale
+        if (now - offer.createdAtMs <= kOfferExpiryMs) {
+          out.add(offer);
+        }
+      }
     });
+
+    // newest first
     out.sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
     return out;
   });

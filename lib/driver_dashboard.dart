@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -7,7 +6,6 @@ import 'package:dart_geohash/dart_geohash.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/driver/driver_ride_details_page.dart';
 import 'package:femdrive/emergency_service.dart';
-import 'package:femdrive/location/directions_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -594,164 +592,6 @@ class EmergencyPage extends ConsumerWidget {
   }
 }
 
-class RidePopupWidget extends ConsumerStatefulWidget {
-  final PendingRequest request;
-
-  const RidePopupWidget({super.key, required this.request});
-
-  @override
-  ConsumerState<RidePopupWidget> createState() => _RidePopupWidgetState();
-}
-
-class _RidePopupWidgetState extends ConsumerState<RidePopupWidget> {
-  late TextEditingController fareController;
-  bool isSubmitting = false;
-  double? estimatedDistance;
-  String? errorMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    fareController = TextEditingController(
-      text: widget.request.fare?.toStringAsFixed(2) ?? '',
-    );
-    _fetchEstimatedDistance();
-  }
-
-  Future<void> _fetchEstimatedDistance() async {
-    try {
-      estimatedDistance = await DirectionsService.getDistance(
-        LatLng(widget.request.pickupLat, widget.request.pickupLng),
-        LatLng(widget.request.dropoffLat, widget.request.dropoffLng),
-      );
-      setState(() {});
-    } catch (e) {
-      setState(() => errorMessage = 'Failed to calculate distance: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    fareController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('New Ride Request'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (widget.request.pickupLabel != null)
-            Text('From: ${widget.request.pickupLabel}'),
-          if (widget.request.dropoffLabel != null)
-            Text('To: ${widget.request.dropoffLabel}'),
-          Text(
-            'Pickup: ${widget.request.pickupLat.toStringAsFixed(4)}, ${widget.request.pickupLng.toStringAsFixed(4)}',
-          ),
-          Text(
-            'Dropoff: ${widget.request.dropoffLat.toStringAsFixed(4)}, ${widget.request.dropoffLng.toStringAsFixed(4)}',
-          ),
-          if (estimatedDistance != null)
-            Text('Distance: ${estimatedDistance!.toStringAsFixed(2)} km'),
-          if (widget.request.fare != null)
-            Text(
-              'Suggested Fare: \$${widget.request.fare!.toStringAsFixed(2)}',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          TextField(
-            controller: fareController,
-            decoration: const InputDecoration(
-              labelText: 'Counter Fare (optional)',
-            ),
-            keyboardType: TextInputType.number,
-          ),
-          if (errorMessage != null)
-            Text(errorMessage!, style: const TextStyle(color: Colors.red)),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(driverDashboardProvider.notifier)
-                  .declineRide(widget.request.rideId);
-            } catch (e) {
-              ScaffoldMessenger.of(
-                // ignore: use_build_context_synchronously
-                context,
-              ).showSnackBar(SnackBar(content: Text('Failed to decline: $e')));
-            }
-            // ignore: use_build_context_synchronously
-            Navigator.of(context).pop();
-          },
-          child: const Text('Decline'),
-        ),
-        ElevatedButton(
-          onPressed: isSubmitting
-              ? null
-              : () async {
-                  setState(() => isSubmitting = true);
-                  try {
-                    final newFare = double.tryParse(fareController.text);
-                    if (newFare != null && newFare != widget.request.fare) {
-                      await ref
-                          .read(driverDashboardProvider.notifier)
-                          .proposeCounterFare(widget.request.rideId, newFare);
-                    } else {
-                      await ref
-                          .read(driverDashboardProvider.notifier)
-                          .acceptRide(widget.request.rideId);
-                      await DriverLocationService().startOnlineMode(
-                        rideId: widget.request.rideId,
-                      );
-                    }
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => DriverRideDetailsPage(
-                            rideId: widget.request.rideId,
-                          ),
-                        ),
-                      );
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Action failed: $e')),
-                      );
-                    }
-                  } finally {
-                    if (mounted) setState(() => isSubmitting = false);
-                  }
-                },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-          child: isSubmitting
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(),
-                )
-              : const Text('Accept'),
-        ),
-      ],
-    ).animate().scale(duration: 300.ms);
-  }
-}
-
 class DriverDashboard extends ConsumerStatefulWidget {
   const DriverDashboard({super.key});
 
@@ -767,9 +607,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
   final _geoHasher = GeoHasher();
-  String? _driverGeoHashPrefix;
   final Set<String> _shownRequestIds = {};
-  StreamSubscription<List<PendingRequest>>? _pendingSub;
   GoogleMapController? _mapController;
   Position? _currentPosition;
   Timer? _locationUpdateTimer;
@@ -861,30 +699,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     });
   }
 
-  Future<void> _ensureDriverHashPrefix() async {
-    if (_driverGeoHashPrefix != null) return;
-    final uid = await getDriverUid();
-    if (uid == null) return;
-
-    try {
-      final snap = await _rtdb
-          .child(AppPaths.driversOnline)
-          .child(uid)
-          .child(AppFields.geohash)
-          .get();
-      if (snap.exists && snap.value is String) {
-        _driverGeoHashPrefix = (snap.value as String).substring(0, 5);
-        return;
-      }
-      final pos = await Geolocator.getCurrentPosition();
-      _driverGeoHashPrefix = _geoHasher.encode(
-        pos.latitude,
-        pos.longitude,
-        precision: 5,
-      );
-    } catch (_) {}
-  }
-
   void _startLocationUpdates() {
     // If this gets called more than once, prevent multiple timers.
     _locationUpdateTimer?.cancel();
@@ -954,7 +768,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void dispose() {
     _connSub.cancel();
-    _pendingSub?.cancel();
     _locationUpdateTimer?.cancel();
     _mapController?.dispose();
     _liveRideSub?.cancel(); // <— NEW
@@ -982,45 +795,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     // 🛡 Ensure ref.listen(...) is called only once
     if (!_hasAttachedListeners) {
       _hasAttachedListeners = true;
-
-      // 1. Handle incoming ride requests
-      ref.listen<AsyncValue<List<PendingRequest>>>(pendingRequestsProvider, (
-        prev,
-        next,
-      ) async {
-        if (!_isOnline) return;
-        final list = next.asData?.value ?? const <PendingRequest>[];
-        if (list.isEmpty) return;
-
-        await _ensureDriverHashPrefix();
-
-        for (final req in list) {
-          if (_shownRequestIds.contains(req.rideId)) continue;
-          final prefix = _driverGeoHashPrefix;
-          bool isNearby = true;
-          if (prefix != null && prefix.isNotEmpty) {
-            try {
-              final ph = _geoHasher.encode(
-                req.pickupLat,
-                req.pickupLng,
-                precision: GeoCfg.popupProximityPrecision,
-              );
-              final checkLen = min(prefix.length, 4);
-              isNearby = ph.startsWith(prefix.substring(0, checkLen));
-            } catch (_) {}
-          }
-
-          if (isNearby && mounted) {
-            _shownRequestIds.add(req.rideId);
-            showDialog(
-              // ignore: use_build_context_synchronously
-              context: context,
-              builder: (_) => RidePopupWidget(request: req),
-            );
-            break;
-          }
-        }
-      });
 
       // 2. Watch live ride document
       ref.listen<AsyncValue<DocumentSnapshot?>>(driverDashboardProvider, (
@@ -1106,7 +880,60 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           ],
         ),
         drawer: Drawer(child: _buildDrawer()),
-        body: pages[_selectedIndex],
+        body: Stack(
+          children: [
+            pages[_selectedIndex],
+
+            // 🔹 Offer Overlay only on Home tab + when Online
+            if (_selectedIndex == 0 && _isOnline)
+              Consumer(
+                builder: (context, ref, _) {
+                  final offersAsync = ref.watch(driverOffersProvider);
+
+                  return offersAsync.when(
+                    data: (offers) {
+                      if (offers.isEmpty) return const SizedBox.shrink();
+
+                      // Pick the most recent offer (your provider already sorts by timestamp desc)
+                      final active = offers.first;
+
+                      return Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: _OfferCard(
+                            offer: active,
+                            onAccept: () async {
+                              await ref
+                                  .read(driverDashboardProvider.notifier)
+                                  .acceptRide(active.rideId, context: active);
+                              // optional: start background location tied to this ride
+                              await DriverLocationService().startOnlineMode(
+                                rideId: active.rideId,
+                              );
+                            },
+                            onDecline: () async {
+                              await ref
+                                  .read(driverDashboardProvider.notifier)
+                                  .declineRide(active.rideId);
+                            },
+                            onCounter: (newFare) async {
+                              await ref
+                                  .read(driverDashboardProvider.notifier)
+                                  .proposeCounterFare(active.rideId, newFare);
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                    loading: () => const SizedBox.shrink(),
+                    error: (_, _) => const SizedBox.shrink(),
+                  );
+                },
+              ),
+          ],
+        ),
+
         bottomNavigationBar: NavigationBar(
           selectedIndex: _selectedIndex,
           onDestinationSelected: _onItemTapped,
@@ -1394,6 +1221,164 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
         ),
       ],
+    );
+  }
+}
+
+class _OfferCard extends StatefulWidget {
+  final PendingRequest offer;
+  final Future<void> Function() onAccept;
+  final Future<void> Function() onDecline;
+  final Future<void> Function(double newFare) onCounter;
+
+  const _OfferCard({
+    required this.offer,
+    required this.onAccept,
+    required this.onDecline,
+    required this.onCounter,
+  });
+
+  @override
+  State<_OfferCard> createState() => _OfferCardState();
+}
+
+class _OfferCardState extends State<_OfferCard> {
+  static const int _ttlMs = 60 * 1000;
+  late int _secondsLeft;
+  Timer? _ticker;
+  final _counterCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final ts = (widget.offer.raw['timestamp'] as num?)?.toInt();
+    _secondsLeft = _computeLeft(ts);
+
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      final left = _computeLeft(ts);
+      if (!mounted) return;
+      setState(() => _secondsLeft = left);
+      if (left <= 0) _ticker?.cancel();
+    });
+  }
+
+  int _computeLeft(int? tsMs) {
+    if (tsMs == null) return 60;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final leftMs = _ttlMs - (now - tsMs);
+    return leftMs <= 0 ? 0 : (leftMs / 1000).floor();
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _counterCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 8,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'New Ride Request',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            if (widget.offer.pickupLabel != null)
+              Text('From: ${widget.offer.pickupLabel}'),
+            if (widget.offer.dropoffLabel != null)
+              Text('To: ${widget.offer.dropoffLabel}'),
+            Text(
+              'Pickup: ${widget.offer.pickupLat.toStringAsFixed(4)}, '
+              '${widget.offer.pickupLng.toStringAsFixed(4)}',
+            ),
+            Text(
+              'Dropoff: ${widget.offer.dropoffLat.toStringAsFixed(4)}, '
+              '${widget.offer.dropoffLng.toStringAsFixed(4)}',
+            ),
+            if (widget.offer.fare != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Suggested Fare: \$${widget.offer.fare!.toStringAsFixed(2)}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _counterCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Counter Fare (optional)',
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _secondsLeft > 0 ? '$_secondsLeft s' : 'expired',
+                  style: TextStyle(
+                    color: _secondsLeft > 10 ? Colors.black54 : Colors.red,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _secondsLeft == 0 ? null : widget.onDecline,
+                    child: const Text('Decline'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _secondsLeft == 0 ? null : widget.onAccept,
+                    child: const Text('Accept'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: _secondsLeft == 0
+                    ? null
+                    : () async {
+                        final v = double.tryParse(_counterCtrl.text.trim());
+                        if (v == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Enter a valid counter fare'),
+                            ),
+                          );
+                          return;
+                        }
+                        await widget.onCounter(v);
+                      },
+                child: const Text('Send Counter Fare'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
