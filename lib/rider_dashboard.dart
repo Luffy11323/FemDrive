@@ -281,6 +281,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         if (mounted) setState(() => _polylines = {});
       });
     }
+    final pLat2 = (rideData?['pickupLat'] as num?)?.toDouble();
+    final pLng2 = (rideData?['pickupLng'] as num?)?.toDouble();
+    final LatLng? safePickup = (pLat2 != null && pLng2 != null)
+        ? LatLng(pLat2, pLng2)
+        : (_pickupLatLng ?? _currentLocation);
+
+    final bool showRadar =
+        rideData != null &&
+        (status == 'pending' || status == 'searching') &&
+        safePickup != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -627,11 +637,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               loading: () => const SizedBox.shrink(),
               error: (e, st) => const SizedBox.shrink(),
             ),
-            // 1) Radar while searching
-            if (rideData != null && status == 'searching')
+            // 1) Radar overlay during pending/searching
+            if (showRadar)
               Positioned.fill(
                 child: RadarSearchingOverlay(
-                  pickup: LatLng(rideData['pickupLat'], rideData['pickupLng']),
+                  pickup: safePickup,
                   message: 'Finding a driver near you…',
                   onCancel: () async {
                     try {
@@ -646,9 +656,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             ),
                           );
                         }
-                        return; // don’t call cancelRide without an id
+                        print('[Radar] Cancel tapped but ride id missing.');
+                        return;
                       }
 
+                      print('[Radar] Cancelling ride: $id');
                       await ref
                           .read(riderDashboardProvider.notifier)
                           .cancelRide(id);
@@ -665,7 +677,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       }
                     }
                   },
-                  mapController: _mapController,
+                  mapController:
+                      _mapController, // <-- added for zoom-out (Patch 2)
                 ),
               ),
 
@@ -1331,8 +1344,10 @@ class _RideStatusWidgetState extends ConsumerState<RideStatusWidget>
                 onTap: () {
                   showDialog(
                     context: context,
-                    builder: (_) =>
-                        _buildRatingDialog(context, ride['driverId']),
+                    builder: (_) => _buildRatingDialog(
+                      context,
+                      (ride['driverId'] ?? '') as String,
+                    ),
                   );
                 },
                 child: const Icon(Icons.star, color: Colors.amber, size: 20),
