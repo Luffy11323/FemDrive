@@ -1,5 +1,6 @@
 import 'package:femdrive/past_rides_page.dart';
 import 'package:femdrive/rider/rider_profile_page.dart';
+import 'package:femdrive/shared/notifications.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -35,6 +36,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  await initRideNotifs();
+
   // Initialize location permissions at app startup
   final logger = Logger();
   bool serviceEnabled = await Geolocator.isLocationServiceEnabled();

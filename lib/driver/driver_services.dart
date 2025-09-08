@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // keep if used elsewhere
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -422,9 +423,6 @@ class DriverService {
     });
     // --- NEW: fan-out delete this rideId from ALL driver_notifications ---
     try {
-      print(
-        '[DriverService.acceptRide] Fan-out removing notifications for ride=$rideId from all drivers...',
-      );
       final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
       final updates = <String, Object?>{};
 
@@ -440,16 +438,17 @@ class DriverService {
 
       if (updates.isNotEmpty) {
         await _rtdb.update(updates);
-        print(
-          '[DriverService.acceptRide] ✅ Removed ${updates.length} ride notifications for ride=$rideId',
-        );
       } else {
-        print(
-          '[DriverService.acceptRide] No other pending notifications found for ride=$rideId',
-        );
+        if (kDebugMode) {
+          print(
+            '[DriverService.acceptRide] No other pending notifications found for ride=$rideId',
+          );
+        }
       }
     } catch (e) {
-      print('[DriverService.acceptRide] ⚠️ Fan-out delete failed: $e');
+      if (kDebugMode) {
+        print('[DriverService.acceptRide] ⚠️ Fan-out delete failed: $e');
+      }
     }
 
     final riderId =

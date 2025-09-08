@@ -237,7 +237,6 @@ class RideService {
       };
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
-      print('[RideService.requestRide] Created rideId=$rideId data=$rideData');
       // --- 2) RTDB mirrors for fast UI / dispatch ---
       await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
@@ -281,9 +280,6 @@ class RideService {
       } else {
         final Map<String, Object?> updates = {};
         var count = 0;
-        print(
-          '[RideService.requestRide] Notifying ${drivers.length} drivers for rideId=$rideId -> ids=${drivers.map((d) => d['id']).toList()}',
-        );
         for (final d in drivers) {
           final driverId = (d['id'] ?? d['uid'])?.toString();
           if (driverId == null || driverId.isEmpty) continue;

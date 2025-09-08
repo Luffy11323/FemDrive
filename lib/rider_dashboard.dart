@@ -656,11 +656,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             ),
                           );
                         }
-                        print('[Radar] Cancel tapped but ride id missing.');
                         return;
                       }
 
-                      print('[Radar] Cancelling ride: $id');
                       await ref
                           .read(riderDashboardProvider.notifier)
                           .cancelRide(id);
