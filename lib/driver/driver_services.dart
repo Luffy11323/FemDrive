@@ -620,31 +620,62 @@ class DriverService {
 
   // COUNTER
   Future<void> proposeCounterFare(String rideId, double newFare) async {
-    final user = _auth.currentUser;
-    if (user == null) {
-      throw FirebaseAuthException(code: 'no-user', message: 'Not logged in');
-    }
-    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      'counterFare': newFare,
-      AppFields.status: 'pending_counter',
-    });
+    final fire = FirebaseFirestore.instance;
+    final rtdb = FirebaseDatabase.instance.ref();
 
-    await _rtdb.child('ridesLive/$rideId').update({
-      AppFields.status: 'pending_counter',
-      'updatedAt': ServerValue.timestamp,
-    });
+    final rideRef = fire.collection('rides').doc(rideId);
 
-    final riderId =
-        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-            .data()?[AppFields.riderId];
-    if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: 'counter_fare',
+    String riderId = '';
+    String status = '';
+
+    // 1) Firestore txn: validate + persist counter fare
+    await fire.runTransaction((txn) async {
+      final snap = await txn.get(rideRef);
+      if (!snap.exists) {
+        throw Exception('Ride not found');
+      }
+      final data = snap.data() as Map<String, dynamic>;
+
+      status = (data['status'] ?? '').toString();
+      riderId = (data['riderId'] ?? '').toString();
+
+      // Guard rails: don’t counter on finished rides
+      if (status == 'cancelled' || status == 'completed') {
+        throw Exception('Ride is no longer active');
+      }
+
+      txn.update(rideRef, {
         'counterFare': newFare,
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
+        'counterProposedAt': FieldValue.serverTimestamp(),
+        // (do NOT flip status here; rider may accept/reject)
+      });
+    });
+
+    // 2) RTDB mirrors (live for rider UI)
+    final now = ServerValue.timestamp;
+
+    // 2a) Live broadcast node (optional, keeps parity with other live fields)
+    await rtdb.child('ridesLive/$rideId').update({
+      'counterFare': newFare,
+      'updatedAt': now,
+    });
+
+    // 2b) Rider’s latest-ride stream node  ✅ required for popup
+    if (riderId.isNotEmpty) {
+      await rtdb.child('rides/$riderId/$rideId').update({
+        'counterFare': newFare,
+        'updatedAt': now,
       });
     }
+
+    // 3) (Optional) Rider-side heads-up via RTDB notification fanout
+    // This is optional; your modal shows without it. Keep if you want a chime:
+    await rtdb.child('rider_notifications/$riderId/$rideId').set({
+      'rideId': rideId,
+      'action': 'COUNTER',
+      'counterFare': newFare,
+      'timestamp': now,
+    });
   }
 
   // STATUS (accepted -> driver_arrived -> in_progress -> completed)

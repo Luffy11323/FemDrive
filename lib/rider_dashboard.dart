@@ -5,7 +5,6 @@ import 'dart:ui' as ui; // for BackdropFilter blur
 
 import 'package:async/async.dart';
 import 'package:femdrive/shared/emergency_service.dart';
-import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
 import 'package:femdrive/shared/notifications.dart';
@@ -17,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
@@ -91,13 +91,13 @@ final rtdbRideLiveProvider = StreamProvider.family<RideLive?, String>((
 });
 
 /// Provides nearby online drivers (live updates) for the map overlay
-final nearbyDriversProvider =
-    StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) async* {
-      final loc = await MapService().currentLocation();
-      yield* NearbyDriversService().streamNearbyDriversFast(
-        loc,
-      ); // RTDB version
-    });
+//final nearbyDriversProvider =
+//  StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) async* {
+//  final loc = await MapService().currentLocation();
+//yield* NearbyDriversService().streamNearbyDriversFast(
+//loc,
+//  ); // RTDB version
+//  });
 
 /// Rider Dashboard Main Page
 class RiderDashboard extends ConsumerStatefulWidget {
@@ -115,6 +115,100 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   final _pickupController = TextEditingController();
   final _dropoffController = TextEditingController();
   Set<Polyline> _polylines = {};
+  // --- live trim for driver->pickup leg ---
+  List<LatLng> _driverLeg = const [];
+  Set<Polyline> _trimmed = {};
+  LatLng? _lastDriverTick;
+
+  int _nearestIndex(List<LatLng> route, LatLng p) {
+    if (route.isEmpty) return 0;
+    double best = double.infinity;
+    int bestIdx = 0;
+    for (var i = 0; i < route.length; i++) {
+      final d = Geolocator.distanceBetween(
+        p.latitude,
+        p.longitude,
+        route[i].latitude,
+        route[i].longitude,
+      );
+      if (d < best) {
+        best = d;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
+  void _applyTrimmedRoute(
+    List<LatLng> route,
+    LatLng me, {
+    String id = 'driver_to_pickup',
+  }) {
+    if (route.length < 2) return;
+    final cutAt = _nearestIndex(route, me);
+    final remaining = <LatLng>[
+      me,
+      ...route.sublist(cutAt.clamp(0, route.length - 1)),
+    ];
+    final covered = route.sublist(0, cutAt.clamp(0, route.length));
+
+    _trimmed = {
+      Polyline(
+        polylineId: PolylineId('${id}_remaining'),
+        points: remaining,
+        color: Colors.blue,
+        width: 6,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        jointType: JointType.round,
+      ),
+      if (covered.isNotEmpty)
+        Polyline(
+          polylineId: PolylineId('${id}_covered'),
+          points: covered,
+          color: Colors.grey,
+          width: 6,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        ),
+    };
+  }
+
+  double _bearingBetween(LatLng a, LatLng b) {
+    final lat1 = a.latitude * (math.pi / 180.0);
+    final lon1 = a.longitude * (math.pi / 180.0);
+    final lat2 = b.latitude * (math.pi / 180.0);
+    final lon2 = b.longitude * (math.pi / 180.0);
+    final dLon = lon2 - lon1;
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    var brng = math.atan2(y, x) * 180.0 / math.pi;
+    brng = (brng + 360.0) % 360.0;
+    return brng;
+  }
+
+  Future<void> _followCamera(LatLng me) async {
+    if (_driverLeg.length >= 2) {
+      final idx = _nearestIndex(_driverLeg, me);
+      final next = _driverLeg[(idx + 1).clamp(0, _driverLeg.length - 1)];
+      final bearing = _bearingBetween(me, next);
+      await _mapController?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: me, zoom: 17.0, tilt: 45.0, bearing: bearing),
+        ),
+      );
+    } else {
+      await _mapController?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: me, zoom: 17.0, tilt: 45.0),
+        ),
+      );
+    }
+  }
+
   bool _trafficEnabled = false;
   MapType _mapType = MapType.normal;
   double? _fare;
@@ -170,6 +264,42 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     } catch (e) {
       _logger.e('Failed to draw route "$id": $e');
     }
+  }
+
+  // same signature + store points for trimming when id == 'driver_to_pickup'
+  Future<void> _drawRouteAndStore({
+    required LatLng from,
+    required LatLng to,
+    required String id,
+    required Color color,
+    int width = 6,
+  }) async {
+    final points = await MapService().getRoute(from, to);
+    if (!mounted || points.isEmpty) return;
+
+    if (id == 'driver_to_pickup') {
+      _driverLeg = points;
+      _applyTrimmedRoute(_driverLeg, from, id: id); // initial cut from 'from'
+      setState(() {
+        _polylines = {}; // clear legacy single polyline
+        _polylines = {..._trimmed}; // show covered+remaining
+      });
+    } else {
+      setState(() {
+        _polylines = {
+          Polyline(
+            polylineId: PolylineId(id),
+            points: points,
+            color: color,
+            width: width,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+          ),
+        };
+      });
+    }
+    await _fitToBounds(from, to);
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -269,11 +399,30 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       // fallback to driver location provider
       driverLatLng = ref.watch(driverLocationProvider(assignedDriverId)).value;
     }
+    // live trim + follow camera while heading to pickup
+    if (driverLatLng != null && status == 'accepted' && _driverLeg.isNotEmpty) {
+      // avoid redundant rebuild churn
+      if (_lastDriverTick == null ||
+          Geolocator.distanceBetween(
+                _lastDriverTick!.latitude,
+                _lastDriverTick!.longitude,
+                driverLatLng.latitude,
+                driverLatLng.longitude,
+              ) >
+              3) {
+        _lastDriverTick = driverLatLng;
+        _applyTrimmedRoute(_driverLeg, driverLatLng, id: 'driver_to_pickup');
+        // merge with any other polylines you already show
+        setState(() => _polylines = {..._trimmed});
+        _followCamera(driverLatLng);
+      }
+    }
 
     final hasActive = const {
       'pending',
       'searching',
       'accepted',
+      'driverArrived', // ✅ keep form hidden & continue tracking
       'in_progress',
       'onTrip',
     }.contains(status);
@@ -312,8 +461,17 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 final nearbyAsync = ref.watch(nearbyDriversProvider);
                 return nearbyAsync.when(
                   data: (drivers) {
+                    final status = (rideData?['status'] ?? '').toString();
+                    final hasActive =
+                        status == 'accepted' ||
+                        status == 'in_progress' ||
+                        status == 'onTrip' ||
+                        status == 'driverArrived';
+
                     final markers = <Marker>{
+                      // Rider current location only when idle/planning
                       if (_currentLocation != null &&
+                          !hasActive &&
                           (_pickupLatLng == null ||
                               (_pickupLatLng == _currentLocation)) &&
                           _dropoffLatLng == null)
@@ -324,7 +482,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueAzure,
                           ),
                         ),
-                      if (_pickupLatLng != null)
+
+                      // Pickup shown only until trip starts
+                      if (_pickupLatLng != null &&
+                          (status == 'accepted' || status == 'driverArrived'))
                         Marker(
                           markerId: const MarkerId("pickup"),
                           position: _pickupLatLng!,
@@ -332,7 +493,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueGreen,
                           ),
                         ),
-                      if (_dropoffLatLng != null)
+
+                      // Dropoff shown only during trip
+                      if (_dropoffLatLng != null &&
+                          (status == 'in_progress' || status == 'onTrip'))
                         Marker(
                           markerId: const MarkerId("dropoff"),
                           position: _dropoffLatLng!,
@@ -340,6 +504,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueRed,
                           ),
                         ),
+
+                      // Live driver marker whenever we know it
                       if (driverLatLng != null)
                         Marker(
                           markerId: const MarkerId('driver_live'),
@@ -350,11 +516,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           infoWindow: const InfoWindow(title: 'Driver'),
                         ),
 
+                      // Nearby drivers (hidden once one is assigned)
                       ...drivers
                           .where((d) => d['location'] != null)
                           .where(
                             (d) => (d['id'] ?? d['uid']) != assignedDriverId,
-                          ) // avoid duplicate
+                          )
                           .map((d) {
                             final loc = d['location'];
                             LatLng? pos;
@@ -363,7 +530,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             } else if (loc is LatLng) {
                               pos = loc;
                             } else {
-                              return null; // unknown type
+                              return null;
                             }
 
                             final id =
@@ -402,14 +569,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           onMapCreated: (controller) =>
                               _mapController = controller,
 
-                          // 🔽 Brand: use our custom controls instead of defaults
                           myLocationEnabled: true,
                           myLocationButtonEnabled: false,
                           compassEnabled: false,
                           zoomControlsEnabled: false,
                           mapToolbarEnabled: false,
 
-                          // 🔽 Our themed flags
                           trafficEnabled: _trafficEnabled,
                           mapType: _mapType,
 
@@ -479,6 +644,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 );
               },
             ),
+            if (rideData != null &&
+                (status == 'in_progress' || status == 'onTrip') &&
+                _dropoffLatLng != null &&
+                assignedDriverId != null)
+              Positioned.fill(
+                child: _RiderNavMap(
+                  rideId: rideId!,
+                  driverId: assignedDriverId,
+                  dropoff: _dropoffLatLng!,
+                  pickup: _pickupLatLng,
+                ),
+              ),
             // --- Fare/ETA/Distance pill (like route summary) ---
             if (_fare != null && _eta != null && _distanceKm != null)
               Positioned(
@@ -526,7 +703,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                     // Replace planning polyline with driver → pickup
                     if (driverLatLng != null && _pickupLatLng != null) {
-                      _drawRoute(
+                      _drawRouteAndStore(
                         from: driverLatLng,
                         to: _pickupLatLng!,
                         id: 'driver_to_pickup',
@@ -544,7 +721,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                   case 'in_progress':
                   case 'onTrip':
-                    // Show current driver (live) → dropoff; fallback to current/pickup if needed
+                    // Show current driver (live) → dropoff; fallback...
                     if (_dropoffLatLng != null) {
                       final origin =
                           driverLatLng ?? _currentLocation ?? _pickupLatLng;
@@ -633,12 +810,69 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         right: 16,
                         child: ShareTripButton(rideId: ride['id']),
                       ),
+
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
                         bottom: 110,
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
+                    // ⤵️ Always show Cancel for accepted / in_progress / onTrip
+                    if (status == 'accepted' ||
+                        status == 'in_progress' ||
+                        status == 'onTrip')
+                      Positioned(
+                        bottom: 46, // below SOS
+                        left: 16,
+                        right: 16,
+                        child: _RiderCancelButton(rideId: ride['id']),
+                      ),
+
+                    if (status != 'completed' && status != 'cancelled')
+                      Positioned(
+                        bottom: 56, // just above SOS
+                        right: 16,
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.cancel),
+                          label: const Text('Cancel Ride'),
+                          onPressed: () async {
+                            try {
+                              final id = (ride['id'] as String?);
+                              if (id == null || id.isEmpty) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Ride is not initialized yet',
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return;
+                              }
+                              await ref
+                                  .read(riderDashboardProvider.notifier)
+                                  .cancelRide(id);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Ride cancelled'),
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to cancel: $e'),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      ),
+
                     if (status == 'completed')
                       Align(
                         alignment: Alignment.bottomCenter,
@@ -1685,7 +1919,10 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _CounterFareDialog(ride: widget.ride),
+      builder: (_) => _CounterFareDialog(
+        ride: widget.ride,
+        ttlSeconds: 30, // ⟵ set your desired TTL here
+      ),
     ).then((_) => _shown = false);
   }
 
@@ -1693,19 +1930,79 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
   Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
-class _CounterFareDialog extends ConsumerWidget {
+class _CounterFareDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic> ride;
-  const _CounterFareDialog({required this.ride});
+  final int ttlSeconds; // countdown length
+  const _CounterFareDialog({
+    required this.ride,
+    this.ttlSeconds = 30, // default 30s
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final cf = (ride['counterFare'] as num?)?.toDouble() ?? 0;
-    final baseFare = (ride['fare'] as num?)?.toDouble() ?? 0;
-    final pickup = (ride['pickup'] ?? '—').toString();
-    final dropoff = (ride['dropoff'] ?? '—').toString();
+  ConsumerState<_CounterFareDialog> createState() => _CounterFareDialogState();
+}
+
+class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
+  late int _remaining;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _remaining = widget.ttlSeconds;
+
+    // start 1s countdown
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) async {
+      if (!mounted) return;
+      setState(() => _remaining--);
+
+      // Auto-expire when countdown hits 0
+      if (_remaining <= 0) {
+        t.cancel();
+        _timer = null;
+        try {
+          await ref
+              .read(riderDashboardProvider.notifier)
+              .expireCounterFare(widget.ride['id']);
+        } catch (_) {
+          // swallow — UI will still close when counter value disappears
+        }
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop(); // auto-hide
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cf = (widget.ride['counterFare'] as num?)?.toDouble() ?? 0;
+    final baseFare = (widget.ride['fare'] as num?)?.toDouble() ?? 0;
+    final pickup = (widget.ride['pickup'] ?? '—').toString();
+    final dropoff = (widget.ride['dropoff'] ?? '—').toString();
 
     return AlertDialog(
-      title: const Text('Driver Counter-Offer'),
+      title: Row(
+        children: [
+          const Text('Driver Counter-Offer'),
+          const Spacer(),
+          // small countdown pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black12,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('${_remaining}s'),
+          ),
+        ],
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1718,15 +2015,21 @@ class _CounterFareDialog extends ConsumerWidget {
             'Counter:   \$${cf.toStringAsFixed(2)}',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
+          const SizedBox(height: 6),
+          const Text(
+            'If you don’t respond, this counter will auto-expire.',
+            style: TextStyle(fontSize: 12, color: Colors.black54),
+          ),
         ],
       ),
       actions: [
         TextButton(
           onPressed: () async {
+            // Keep current behavior: rejecting cancels the ride.
             try {
               await ref
                   .read(riderDashboardProvider.notifier)
-                  .handleCounterFare(ride['id'], cf, false);
+                  .handleCounterFare(widget.ride['id'], cf, false);
               if (context.mounted) Navigator.pop(context);
             } catch (e) {
               if (context.mounted) {
@@ -1744,7 +2047,7 @@ class _CounterFareDialog extends ConsumerWidget {
             try {
               await ref
                   .read(riderDashboardProvider.notifier)
-                  .handleCounterFare(ride['id'], cf, true);
+                  .handleCounterFare(widget.ride['id'], cf, true);
               if (context.mounted) Navigator.pop(context);
             } catch (e) {
               if (context.mounted) {
@@ -2072,6 +2375,322 @@ class _RoundIconButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _RiderCancelButton extends ConsumerWidget {
+  final String rideId;
+  const _RiderCancelButton({required this.rideId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(
+        backgroundColor: Colors.red,
+        foregroundColor: Colors.white,
+        minimumSize: const Size.fromHeight(48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      icon: const Icon(Icons.cancel),
+      label: const Text('Cancel ride'),
+      onPressed: () async {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Cancel this ride?'),
+            content: const Text(
+              'Are you sure you want to cancel? Your driver will be notified.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('No'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Yes, cancel'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+
+        try {
+          await ref.read(riderDashboardProvider.notifier).cancelRide(rideId);
+          if (context.mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('Ride cancelled')));
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Failed to cancel: $e')));
+          }
+        }
+      },
+    );
+  }
+}
+
+class _RiderNavMap extends ConsumerStatefulWidget {
+  final String rideId;
+  final String driverId;
+  final LatLng dropoff;
+  final LatLng? pickup; // optional; used to seed the first route
+
+  const _RiderNavMap({
+    required this.rideId,
+    required this.driverId,
+    required this.dropoff,
+    this.pickup,
+  });
+
+  @override
+  ConsumerState<_RiderNavMap> createState() => _RiderNavMapState();
+}
+
+class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
+  final _log = Logger();
+
+  GoogleMapController? _ctrl;
+
+  // Route
+  List<LatLng> _route = <LatLng>[];
+  List<LatLng> _covered = <LatLng>[];
+  List<LatLng> _remaining = <LatLng>[];
+  Polyline? _polyCovered;
+  Polyline? _polyRemaining;
+
+  // Follow-cam & reroute guards
+  DateTime _lastBuiltAt = DateTime.fromMillisecondsSinceEpoch(0);
+  int _offRouteHits = 0;
+  static const _offRouteThresholdM = 30.0;
+  static const _offRouteHitsToReroute = 3;
+  static const _rebuildCooldownSec = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    // Seed route from pickup→dropoff if pickup provided; else from dropoff→dropoff (no-op) until first driver point arrives.
+    final seedStart = widget.pickup ?? widget.dropoff;
+    _buildRoute(from: seedStart, to: widget.dropoff);
+  }
+
+  @override
+  void dispose() {
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  // -------- Route building / trimming ---------------------------------------
+  Future<void> _buildRoute({required LatLng from, required LatLng to}) async {
+    try {
+      final pts = await MapService().getRoute(from, to);
+      if (!mounted || pts.isEmpty) return;
+
+      setState(() {
+        _route = pts;
+        _covered = [_route.first];
+        _remaining = List<LatLng>.from(_route);
+        _polyCovered = Polyline(
+          polylineId: const PolylineId('covered'),
+          points: _covered,
+          color: Colors.grey,
+          width: 6,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        );
+        _polyRemaining = Polyline(
+          polylineId: const PolylineId('remaining'),
+          points: _remaining,
+          color: Colors.blueAccent,
+          width: 6,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        );
+      });
+
+      // Fit initial bounds
+      if (_ctrl != null && _route.length >= 2) {
+        final a = _route.first, b = _route.last;
+        final sw = LatLng(
+          (a.latitude < b.latitude) ? a.latitude : b.latitude,
+          (a.longitude < b.longitude) ? a.longitude : b.longitude,
+        );
+        final ne = LatLng(
+          (a.latitude > b.latitude) ? a.latitude : b.latitude,
+          (a.longitude > b.longitude) ? a.longitude : b.longitude,
+        );
+        await _ctrl!.animateCamera(
+          CameraUpdate.newLatLngBounds(
+            LatLngBounds(southwest: sw, northeast: ne),
+            60,
+          ),
+        );
+      }
+
+      _lastBuiltAt = DateTime.now();
+      _offRouteHits = 0;
+    } catch (e) {
+      _log.e('[RiderNav] buildRoute failed: $e');
+    }
+  }
+
+  void _trimWith(LatLng cur) {
+    if (_route.length < 2) return;
+
+    final idx = _nearestIndex(cur, startFrom: 0);
+    final safeIdx = idx.clamp(0, _route.length - 1);
+
+    final newCovered = _route.sublist(0, safeIdx + 1);
+    final newRemaining = [cur, ..._route.sublist(safeIdx + 1)];
+
+    setState(() {
+      _covered = newCovered;
+      _remaining = newRemaining;
+      _polyCovered =
+          _polyCovered?.copyWith(pointsParam: _covered) ??
+          Polyline(
+            polylineId: const PolylineId('covered'),
+            points: _covered,
+            color: Colors.grey,
+            width: 6,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+          );
+      _polyRemaining =
+          _polyRemaining?.copyWith(pointsParam: _remaining) ??
+          Polyline(
+            polylineId: const PolylineId('remaining'),
+            points: _remaining,
+            color: Colors.blueAccent,
+            width: 6,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+          );
+    });
+  }
+
+  int _nearestIndex(LatLng p, {int startFrom = 0}) {
+    double best = double.infinity;
+    int bestIdx = startFrom.clamp(0, _route.length - 1);
+    for (int i = startFrom; i < _route.length; i++) {
+      final d = Geolocator.distanceBetween(
+        p.latitude,
+        p.longitude,
+        _route[i].latitude,
+        _route[i].longitude,
+      );
+      if (d < best) {
+        best = d;
+        bestIdx = i;
+      }
+      if (i - startFrom > 200) break; // cheap early-exit
+    }
+    return bestIdx;
+  }
+
+  double _bearing(LatLng a, LatLng b) {
+    double toRad(double d) => d * (3.141592653589793 / 180.0);
+    double toDeg(double r) => r * (180.0 / 3.141592653589793);
+    final lat1 = toRad(a.latitude), lat2 = toRad(b.latitude);
+    final dLon = toRad(b.longitude - a.longitude);
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    return (toDeg(math.atan2(y, x)) + 360.0) % 360.0;
+  }
+
+  void _maybeReroute(LatLng cur) {
+    if (_route.isEmpty) return;
+
+    final idx = _nearestIndex(cur);
+    final nearest = _route[idx];
+    final dist = Geolocator.distanceBetween(
+      cur.latitude,
+      cur.longitude,
+      nearest.latitude,
+      nearest.longitude,
+    );
+
+    _offRouteHits = dist > _offRouteThresholdM ? _offRouteHits + 1 : 0;
+
+    final cooldownOk =
+        DateTime.now().difference(_lastBuiltAt).inSeconds > _rebuildCooldownSec;
+    if (_offRouteHits >= _offRouteHitsToReroute && cooldownOk) {
+      _offRouteHits = 0;
+      _buildRoute(from: cur, to: widget.dropoff);
+    }
+  }
+
+  // -------- Build ------------------------------------------------------------
+  @override
+  Widget build(BuildContext context) {
+    final driverPos = ref.watch(driverLocationProvider(widget.driverId)).value;
+
+    // Smooth follow + trim each time driver moves
+    if (driverPos != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+
+        // Follow-cam with tilt & bearing
+        double br = 0;
+        if (_remaining.length >= 2) {
+          br = _bearing(_remaining.first, _remaining[1]);
+        }
+        await _ctrl?.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: driverPos, zoom: 17, tilt: 45, bearing: br),
+          ),
+        );
+
+        // Trim and maybe reroute
+        _trimWith(driverPos);
+        _maybeReroute(driverPos);
+      });
+    }
+
+    final markers = <Marker>{
+      if (driverPos != null)
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: driverPos,
+          rotation: 0,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueOrange,
+          ),
+        ),
+      // Keep only dropoff marker in nav mode
+      Marker(
+        markerId: const MarkerId('dropoff'),
+        position: widget.dropoff,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+      ),
+    };
+
+    final polylines = <Polyline>{
+      if (_polyCovered != null) _polyCovered!,
+      if (_polyRemaining != null) _polyRemaining!,
+    };
+
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: widget.dropoff, zoom: 15),
+      markers: markers,
+      polylines: polylines,
+      myLocationEnabled: false,
+      myLocationButtonEnabled: false,
+      compassEnabled: false,
+      zoomControlsEnabled: false,
+      mapToolbarEnabled: false,
+      onMapCreated: (c) => _ctrl = c,
     );
   }
 }

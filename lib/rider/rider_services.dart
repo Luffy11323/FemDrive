@@ -29,16 +29,14 @@ final String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 final driverSearchCenterProvider = StateProvider<LatLng?>((ref) => null);
 
 // Nearby drivers stream reacts to the center above
+// nearby drivers (FAST RTDB) centered on driverSearchCenterProvider
 final nearbyDriversProvider =
     StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
       final center = ref.watch(driverSearchCenterProvider);
       if (center == null) {
-        // No center yet → emit empty list once
-        return Stream<List<Map<String, dynamic>>>.value(
-          const <Map<String, dynamic>>[],
-        );
+        return Stream<List<Map<String, dynamic>>>.value(const []);
       }
-      return NearbyDriversService().streamNearbyDrivers(center);
+      return NearbyDriversService().streamNearbyDriversFast(center);
     });
 
 class RadarSearchingOverlay extends StatefulWidget {
@@ -272,15 +270,25 @@ class RideService {
             onTimeout: () => <Map<String, dynamic>>[],
           );
 
-      if (drivers.isEmpty) {
+      // 🔒 Filter drivers by the selected rideType
+      final wantedType = (rideData['rideType'] ?? '').toString();
+      final filteredDrivers = drivers
+          .where(
+            (d) =>
+                (d['rideType'] ?? '').toString().toLowerCase().trim() ==
+                wantedType.toLowerCase().trim(),
+          )
+          .toList();
+
+      if (filteredDrivers.isEmpty) {
         await _rtdb.child('ridesLive/$rideId').update({'status': 'searching'});
         _logger.i(
-          '[RideService] No drivers found → ride $rideId marked as searching',
+          '[RideService] No drivers found for type "$wantedType" → ride $rideId marked as searching',
         );
       } else {
         final Map<String, Object?> updates = {};
         var count = 0;
-        for (final d in drivers) {
+        for (final d in filteredDrivers) {
           final driverId = (d['id'] ?? d['uid'])?.toString();
           if (driverId == null || driverId.isEmpty) continue;
 
@@ -293,6 +301,7 @@ class RideService {
             'dropoffLat': rideData['dropoffLat'],
             'dropoffLng': rideData['dropoffLng'],
             'fare': rideData['fare'],
+            'rideType': wantedType,
             'timestamp': ServerValue.timestamp,
           };
           count++;
@@ -300,13 +309,35 @@ class RideService {
         if (updates.isNotEmpty) {
           await _rtdb.update(updates);
         }
-        _logger.i('[RideService] ✅ Notified $count drivers for ride $rideId');
+        _logger.i(
+          '[RideService] ✅ Notified $count "$wantedType" drivers for ride $rideId',
+        );
       }
 
       return rideId;
     } catch (e, st) {
       _logger.e('requestRide failed', error: e, stackTrace: st);
       throw Exception('Unable to request ride: $e');
+    }
+  }
+
+  Future<void> expireCounterFare(String rideId) async {
+    try {
+      // Firestore: clear the counter and stamp expiry
+      await _firestore.collection('rides').doc(rideId).update({
+        'counterFare': FieldValue.delete(),
+        'counterExpiredAt': FieldValue.serverTimestamp(),
+      });
+
+      // RTDB live mirror: clear the counter & stamp expiry
+      await _rtdb.child('ridesLive/$rideId').update({
+        'counterFare': null,
+        'counterExpiredAt': ServerValue.timestamp,
+        'updatedAt': ServerValue.timestamp,
+      });
+    } catch (e, st) {
+      _logger.e('expireCounterFare failed', error: e, stackTrace: st);
+      throw Exception('Unable to expire counter: $e');
     }
   }
 

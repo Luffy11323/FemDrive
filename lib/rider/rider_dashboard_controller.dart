@@ -110,6 +110,17 @@ class RiderDashboardController
     _cancelRideStream();
   }
 
+  Future<void> expireCounterFare(String rideId) async {
+    try {
+      await RideService().expireCounterFare(rideId);
+      // Streams will naturally clear the popup (counterFare becomes null).
+    } catch (e, st) {
+      _logger.e('expireCounterFare failed', error: e, stackTrace: st);
+      state = AsyncError(e, st);
+      rethrow;
+    }
+  }
+
   /// Creates ride via service; also seeds state with a quick optimistic value.
   // RiderDashboardController.dart
   Future<void> createRide(

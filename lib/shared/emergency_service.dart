@@ -17,8 +17,21 @@ class EmergencyService {
     required String currentUid, // driver
     required String otherUid, // rider
   }) async {
+    // 1) Strict guards at the top
+    if (rideId.trim().isEmpty) {
+      throw ArgumentError('EmergencyService.sendEmergency: rideId is empty');
+    }
+    if (currentUid.trim().isEmpty) {
+      throw ArgumentError(
+        'EmergencyService.sendEmergency: currentUid is empty',
+      );
+    }
+    if (otherUid.trim().isEmpty) {
+      throw ArgumentError('EmergencyService.sendEmergency: otherUid is empty');
+    }
+
     try {
-      // 1) Snapshot the current ride for admin report
+      // 2) Harden Firestore/RTDB paths: Ride doc
       final rideRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
       final rideSnap = await rideRef.get();
       final rideData = rideSnap.data() ?? <String, dynamic>{};
@@ -63,7 +76,7 @@ class EmergencyService {
 
       await batch.commit();
 
-      // 4) RTDB live node: mark ride as cancelled (do not delete)
+      // 4) RTDB live node: mark ride as cancelled (explicit path)
       await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
         AppFields.status: RideStatus.cancelled,
         'emergencyTriggered': true,
@@ -98,7 +111,7 @@ class EmergencyService {
         _logger.w('[Emergency] driver notifications cleanup failed: $e');
       }
 
-      // 7) Notify rider of cancellation in RTDB
+      // 7) Notify rider of cancellation in RTDB (explicit path with guarded keys)
       await _rtdb.child('${AppPaths.notifications}/$otherUid').push().set({
         AppFields.type: 'ride_cancelled',
         AppFields.rideId: rideId,
@@ -106,7 +119,7 @@ class EmergencyService {
         AppFields.timestamp: ServerValue.timestamp,
       });
 
-      // 8) Notify admin channel in RTDB
+      // 8) Notify admin channel in RTDB (explicit path with guarded keys)
       await _rtdb.child('notifications/admin').push().set({
         AppFields.type: 'emergency',
         AppFields.rideId: rideId,
