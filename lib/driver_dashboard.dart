@@ -2,10 +2,9 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:dart_geohash/dart_geohash.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/driver/driver_ride_details_page.dart';
-import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/shared/emergency_service.dart';
 import 'package:femdrive/shared/notifications.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -602,17 +601,18 @@ class DriverDashboard extends ConsumerStatefulWidget {
 }
 
 class _DriverDashboardState extends ConsumerState<DriverDashboard> {
+  late final DriverLocationService _loc;
+  StreamSubscription<Position>? _posSub;
+
   String? _detailsPushedFor; // track last rideId for which we pushed details
   StreamSubscription? _liveRideSub; // <— NEW
   bool _detailsPushed = false; // <— NEW
   String? _liveWatchingRideId;
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
-  final _geoHasher = GeoHasher();
   final Set<String> _shownRequestIds = {};
   GoogleMapController? _mapController;
   Position? _currentPosition;
-  Timer? _locationUpdateTimer;
   final bool _mapError = false;
   final String _mapErrorMessage = '';
   int _selectedIndex = 0;
@@ -620,7 +620,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void initState() {
     super.initState();
-
+    _loc = DriverLocationService();
     // 1. Internet status listener
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
@@ -640,7 +640,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         if (data == null) return;
         final isVerified = data[AppFields.verified] as bool? ?? true;
         if (!isVerified) {
-          await DriverLocationService().goOffline();
+          await _loc.goOffline();
           await _auth.signOut();
           if (!mounted) return;
           Navigator.of(context).popUntil((r) => r.isFirst);
@@ -650,13 +650,24 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         }
       });
     });
-
-    _startLocationUpdates(); // Your existing GPS stream logic
+    _posSub = _loc.positionStream.listen((pos) {
+      if (!mounted) return;
+      setState(() {
+        _currentPosition = pos;
+      });
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
+      );
+    });
   }
 
   void _attachLiveRide(String rideId) {
     _liveRideSub?.cancel();
     _liveWatchingRideId = rideId;
+    _loc.setActiveRide(
+      rideId,
+    ); // bind writer immediately when we start watching
+
     _detailsPushed = false;
 
     _liveRideSub = ridesLiveStream(rideId).listen((live) {
@@ -700,71 +711,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       if (status == RideStatus.completed || status == RideStatus.cancelled) {
         _detailsPushed = false;
       }
-    });
-  }
-
-  void _startLocationUpdates() {
-    // If this gets called more than once, prevent multiple timers.
-    _locationUpdateTimer?.cancel();
-
-    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 1), (
-      timer,
-    ) async {
-      if (!_isOnline) return;
-
-      try {
-        // 1) Get current GPS position → this is the `pos` you asked about
-        final Position pos = await Geolocator.getCurrentPosition(
-          locationSettings:
-              locationSettings, // Pass locationSettings instead of desiredAccuracy
-        );
-
-        // Keep UI in sync
-        if (mounted) {
-          setState(() {
-            _currentPosition = pos;
-          });
-        }
-
-        // 2) Resolve current driver uid → this is the `uid` you asked about
-        final String? uid = await getDriverUid();
-        if (uid != null) {
-          // Encode geohash for discovery radius features (already in your code)
-          final String gh = _geoHasher.encode(
-            pos.latitude,
-            pos.longitude,
-            precision: GeoCfg.driverHashPrecision,
-          );
-
-          // 3) Update the canonical "who is online & where" node
-          await _rtdb.child(AppPaths.driversOnline).child(uid).update({
-            AppFields.lat: pos.latitude,
-            AppFields.lng: pos.longitude,
-            AppFields.geohash: gh,
-            AppFields.updatedAt: ServerValue.timestamp,
-          });
-
-          // 4) ALSO update the rider-facing live location node
-          //    (this is what the Rider app prefers to watch)
-          await _rtdb.child(AppPaths.driverLocations).child(uid).update({
-            AppFields.lat: pos.latitude,
-            AppFields.lng: pos.longitude,
-            AppFields.updatedAt: ServerValue.timestamp,
-          });
-        }
-
-        // 5) Smoothly pan the map to the latest position if visible
-        if (_mapController != null && _currentPosition != null) {
-          _mapController!.animateCamera(
-            CameraUpdate.newLatLng(
-              LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-            ),
-          );
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('Location update failed: $e');
-        }
+      if (status == RideStatus.completed || status == RideStatus.cancelled) {
+        _loc.setActiveRide(null);
       }
     });
   }
@@ -772,18 +720,19 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   @override
   void dispose() {
     _connSub.cancel();
-    _locationUpdateTimer?.cancel();
     _mapController?.dispose();
     _liveRideSub?.cancel(); // <— NEW
+    _loc.goOffline();
+    _posSub?.cancel();
     super.dispose();
   }
 
   Future<void> _toggleOnline(bool v) async {
     setState(() => _isOnline = v);
     if (v) {
-      await DriverLocationService().startOnlineMode();
+      await _loc.startOnlineMode(); // no ride yet
     } else {
-      await DriverLocationService().goOffline();
+      await _loc.goOffline();
       _shownRequestIds.clear();
     }
   }
@@ -813,11 +762,14 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           _liveRideSub = null;
           _liveWatchingRideId = null;
           _detailsPushed = false;
+          _loc.setActiveRide(null);
           return;
         }
 
         if (_liveWatchingRideId == newRideId) return;
         _attachLiveRide(newRideId);
+
+        _loc.setActiveRide(newRideId);
       });
 
       // 3. Push ride details page
@@ -913,21 +865,66 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .acceptRide(active.rideId, context: active);
+
+                              // 🔗 bind tracking to this ride
+                              _loc.setActiveRide(active.rideId);
+                              await _loc.startOnlineMode(rideId: active.rideId);
+
+                              // remove only this popup for this driver
+                              final uid =
+                                  FirebaseAuth.instance.currentUser?.uid;
+                              if (uid != null) {
+                                await FirebaseDatabase.instance
+                                    .ref(
+                                      '${AppPaths.driverNotifications}/$uid/${active.rideId}',
+                                    )
+                                    .remove();
+                              }
+
                               showAccepted(rideId: active.rideId);
-                              // optional: start background location tied to this ride
-                              await DriverLocationService().startOnlineMode(
-                                rideId: active.rideId,
-                              );
+                              // open details immediately (don’t wait for the stream to push it)
+                              if (mounted) {
+                                // ignore: use_build_context_synchronously
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => DriverRideDetailsPage(
+                                      rideId: active.rideId,
+                                    ),
+                                  ),
+                                );
+                              }
                             },
+
                             onDecline: () async {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .declineRide(active.rideId);
+
+                              final uid =
+                                  FirebaseAuth.instance.currentUser?.uid;
+                              if (uid != null) {
+                                await FirebaseDatabase.instance
+                                    .ref(
+                                      '${AppPaths.driverNotifications}/$uid/${active.rideId}',
+                                    )
+                                    .remove();
+                              }
                             },
+
                             onCounter: (newFare) async {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .proposeCounterFare(active.rideId, newFare);
+
+                              final uid =
+                                  FirebaseAuth.instance.currentUser?.uid;
+                              if (uid != null) {
+                                await FirebaseDatabase.instance
+                                    .ref(
+                                      '${AppPaths.driverNotifications}/$uid/${active.rideId}',
+                                    )
+                                    .remove();
+                              }
                             },
                           ),
                         ),
@@ -986,7 +983,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
             title: const Text('Logout'),
             onTap: () async {
               Navigator.pop(context);
-              await DriverLocationService().goOffline();
+              await _loc.goOffline();
               await _auth.signOut();
               if (!mounted) return;
               Navigator.of(context).popUntil((r) => r.isFirst);

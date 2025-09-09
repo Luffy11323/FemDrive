@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 // keep if used elsewhere
@@ -14,7 +15,7 @@ import 'package:dart_geohash/dart_geohash.dart';
 import 'package:async/async.dart';
 
 import 'package:femdrive/location/directions_service.dart';
-import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/shared/emergency_service.dart';
 
 class AppPaths {
   static const driversOnline = 'drivers_online';
@@ -171,126 +172,271 @@ class PendingRequest {
 }
 
 class DriverLocationService {
-  StreamSubscription<Position>? _positionSub;
-  final _rtdb = FirebaseDatabase.instance.ref();
-  final _firestore = FirebaseFirestore.instance;
-  final _auth = FirebaseAuth.instance;
-  String? _activeRideId;
+  final DatabaseReference _rtdb = FirebaseDatabase.instance.ref();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  StreamSubscription<Position>? _positionSub;
+  final GeoHasher _geoHasher = GeoHasher();
+
+  LocationSettings locationSettings;
+
+  String? _activeRideId;
+  bool _isPaused = false;
+
+  // Stream controller for position updates to notify UI (e.g., map camera)
+  final StreamController<Position> _positionController =
+      StreamController<Position>.broadcast();
+
+  Stream<Position> get positionStream => _positionController.stream;
+
+  DriverLocationService({LocationSettings? locationSettings})
+    : locationSettings =
+          locationSettings ??
+          const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          );
+
+  // Exponential backoff variables
+  int _retryAttempt = 0;
+  Timer? _retryTimer;
+
+  Future<bool> _checkAndRequestPermissions() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (kDebugMode) {
+          debugPrint('[Location] Location permission denied');
+        }
+        return false;
+      }
+    }
+    if (permission == LocationPermission.deniedForever) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Location] Location permission denied forever. Cannot request.',
+        );
+      }
+      return false;
+    }
+    return true;
+  }
+
+  /// Starts listening to location updates and writes them to RTDB and Firestore.
   Future<void> startOnlineMode({String? rideId}) async {
     final user = _auth.currentUser;
     if (user == null) {
-      debugPrint('[Location] No logged-in user');
+      if (kDebugMode) debugPrint('[Location] No logged-in user');
       return;
     }
     final uid = user.uid;
     _activeRideId = rideId;
-    final geoHasher = GeoHasher();
+    _isPaused = false;
 
+    bool permissionGranted = await _checkAndRequestPermissions();
+    if (!permissionGranted) return;
+
+    // Initialize background execution
     try {
       final ok = await FlutterBackground.initialize();
       if (ok) {
         await FlutterBackground.enableBackgroundExecution();
-        debugPrint('[Location] Background enabled');
+        if (kDebugMode) debugPrint('[Location] Background execution enabled');
       }
     } catch (e) {
-      debugPrint('[Location] BG init failed: $e');
+      if (kDebugMode) debugPrint('[Location] Background init failed: $e');
     }
 
+    // Cancel existing subscription if any
+    await _positionSub?.cancel();
+
     _positionSub =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
-          ),
-        ).listen(
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
           (pos) async {
-            final hash = geoHasher.encode(
+            if (_isPaused) return;
+
+            _retryAttempt = 0; // reset retry counter on success
+
+            _positionController.add(pos);
+
+            final String hash = _geoHasher.encode(
               pos.latitude,
               pos.longitude,
               precision: GeoCfg.driverHashPrecision,
             );
+
             try {
-              // Canonical online presence
-              await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
-                AppFields.uid: uid,
-                AppFields.lat: pos.latitude,
-                AppFields.lng: pos.longitude,
-                AppFields.geohash: hash,
-                AppFields.updatedAt: ServerValue.timestamp,
-              });
-
-              // Rider-facing live location marker (RTDB)
-              await _rtdb.child('${AppPaths.driverLocations}/$uid').update({
-                AppFields.lat: pos.latitude,
-                AppFields.lng: pos.longitude,
-                AppFields.updatedAt: ServerValue.timestamp,
-              });
-
-              // Optional: historical breadcrumbs in Firestore
-              await _firestore
-                  .collection('users')
-                  .doc(uid)
-                  .collection(AppPaths.driverLocations)
-                  .doc(DateTime.now().toIso8601String())
-                  .set({
-                    AppFields.lat: pos.latitude,
-                    AppFields.lng: pos.longitude,
-                    AppFields.timestamp: FieldValue.serverTimestamp(),
-                    AppFields.status: 'available',
-                  });
-
-              // If in a ride, mirror location to ride doc & path
-              if (_activeRideId != null) {
-                await _firestore
-                    .collection(AppPaths.ridesCollection)
-                    .doc(_activeRideId)
-                    .update({
-                      AppFields.driverLat: pos.latitude,
-                      AppFields.driverLng: pos.longitude,
-                    });
-
-                await _firestore
-                    .collection(AppPaths.locationsCollection)
-                    .doc(_activeRideId)
-                    .collection('driver')
-                    .doc(uid)
-                    .collection('positions')
-                    .doc(DateTime.now().toIso8601String())
-                    .set({
-                      AppFields.lat: pos.latitude,
-                      AppFields.lng: pos.longitude,
-                      AppFields.timestamp: FieldValue.serverTimestamp(),
-                    });
-              }
+              // Debounce writes to every ~3 seconds (adjust as needed)
+              _debouncedWrite(uid, pos, hash);
             } catch (e) {
-              debugPrint('[Location] Write failed: $e');
+              if (kDebugMode) debugPrint('[Location] Write failed: $e');
             }
           },
           onError: (err) async {
-            debugPrint('[Location] Stream error: $err — retrying');
-            await Future.delayed(const Duration(seconds: 3));
-            await _positionSub?.cancel();
-            _positionSub = null;
-            await startOnlineMode(rideId: _activeRideId);
+            if (kDebugMode) debugPrint('[Location] Stream error: $err');
+
+            // Retry with exponential backoff
+            _retryAttempt++;
+            final delaySeconds = _calculateBackoffSeconds(_retryAttempt);
+            if (kDebugMode) {
+              debugPrint('[Location] Retry in $delaySeconds seconds');
+            }
+
+            _retryTimer?.cancel();
+            _retryTimer = Timer(Duration(seconds: delaySeconds), () async {
+              await _positionSub?.cancel();
+              _positionSub = null;
+              if (!_isPaused) {
+                await startOnlineMode(rideId: _activeRideId);
+              }
+            });
           },
         );
   }
 
+  // Helper: exponential backoff with max delay cap at 32 seconds
+  int _calculateBackoffSeconds(int attempt) {
+    return attempt > 5 ? 32 : (1 << attempt);
+  }
+
+  // Debounce timer & last write cache to reduce frequent writes
+  Timer? _debounceTimer;
+  Position? _lastPosition;
+  String? _lastGeoHash;
+  DateTime? _lastWriteTime;
+
+  void _debouncedWrite(String uid, Position pos, String hash) {
+    final now = DateTime.now();
+
+    // If last write < 3 seconds ago and position/geohash didn't change significantly, skip
+    if (_lastWriteTime != null &&
+        now.difference(_lastWriteTime!).inSeconds < 3 &&
+        _lastPosition != null &&
+        _isPositionClose(_lastPosition!, pos) &&
+        _lastGeoHash == hash) {
+      // Skip update
+      return;
+    }
+
+    // Cancel previous timer, if any
+    _debounceTimer?.cancel();
+
+    // Schedule write in 1 second
+    _debounceTimer = Timer(const Duration(seconds: 1), () async {
+      try {
+        // Canonical online presence (RTDB)
+        await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
+          AppFields.uid: uid,
+          AppFields.lat: pos.latitude,
+          AppFields.lng: pos.longitude,
+          AppFields.geohash: hash,
+          AppFields.updatedAt: ServerValue.timestamp,
+        });
+
+        // Rider-facing live location marker (RTDB)
+        await _rtdb.child('${AppPaths.driverLocations}/$uid').update({
+          AppFields.lat: pos.latitude,
+          AppFields.lng: pos.longitude,
+          AppFields.updatedAt: ServerValue.timestamp,
+        });
+
+        // Optional: historical breadcrumbs in Firestore
+        await _firestore
+            .collection('users')
+            .doc(uid)
+            .collection(AppPaths.driverLocations)
+            .doc(now.toIso8601String())
+            .set({
+              AppFields.lat: pos.latitude,
+              AppFields.lng: pos.longitude,
+              AppFields.timestamp: FieldValue.serverTimestamp(),
+              AppFields.status: 'available',
+            });
+
+        // If in a ride, mirror location to ride doc & path
+        if (_activeRideId != null) {
+          await _firestore
+              .collection(AppPaths.ridesCollection)
+              .doc(_activeRideId)
+              .update({
+                AppFields.driverLat: pos.latitude,
+                AppFields.driverLng: pos.longitude,
+              });
+
+          await _firestore
+              .collection(AppPaths.locationsCollection)
+              .doc(_activeRideId)
+              .collection('driver')
+              .doc(uid)
+              .collection('positions')
+              .doc(now.toIso8601String())
+              .set({
+                AppFields.lat: pos.latitude,
+                AppFields.lng: pos.longitude,
+                AppFields.timestamp: FieldValue.serverTimestamp(),
+              });
+        }
+
+        // Cache last written state
+        _lastPosition = pos;
+        _lastGeoHash = hash;
+        _lastWriteTime = now;
+      } catch (e) {
+        if (kDebugMode) debugPrint('[Location] Debounced write failed: $e');
+      }
+    });
+  }
+
+  // Simple distance check to avoid updates when driver barely moved (~5 meters)
+  bool _isPositionClose(Position a, Position b, [double thresholdMeters = 5]) {
+    final distance = Geolocator.distanceBetween(
+      a.latitude,
+      a.longitude,
+      b.latitude,
+      b.longitude,
+    );
+    return distance < thresholdMeters;
+  }
+
+  /// Pause location updates without canceling subscription (useful on temporary offline states)
+  void pause() {
+    _isPaused = true;
+  }
+
+  /// Resume location updates if paused
+  void resume() {
+    _isPaused = false;
+  }
+
+  /// Set or clear the active ride ID to start/stop mirroring location to ride documents
+  void setActiveRide(String? rideId) {
+    _activeRideId = rideId;
+  }
+
+  /// Stops location updates, removes RTDB presence, disables background execution
   Future<void> goOffline() async {
     final user = _auth.currentUser;
     if (user == null) return;
     final uid = user.uid;
     _activeRideId = null;
+    _isPaused = true;
 
+    // Cancel position subscription & timers
     await _positionSub?.cancel();
     _positionSub = null;
+    _retryTimer?.cancel();
+    _debounceTimer?.cancel();
+
+    // Clear position broadcast stream?
+    // _positionController.add(null); // Optionally notify listeners of offline?
 
     try {
       await _rtdb.child('${AppPaths.driversOnline}/$uid').remove();
       await _rtdb.child('${AppPaths.driverLocations}/$uid').remove();
 
-      // optional breadcrumb in Firestore
+      // Optional breadcrumb in Firestore marking offline
       await _firestore
           .collection('users')
           .doc(uid)
@@ -303,17 +449,26 @@ class DriverLocationService {
             AppFields.status: 'offline',
           });
     } catch (e) {
-      debugPrint('[Location] Remove failed: $e');
+      if (kDebugMode) debugPrint('[Location] Remove failed: $e');
     }
 
     try {
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
-        debugPrint('[Location] Background disabled');
+        if (kDebugMode) debugPrint('[Location] Background execution disabled');
       }
     } catch (e) {
-      debugPrint('[Location] BG disable failed: $e');
+      if (kDebugMode) debugPrint('[Location] Background disable failed: $e');
     }
+  }
+
+  /// Dispose method for cleaning up streams and timers
+  Future<void> dispose() async {
+    await _positionSub?.cancel();
+    await _positionController.close();
+    _retryTimer?.cancel();
+    _debounceTimer?.cancel();
+    await goOffline();
   }
 }
 
@@ -380,52 +535,53 @@ class DriverService {
     if (user == null) {
       throw FirebaseAuthException(code: 'no-user', message: 'Not logged in');
     }
-
-    try {
-      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
-      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
-    } catch (_) {}
     final driverId = user.uid;
-    final userDoc = await _fire.collection('users').doc(user.uid).get();
+
+    // read driver name once
+    final userDoc = await _fire.collection('users').doc(driverId).get();
     final driverName = userDoc.data()?[AppFields.username] ?? 'Unknown Driver';
 
-    await _fire.collection(AppPaths.ridesCollection).doc(rideId).set({
-      AppFields.driverId: user.uid,
-      'driverName': driverName,
-      AppFields.status: RideStatus.accepted,
-      AppFields.acceptedAt: FieldValue.serverTimestamp(),
-      if (contextData != null) ...{
-        AppFields.pickupLat: contextData.pickupLat,
-        AppFields.pickupLng: contextData.pickupLng,
-        AppFields.dropoffLat: contextData.dropoffLat,
-        AppFields.dropoffLng: contextData.dropoffLng,
-      },
-    }, SetOptions(merge: true));
-
-    await _rtdb.child('ridesLive/$rideId').update({
-      AppFields.status: RideStatus.accepted,
-      'driverId': user.uid,
-      'updatedAt': ServerValue.timestamp,
-    });
+    // 1) Atomic accept in Firestore
     await _fire.runTransaction((tx) async {
-      final docRef = _fire.collection('rides').doc(rideId);
+      final docRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
       final snap = await tx.get(docRef);
       final currentStatus = snap.data()?['status'];
+
       if (currentStatus != 'pending') {
         throw Exception('Ride already taken');
       }
 
       tx.update(docRef, {
-        'driverId': driverId,
-        'status': 'accepted',
-        'acceptedAt': FieldValue.serverTimestamp(),
+        AppFields.driverId: driverId,
+        AppFields.status: RideStatus.accepted,
+        AppFields.acceptedAt: FieldValue.serverTimestamp(),
+        'driverName': driverName,
+        if (contextData != null) ...{
+          AppFields.pickupLat: contextData.pickupLat,
+          AppFields.pickupLng: contextData.pickupLng,
+          AppFields.dropoffLat: contextData.dropoffLat,
+          AppFields.dropoffLng: contextData.dropoffLng,
+        },
       });
     });
-    // --- NEW: fan-out delete this rideId from ALL driver_notifications ---
+
+    // 2) Mirror to RTDB live node
+    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
+      AppFields.status: RideStatus.accepted,
+      'driverId': driverId,
+      'updatedAt': ServerValue.timestamp,
+    });
+
+    // 3) Remove this ride from pending queues (best-effort)
+    try {
+      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+    } catch (_) {}
+
+    // 4) Fan-out delete the notification from ALL drivers (optional but recommended)
     try {
       final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
       final updates = <String, Object?>{};
-
       if (notifsSnap.exists && notifsSnap.value is Map) {
         final map = notifsSnap.value as Map;
         map.forEach((driverKey, ridesMap) {
@@ -435,22 +591,16 @@ class DriverService {
           }
         });
       }
-
       if (updates.isNotEmpty) {
         await _rtdb.update(updates);
-      } else {
-        if (kDebugMode) {
-          print(
-            '[DriverService.acceptRide] No other pending notifications found for ride=$rideId',
-          );
-        }
       }
     } catch (e) {
       if (kDebugMode) {
-        print('[DriverService.acceptRide] ⚠️ Fan-out delete failed: $e');
+        print('[DriverService.acceptRide] Fan-out delete failed: $e');
       }
     }
 
+    // 5) Notify rider (best-effort)
     final riderId =
         (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
             .data()?[AppFields.riderId];
@@ -461,9 +611,10 @@ class DriverService {
         AppFields.timestamp: ServerValue.timestamp,
       });
     }
-
     try {
-      await _rtdb.child('driver_notifications/${user.uid}/$rideId').remove();
+      await _rtdb
+          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
+          .remove();
     } catch (_) {}
   }
 
@@ -577,18 +728,58 @@ class DriverService {
   }
 
   Future<void> declineRide(String rideId) async {
-    await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
-    await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+    // Remove ride from pending queues (best-effort)
+    try {
+      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+          '[DriverService.declineRide] Failed to remove from pending queues: $e',
+        );
+      }
+    }
 
-    final riderId =
-        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-            .data()?[AppFields.riderId];
-    if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: 'ride_declined',
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
-      });
+    // Notify rider (best-effort)
+    try {
+      final riderDoc = await _fire
+          .collection(AppPaths.ridesCollection)
+          .doc(rideId)
+          .get();
+      final riderId = riderDoc.data()?[AppFields.riderId];
+      if (riderId != null) {
+        await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+          AppFields.type: 'ride_declined',
+          AppFields.rideId: rideId,
+          AppFields.timestamp: ServerValue.timestamp,
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('[DriverService.declineRide] Failed to notify rider: $e');
+      }
+    }
+
+    // Fan-out delete the notification from all drivers (optional but recommended)
+    try {
+      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
+      final updates = <String, Object?>{};
+      if (notifsSnap.exists && notifsSnap.value is Map) {
+        final map = notifsSnap.value as Map;
+        map.forEach((driverKey, ridesMap) {
+          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
+            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
+                null;
+          }
+        });
+      }
+      if (updates.isNotEmpty) {
+        await _rtdb.update(updates);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('[DriverService.declineRide] Fan-out delete failed: $e');
+      }
     }
   }
 
@@ -704,23 +895,61 @@ class DriverMapWidget extends ConsumerStatefulWidget {
   ConsumerState<DriverMapWidget> createState() => _DriverMapWidgetState();
 }
 
+class _StepInfo {
+  final LatLng start, end;
+  final String html, maneuver;
+  final int distanceM;
+  final List<LatLng> points;
+  _StepInfo({
+    required this.start,
+    required this.end,
+    required this.html,
+    required this.maneuver,
+    required this.distanceM,
+    required this.points,
+  });
+}
+
 class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
+  // --- live position subscription
+  StreamSubscription<Position>? _posSub;
+
+  // --- route state
+  List<LatLng> _route = [];
+  List<LatLng> _routeCovered = [];
+  List<LatLng> _routeRemaining = [];
+  Polyline? _polylineRemaining;
+  Polyline? _polylineCovered;
+
+  int _nearestIdx = 0;
+  DateTime? _lastRerouteAt;
+  int _offRouteStrikes = 0;
+
+  List<_StepInfo> _steps = [];
+  int _currentStep = 0;
+  String? _turnBanner;
+
+  // --- endpoints & status
   late final LatLng _pickup;
   late final LatLng _dropoff;
   String _status = RideStatus.accepted;
+
+  // --- map / ui state
+  GoogleMapController? _mapController;
   Set<Marker> _markers = {};
-  Polyline? _polyline;
+  // ignore: unused_field
+  Position? _currentPosition;
   String? _eta;
   bool _loadingRoute = true;
   bool _statusBusy = false;
   bool _emergencyBusy = false;
-  GoogleMapController? _mapController;
   Timer? _pickupTimer;
   bool _timerExpired = false;
 
   @override
   void initState() {
     super.initState();
+
     _pickup = LatLng(
       (widget.rideData[AppFields.pickupLat] as num).toDouble(),
       (widget.rideData[AppFields.pickupLng] as num).toDouble(),
@@ -745,51 +974,266 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       ),
     };
 
-    _fetchRoute();
+    // live position → follow, progress, light reroute
+    _posSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 3,
+      ),
+    ).listen(_onPosition);
+
+    _fetchRoute(); // initial route for current leg
   }
 
-  // --- Polyline adapter: accepts Map or List or encoded string -------------
-  List<LatLng> _extractRoutePoints(dynamic route) {
-    if (route is List<LatLng>) return route;
+  // === live position handler =================================================
+  void _onPosition(Position pos) async {
+    if (!mounted) return;
+    _currentPosition = pos;
+    final me = LatLng(pos.latitude, pos.longitude);
 
-    // e.g. list of {lat: , lng: }
-    if (route is List) {
+    // update driver marker + bearing toward next remaining point
+    final bearing = _bearingFromRouteOrLast(me);
+    setState(() {
+      _markers = {
+        ..._markers.where((m) => m.markerId.value != 'driver'),
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: me,
+          rotation: bearing,
+          anchor: const Offset(0.5, 0.5),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        ),
+      };
+    });
+
+    // camera: behind-the-car, tilted, smooth
+    _mapController?.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(target: me, zoom: 17.0, tilt: 45.0, bearing: bearing),
+      ),
+    );
+
+    // progress: trim covered / keep remaining
+    if (_route.isNotEmpty) {
+      final idx = _nearestRouteIndex(me, startFrom: _nearestIdx);
+      if (idx >= _nearestIdx) {
+        _nearestIdx = idx;
+        _rebuildProgressPolylines(cutAt: _nearestIdx);
+      }
+    }
+
+    // light off-route detection + cooldowned reroute
+    if (_route.isNotEmpty) {
+      final d = _distanceMeters(me, _route[_nearestIdx]);
+      final tooFar = d > 30.0; // meters
+      _offRouteStrikes = tooFar ? (_offRouteStrikes + 1) : 0;
+
+      final now = DateTime.now();
+      final canReroute =
+          _lastRerouteAt == null ||
+          now.difference(_lastRerouteAt!).inSeconds > 10;
+      final needReroute = _offRouteStrikes >= 4;
+      if (needReroute && canReroute) {
+        _offRouteStrikes = 0;
+        _lastRerouteAt = now;
+        final target =
+            (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
+            ? _dropoff
+            : _pickup;
+        await _refetchFromPos(me, target);
+      }
+    }
+
+    // lite turn-by-turn banner (optional if steps available)
+    _updateStepBanner(me);
+  }
+
+  // === route building for current leg =======================================
+  Future<void> _fetchRoute() async {
+    setState(() => _loadingRoute = true);
+    try {
+      final pos = await Geolocator.getCurrentPosition();
+      final start =
+          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
+          ? _pickup
+          : LatLng(pos.latitude, pos.longitude);
+      final end =
+          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
+          ? _dropoff
+          : _pickup;
+
+      final payload = await DirectionsService.getRoute(
+        start,
+        end,
+        role: 'driver',
+      );
+      if (!mounted || payload == null) return;
+
+      final points = _extractRoutePoints(payload);
+      if (points.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No route points returned')),
+          );
+        }
+        return;
+      }
+
+      _route = points;
+      _nearestIdx = 0;
+      _rebuildProgressPolylines(cutAt: 0);
+
+      // optional: parse step list if your DirectionsService provides it
+      final rawSteps = (payload['steps'] as List?) ?? const [];
+      _steps = rawSteps.map((m) {
+        final s = LatLng(
+          ((m['start']?['lat'] as num?) ?? 0).toDouble(),
+          ((m['start']?['lng'] as num?) ?? 0).toDouble(),
+        );
+        final e = LatLng(
+          ((m['end']?['lat'] as num?) ?? 0).toDouble(),
+          ((m['end']?['lng'] as num?) ?? 0).toDouble(),
+        );
+        final enc = (m['polyline'] as String? ?? '');
+        final pts = enc.isNotEmpty ? _decodePolyline(enc) : <LatLng>[];
+        return _StepInfo(
+          start: s,
+          end: e,
+          html: (m['html'] as String? ?? ''),
+          maneuver: (m['maneuver'] as String? ?? ''),
+          distanceM: (m['distanceM'] as int? ?? 0),
+          points: pts,
+        );
+      }).toList();
+      _currentStep = 0;
+      _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+
+      // ETA text (fallback to speed heuristic if not present)
+      final etaSecs = (payload['etaSeconds'] as num?)?.toInt();
+      String? etaText = payload['etaText']?.toString();
+      final distanceKm = (payload['distanceKm'] as num?)?.toDouble();
+      if ((etaText == null || etaText.isEmpty) && distanceKm != null) {
+        etaText = '${(distanceKm / 30.0 * 60.0).round()} min';
+      }
+
+      setState(() {
+        _eta = etaText;
+        _loadingRoute = false;
+      });
+
+      // fit bounds (first<->last quick fit)
+      if (_route.length >= 2) {
+        final sw = LatLng(
+          math.min(_route.first.latitude, _route.last.latitude),
+          math.min(_route.first.longitude, _route.last.longitude),
+        );
+        final ne = LatLng(
+          math.max(_route.first.latitude, _route.last.latitude),
+          math.max(_route.first.longitude, _route.last.longitude),
+        );
+        await _mapController?.animateCamera(
+          CameraUpdate.newLatLngBounds(
+            LatLngBounds(southwest: sw, northeast: ne),
+            60,
+          ),
+        );
+      }
+
+      // push ETA to RTDB for rider UI
+      final rideId = widget.rideData['rideId'] as String?;
+      if (rideId != null && etaSecs != null) {
+        await FirebaseDatabase.instance
+            .ref('${AppPaths.ridesLive}/$rideId')
+            .update({AppFields.etaSecs: etaSecs});
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingRoute = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Route error: $e')));
+    } finally {
+      if (mounted) setState(() => _loadingRoute = false);
+    }
+  }
+
+  Future<void> _refetchFromPos(LatLng from, LatLng to) async {
+    setState(() => _loadingRoute = true);
+    try {
+      final payload = await DirectionsService.getRoute(
+        from,
+        to,
+        role: 'driver',
+      );
+      if (!mounted || payload == null) return;
+
+      final points = _extractRoutePoints(payload);
+      if (points.isEmpty) return;
+
+      _route = points;
+      _nearestIdx = 0;
+      _rebuildProgressPolylines(cutAt: 0);
+
+      final rawSteps = (payload['steps'] as List?) ?? const [];
+      _steps = rawSteps.map((m) {
+        final s = LatLng(
+          ((m['start']?['lat'] as num?) ?? 0).toDouble(),
+          ((m['start']?['lng'] as num?) ?? 0).toDouble(),
+        );
+        final e = LatLng(
+          ((m['end']?['lat'] as num?) ?? 0).toDouble(),
+          ((m['end']?['lng'] as num?) ?? 0).toDouble(),
+        );
+        final enc = (m['polyline'] as String? ?? '');
+        final pts = enc.isNotEmpty ? _decodePolyline(enc) : <LatLng>[];
+        return _StepInfo(
+          start: s,
+          end: e,
+          html: (m['html'] as String? ?? ''),
+          maneuver: (m['maneuver'] as String? ?? ''),
+          distanceM: (m['distanceM'] as int? ?? 0),
+          points: pts,
+        );
+      }).toList();
+      _currentStep = 0;
+      _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Reroute failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _loadingRoute = false);
+    }
+  }
+
+  // === helpers ==============================================================
+
+  List<LatLng> _extractRoutePoints(Map<String, dynamic> payload) {
+    final p = payload['points'];
+    if (p is List<LatLng>) return p;
+    if (p is List) {
       final out = <LatLng>[];
-      for (final p in route) {
-        if (p is LatLng) {
-          out.add(p);
-        } else if (p is Map) {
-          final lat = (p['lat'] as num?)?.toDouble();
-          final lng = (p['lng'] as num?)?.toDouble();
+      for (final e in p) {
+        if (e is LatLng) {
+          out.add(e);
+        } else if (e is Map) {
+          final lat = (e['lat'] as num?)?.toDouble();
+          final lng = (e['lng'] as num?)?.toDouble();
           if (lat != null && lng != null) out.add(LatLng(lat, lng));
         }
       }
-      return out;
+      if (out.isNotEmpty) return out;
     }
-
-    // map payload from a directions API
-    if (route is Map) {
-      // 1) common Google shape
-      final enc =
-          route['overview_polyline']?['points'] ??
-          route['polyline'] ??
-          route['encoded'] ??
-          route['points'];
-      if (enc is String) return _decodePolyline(enc);
-
-      // 2) sometimes 'points' is already a list
-      final pts = route['points'];
-      if (pts is List) return _extractRoutePoints(pts);
-    }
-
+    final enc = payload['overview_polyline']?['points'];
+    if (enc is String && enc.isNotEmpty) return _decodePolyline(enc);
     return const <LatLng>[];
   }
 
-  // Standard encoded polyline decoder
   List<LatLng> _decodePolyline(String encoded) {
     final points = <LatLng>[];
     int index = 0, lat = 0, lng = 0;
-
     while (index < encoded.length) {
       int b, shift = 0, result = 0;
       do {
@@ -815,106 +1259,110 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     return points;
   }
 
-  Future<void> _fetchRoute() async {
-    try {
-      final pos = await Geolocator.getCurrentPosition();
-      final start =
-          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
-          ? _pickup
-          : LatLng(pos.latitude, pos.longitude);
-      final end =
-          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
-          ? _dropoff
-          : _pickup;
-
-      // Use the same DirectionsService used elsewhere (may return a Map)
-      final routePayload = await DirectionsService.getRoute(
-        start,
-        end,
-        role: 'driver',
-      );
-      final points = _extractRoutePoints(routePayload);
-      if (points.isEmpty || !mounted) return;
-
-      // ETA estimation via distance (fallback if you don't have direct ETA)
-      final distanceKm = await DirectionsService.getDistance(start, end);
-      // ignore: unnecessary_null_comparison
-      final etaMins = (distanceKm != null)
-          ? (distanceKm / 30.0 * 60.0).round()
-          : null;
-
-      setState(() {
-        _eta = etaMins != null ? '$etaMins min' : null;
-        _polyline = Polyline(
-          polylineId: const PolylineId('driver_route'),
-          points: points,
-          color: Colors.blueAccent,
-          width: 6,
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
-          jointType: JointType.round,
-        );
-      });
-
-      // fit bounds
-      final sw = LatLng(
-        [
-          points.first.latitude,
-          points.last.latitude,
-        ].reduce((a, b) => a < b ? a : b),
-        [
-          points.first.longitude,
-          points.last.longitude,
-        ].reduce((a, b) => a < b ? a : b),
-      );
-      final ne = LatLng(
-        [
-          points.first.latitude,
-          points.last.latitude,
-        ].reduce((a, b) => a > b ? a : b),
-        [
-          points.first.longitude,
-          points.last.longitude,
-        ].reduce((a, b) => a > b ? a : b),
-      );
-      await _mapController?.animateCamera(
-        CameraUpdate.newLatLngBounds(
-          LatLngBounds(southwest: sw, northeast: ne),
-          60,
-        ),
-      );
-
-      // push ETA to ridesLive for rider UI
-      final rideId = widget.rideData['rideId'] as String?;
-      if (rideId != null && etaMins != null) {
-        await FirebaseDatabase.instance
-            .ref('${AppPaths.ridesLive}/$rideId')
-            .update({AppFields.etaSecs: etaMins * 60});
+  int _nearestRouteIndex(LatLng p, {int startFrom = 0}) {
+    if (_route.isEmpty) return 0;
+    double best = double.infinity;
+    int bestIdx = startFrom.clamp(0, _route.length - 1);
+    final end = _route.length;
+    for (int i = startFrom; i < end; i++) {
+      final d = _distanceMeters(p, _route[i]);
+      if (d < best) {
+        best = d;
+        bestIdx = i;
       }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Route error: $e')));
-    } finally {
-      if (mounted) setState(() => _loadingRoute = false);
+      if (i - startFrom > 200) break; // small window for perf
     }
+    return bestIdx;
   }
 
-  void _startPickupTimer() {
-    _pickupTimer = Timer(const Duration(minutes: 5), () {
-      setState(() => _timerExpired = true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pickup time expired. Consider cancelling the ride.'),
-        ),
-      );
-    });
+  double _distanceMeters(LatLng a, LatLng b) {
+    return Geolocator.distanceBetween(
+      a.latitude,
+      a.longitude,
+      b.latitude,
+      b.longitude,
+    );
   }
 
+  double _bearingBetween(LatLng a, LatLng b) {
+    double toRad(double deg) => deg * (3.141592653589793 / 180.0);
+    double toDeg(double rad) => rad * (180.0 / 3.141592653589793);
+    final lat1 = toRad(a.latitude), lat2 = toRad(b.latitude);
+    final dLon = toRad(b.longitude - a.longitude);
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final brng = toDeg(math.atan2(y, x));
+    return (brng + 360.0) % 360.0;
+  }
+
+  double _bearingFromRouteOrLast(LatLng now) {
+    if (_routeRemaining.length >= 2) {
+      return _bearingBetween(_routeRemaining[0], _routeRemaining[1]);
+    }
+    if (_route.length >= 2) {
+      final idx = _nearestRouteIndex(now, startFrom: _nearestIdx);
+      final nextIdx = (idx + 1).clamp(0, _route.length - 1);
+      if (idx != nextIdx) {
+        return _bearingBetween(_route[idx], _route[nextIdx]);
+      }
+    }
+    return 0.0;
+  }
+
+  void _rebuildProgressPolylines({required int cutAt}) {
+    if (_route.isEmpty) return;
+    final safeCut = cutAt.clamp(0, _route.length - 1);
+    _routeCovered = _route.sublist(0, safeCut + 1);
+    _routeRemaining = _route.sublist(safeCut);
+
+    _polylineCovered = Polyline(
+      polylineId: const PolylineId('covered'),
+      points: _routeCovered,
+      color: Colors.grey,
+      width: 6,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+      jointType: JointType.round,
+    );
+    _polylineRemaining = Polyline(
+      polylineId: const PolylineId('remaining'),
+      points: _routeRemaining,
+      color: Colors.blueAccent,
+      width: 6,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+      jointType: JointType.round,
+    );
+    setState(() {}); // trigger repaint
+  }
+
+  String _stripHtml(String s) {
+    return s
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll('&nbsp;', ' ')
+        .trim();
+  }
+
+  void _updateStepBanner(LatLng me) {
+    if (_steps.isEmpty) {
+      _turnBanner = null;
+      return;
+    }
+    final end = _steps[_currentStep].end;
+    final dEnd = _distanceMeters(me, end);
+    if (dEnd < 25 && _currentStep < _steps.length - 1) {
+      _currentStep++;
+    }
+    _turnBanner = _stripHtml(_steps[_currentStep].html);
+  }
+
+  // === status progression ====================================================
   // accepted -> driver_arrived -> in_progress -> completed
   Future<void> _progressStatus() async {
     if (_statusBusy) return;
+
     String next = _status;
     if (_status == RideStatus.accepted) {
       next = RideStatus.driverArrived;
@@ -933,8 +1381,13 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       await ref
           .read(driverDashboardProvider.notifier)
           .updateStatus(widget.rideData['rideId'] as String, next);
+
       _status = next;
       widget.onStatusChange(next);
+
+      // rebuild route when switching leg (current→pickup or pickup→dropoff)
+      await _fetchRoute();
+
       if (next == RideStatus.completed) {
         final distance = await DirectionsService.getDistance(_pickup, _dropoff);
         final fares =
@@ -945,10 +1398,6 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
             .read(driverDashboardProvider.notifier)
             .completeRide(widget.rideData['rideId'] as String, finalFare);
         widget.onComplete();
-      }
-      if (mounted) {
-        setState(() {});
-        _fetchRoute();
       }
     } catch (e) {
       if (mounted) {
@@ -961,6 +1410,19 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     }
   }
 
+  // === pickup timer ==========================================================
+  void _startPickupTimer() {
+    _pickupTimer?.cancel();
+    _pickupTimer = Timer(const Duration(minutes: 5), () {
+      if (!mounted) return;
+      setState(() => _timerExpired = true);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pickup time expired.')));
+    });
+  }
+
+  // === emergency =============================================================
   Future<void> _sendEmergency() async {
     if (_emergencyBusy) return;
 
@@ -1019,6 +1481,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     }
   }
 
+  // === build ================================================================
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -1026,7 +1489,10 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
         GoogleMap(
           initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
           markers: _markers,
-          polylines: _polyline != null ? {_polyline!} : <Polyline>{},
+          polylines: {
+            if (_polylineRemaining != null) _polylineRemaining!,
+            if (_polylineCovered != null) _polylineCovered!,
+          },
           onMapCreated: (controller) {
             _mapController = controller;
             widget.onMapCreated(controller);
@@ -1034,22 +1500,42 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
+
         if (_loadingRoute) const Center(child: CircularProgressIndicator()),
-        if (_eta != null && !_loadingRoute)
+
+        // ETA + turn banner
+        if (!_loadingRoute)
           Positioned(
             top: 20,
             left: 20,
+            right: 20,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: Colors.white70,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text('ETA: $_eta'),
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_turnBanner != null)
+                      Text(
+                        _turnBanner!,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    if (_eta != null)
+                      Text(
+                        'ETA: $_eta',
+                        style: const TextStyle(color: Colors.black54),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
+
+        // primary action
         Positioned(
           bottom: 96,
           left: 20,
@@ -1071,6 +1557,8 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
                   ),
           ),
         ),
+
+        // emergency
         Positioned(
           bottom: 24,
           left: 20,
@@ -1087,6 +1575,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
                 : const Text('Emergency'),
           ),
         ),
+
         if (_timerExpired)
           Positioned(
             top: 60,
@@ -1110,6 +1599,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   void dispose() {
     _pickupTimer?.cancel();
     _mapController?.dispose();
+    _posSub?.cancel();
     super.dispose();
   }
 }

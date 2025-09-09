@@ -4,7 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
 
 import 'package:async/async.dart';
-import 'package:femdrive/emergency_service.dart';
+import 'package:femdrive/shared/emergency_service.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
@@ -912,7 +912,7 @@ class _RideFormState extends ConsumerState<RideForm> {
   final _dropoffSuggestionsCtl = SuggestionsController<PlacePrediction>();
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
-  String? _selectedRideType = 'Economy';
+  String? _selectedRideType = 'Ride mini';
   String? _selectedPaymentMethod = 'Cash';
   double? _fare;
   int? _eta;
@@ -1081,9 +1081,9 @@ class _RideFormState extends ConsumerState<RideForm> {
             // Ride Type (horizontal selector)
             RideTypePicker(
               options: const [
-                RideOption('Economy', 'Ride', Icons.directions_car_rounded),
-                RideOption('Premium', 'Comfort', Icons.time_to_leave_rounded),
-                RideOption('XL', 'Courier', Icons.local_shipping_rounded),
+                RideOption('Ride mini', 'Ride', Icons.directions_car_rounded),
+                RideOption('Ride X', 'Comfort', Icons.time_to_leave_rounded),
+                RideOption('Bike', 'EV/Scooty', Icons.local_shipping_rounded),
                 RideOption('Electric', 'City to city', Icons.place_rounded),
               ],
               selected: _selectedRideType!,
@@ -1762,7 +1762,7 @@ class _CounterFareDialog extends ConsumerWidget {
 }
 
 class RideOption {
-  final String key; // "Economy", "Premium", etc.
+  final String key; // "Ride mini", "Ride X", etc.
   final String label; // visible label
   final IconData icon; // leading icon
   const RideOption(this.key, this.label, this.icon);

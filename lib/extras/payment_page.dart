@@ -24,7 +24,7 @@ class PaymentService {
   }) {
     double baseFare = 50;
     double perKm = 20;
-    double multiplier = rideType == 'Premium' ? 1.5 : 1.0;
+    double multiplier = rideType == 'Ride X' ? 1.5 : 1.0;
     return {
       'base': baseFare,
       'distance': distanceKm * perKm,

@@ -177,11 +177,11 @@ class PaymentService {
     double baseFare, perKmRate;
 
     switch (rideType) {
-      case 'Premium':
+      case 'Ride X':
         baseFare = 5.0;
         perKmRate = 1.0;
         break;
-      case 'XL':
+      case 'Bike':
         baseFare = 7.0;
         perKmRate = 1.5;
         break;
@@ -189,7 +189,7 @@ class PaymentService {
         baseFare = 4.0;
         perKmRate = 0.8;
         break;
-      case 'Economy':
+      case 'Ride mini':
       default:
         baseFare = 2.0;
         perKmRate = 0.5;
