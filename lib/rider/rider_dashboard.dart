@@ -1937,27 +1937,39 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
   @override
   void didUpdateWidget(covariant CounterFareModalLauncher oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _maybeShow();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShow());
   }
 
   void _maybeShow() {
     if (_shown) return;
+
     final cf = (widget.ride['counterFare'] as num?)?.toDouble();
     if (cf == null) return;
-    _shown = true;
-    final rid = (widget.ride['id'] as String?);
-    if (rid != null && rid.isNotEmpty) {
-      showCounterFare(rideId: rid);
-    }
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _CounterFareDialog(
-        ride: widget.ride,
-        ttlSeconds: 15, // ⟵ set your desired TTL here
-      ),
-    ).then((_) => _shown = false);
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isCurrent) return;
+
+    final rid = widget.ride['id'] as String?;
+    if (rid == null || rid.isEmpty) return;
+
+    _shown = true;
+
+    // Schedule dialog safely after the current frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // Hook for your backend/state logic
+      showCounterFare(rideId: rid);
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _CounterFareDialog(ride: widget.ride, ttlSeconds: 15),
+      ).then((_) {
+        // Reset only once the dialog is fully dismissed
+        _shown = false;
+      });
+    });
   }
 
   @override
@@ -1969,7 +1981,7 @@ class _CounterFareDialog extends ConsumerStatefulWidget {
   final int ttlSeconds; // countdown length
   const _CounterFareDialog({
     required this.ride,
-    this.ttlSeconds = 30, // default 30s
+    this.ttlSeconds = 15, // default 30s
   });
 
   @override
@@ -2059,14 +2071,16 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
       actions: [
         TextButton(
           onPressed: () async {
-            // Keep current behavior: rejecting cancels the ride.
             try {
               await ref
                   .read(riderDashboardProvider.notifier)
                   .handleCounterFare(widget.ride['id'], cf, false);
+
               showCounterFareRejected(rideId: widget.ride['id']);
 
-              if (context.mounted) Navigator.pop(context);
+              if (context.mounted) {
+                Navigator.of(context, rootNavigator: true).pop();
+              }
             } catch (e) {
               if (context.mounted) {
                 ScaffoldMessenger.of(
@@ -2078,15 +2092,19 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
           style: TextButton.styleFrom(foregroundColor: Colors.red),
           child: const Text('Reject'),
         ),
+
         FilledButton(
           onPressed: () async {
             try {
               await ref
                   .read(riderDashboardProvider.notifier)
                   .handleCounterFare(widget.ride['id'], cf, true);
+
               showCounterFareAccepted(rideId: widget.ride['id']);
 
-              if (context.mounted) Navigator.pop(context);
+              if (context.mounted) {
+                Navigator.of(context, rootNavigator: true).pop();
+              }
             } catch (e) {
               if (context.mounted) {
                 ScaffoldMessenger.of(

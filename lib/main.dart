@@ -19,8 +19,8 @@ import 'package:femdrive/extras/settings_page.dart';
 // Pages
 import 'login_page.dart';
 import 'sign_up_page.dart';
-import 'driver_dashboard.dart';
-import 'rider_dashboard.dart';
+import 'driver/driver_dashboard.dart';
+import 'rider/rider_dashboard.dart';
 import 'admin.dart';
 import 'driver/driver_ride_details_page.dart' as details;
 
