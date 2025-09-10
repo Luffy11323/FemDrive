@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:femdrive/shared/notifications.dart';
 // keep if used elsewhere
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -1416,6 +1417,16 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       _status = next;
       widget.onStatusChange(next);
 
+      if (next == RideStatus.driverArrived) {
+        showDriverArrived(rideId: widget.rideData['rideId'] as String);
+      }
+      if (next == RideStatus.inProgress) {
+        showRideStarted(rideId: widget.rideData['rideId'] as String);
+      }
+      if (next == RideStatus.completed) {
+        showRideCompleted(rideId: widget.rideData['rideId'] as String);
+      }
+
       // rebuild route when switching leg (current→pickup or pickup→dropoff)
       await _fetchRoute();
 
@@ -1500,6 +1511,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Emergency sent')));
+        showEmergencyAlert(rideId: widget.rideData['rideId'] as String);
       }
     } catch (e) {
       if (mounted) {

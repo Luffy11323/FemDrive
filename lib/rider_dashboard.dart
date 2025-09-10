@@ -139,6 +139,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     return bestIdx;
   }
 
+  final Set<String> _arrivedNotified = {};
+  final Set<String> _startedNotified = {};
+  final Set<String> _completedNotified = {};
+  final Set<String> _noDriversNotified = {};
+
   void _applyTrimmedRoute(
     List<LatLng> route,
     LatLng me, {
@@ -721,6 +726,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                   case 'in_progress':
                   case 'onTrip':
+                    if (_startedNotified.add(ride['id'])) {
+                      showRideStarted(rideId: ride['id']);
+                    }
                     // Show current driver (live) → dropoff; fallback...
                     if (_dropoffLatLng != null) {
                       final origin =
@@ -746,6 +754,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     break;
 
                   case 'completed':
+                    if (_completedNotified.add(ride['id'])) {
+                      showRideCompleted(rideId: ride['id']);
+                    }
                     // After a short delay, you navigate; clear line now to avoid flash
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -764,6 +775,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       }
                     });
                     break;
+                  case 'no_drivers':
+                    if (_noDriversNotified.add(ride['id'])) {
+                      showNoDrivers(rideId: ride['id']);
+                    }
+                    break;
 
                   case 'cancelled':
                     if (_cancelNotified.add(ride['id'])) {
@@ -775,6 +791,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         if (mounted) setState(() => _polylines = {});
                       });
                     }
+                    break;
+                  case 'driver_arrived':
+                    if (_arrivedNotified.add(ride['id'])) {
+                      showDriverArrived(rideId: ride['id']);
+                    }
+                    // keep/adjust your map logic as needed
                     break;
 
                   default:
@@ -859,6 +881,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     content: Text('Ride cancelled'),
                                   ),
                                 );
+                                showCancelledByRider(rideId: id);
                               }
                             } catch (e) {
                               if (context.mounted) {
@@ -910,6 +933,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           .read(riderDashboardProvider.notifier)
                           .cancelRide(id);
                       if (context.mounted) {
+                        showCancelledByRider(rideId: id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Ride cancelled')),
                         );
@@ -1276,6 +1300,7 @@ class _RideFormState extends ConsumerState<RideForm> {
           paymentMethod: _selectedPaymentMethod!,
           userId: FirebaseAuth.instance.currentUser!.uid,
         );
+        showPaymentConfirmed(rideId: ride['id'] ?? '');
       }
 
       if (context.mounted) {
@@ -1285,6 +1310,9 @@ class _RideFormState extends ConsumerState<RideForm> {
         );
       }
     } catch (e) {
+      showPaymentFailed(
+        rideId: (ref.read(riderDashboardProvider).value?['id'] ?? '') as String,
+      );
       setState(() => _errorMessage = 'Ride request failed: $e');
       _logger.e('Ride request error: $e');
     }
@@ -1688,6 +1716,7 @@ class SOSButton extends StatelessWidget {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Emergency reported successfully")),
             );
+            showEmergencyAlert(rideId: ride['id']);
           }
         } catch (e) {
           if (context.mounted) {
@@ -1916,12 +1945,17 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
     final cf = (widget.ride['counterFare'] as num?)?.toDouble();
     if (cf == null) return;
     _shown = true;
+    final rid = (widget.ride['id'] as String?);
+    if (rid != null && rid.isNotEmpty) {
+      showCounterFare(rideId: rid);
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => _CounterFareDialog(
         ride: widget.ride,
-        ttlSeconds: 30, // ⟵ set your desired TTL here
+        ttlSeconds: 15, // ⟵ set your desired TTL here
       ),
     ).then((_) => _shown = false);
   }
@@ -2030,6 +2064,8 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
               await ref
                   .read(riderDashboardProvider.notifier)
                   .handleCounterFare(widget.ride['id'], cf, false);
+              showCounterFareRejected(rideId: widget.ride['id']);
+
               if (context.mounted) Navigator.pop(context);
             } catch (e) {
               if (context.mounted) {
@@ -2048,6 +2084,8 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
               await ref
                   .read(riderDashboardProvider.notifier)
                   .handleCounterFare(widget.ride['id'], cf, true);
+              showCounterFareAccepted(rideId: widget.ride['id']);
+
               if (context.mounted) Navigator.pop(context);
             } catch (e) {
               if (context.mounted) {

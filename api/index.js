@@ -1,4 +1,3 @@
-// api/index.js
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -7,10 +6,9 @@ const admin = require('firebase-admin');
 const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash');
 const haversine = require('haversine-distance');
 
-//
-// ──────────────────────────────────────────────────────────────────────────
-//  Firebase Admin initialization (supports env base64, ADC, or local file)
-// ──────────────────────────────────────────────────────────────────────────
+/// ──────────────────────────────────────────────────────────────────────────
+///  Firebase Admin initialization
+/// ──────────────────────────────────────────────────────────────────────────
 let adminCred;
 if (process.env.SERVICE_ACCOUNT_BASE64) {
   try {
@@ -22,11 +20,9 @@ if (process.env.SERVICE_ACCOUNT_BASE64) {
     adminCred = admin.credential.applicationDefault();
   }
 } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  // Use ADC (recommended on GCP)
   adminCred = admin.credential.applicationDefault();
   console.log('Using application default credentials (GOOGLE_APPLICATION_CREDENTIALS)');
 } else {
-  // Fallback to local file (dev); do NOT commit this file
   const localPath = path.join(__dirname, 'serviceAccountKey.json');
   if (fs.existsSync(localPath)) {
     adminCred = admin.credential.cert(require(localPath));
@@ -37,22 +33,17 @@ if (process.env.SERVICE_ACCOUNT_BASE64) {
   }
 }
 
-// ensure you set a DB url via env in production
 const databaseURL = process.env.FIREBASE_DATABASE_URL || 'https://<PROJECT_ID>.firebaseio.com';
 
-admin.initializeApp({
-  credential: adminCred,
-  databaseURL,
-});
+admin.initializeApp({ credential: adminCred, databaseURL });
 
 const db = admin.firestore();
 const rtdb = admin.database().ref();
 const fcm = admin.messaging();
 
-//
-// ──────────────────────────────────────────────────────────────────────────
-//  Shared Paths & Fields
-// ──────────────────────────────────────────────────────────────────────────
+/// ──────────────────────────────────────────────────────────────────────────
+///  Shared Paths & Fields
+/// ──────────────────────────────────────────────────────────────────────────
 const AppPaths = {
   driversOnline: 'drivers_online',
   ridesPendingA: 'rides_pending',
@@ -121,35 +112,32 @@ const RideStatus = {
   onTrip: 'onTrip',
   completed: 'completed',
   cancelled: 'cancelled',
+  noDrivers: 'no_drivers',
 };
 
 const StatusTitles = {
-  accepted: { title: 'Ride Accepted', body: 'Your driver has accepted your ride.' },
-  driver_arrived: { title: 'Driver Arrived', body: 'Your driver has arrived.' },
-  in_progress: { title: 'Ride Started', body: 'Your ride has begun.' },
-  completed: { title: 'Ride Completed', body: 'Thanks for riding with FemDrive!' },
-  cancelled: { title: 'Ride Cancelled', body: 'This ride has been cancelled.' },
-  no_drivers: { title: 'No Drivers Available', body: 'Sorry, no drivers are currently available.' },
+  accepted:       { title: 'Ride Accepted',    body: 'Your driver has accepted your ride.' },
+  driver_arrived: { title: 'Driver Arrived',   body: 'Your driver has arrived.' },
+  in_progress:    { title: 'Ride Started',     body: 'Your ride has begun.' },
+  onTrip:         { title: 'Ride Started',     body: 'Your ride has begun.' }, // alias
+  completed:      { title: 'Ride Completed',   body: 'Thanks for riding with FemDrive!' },
+  cancelled:      { title: 'Ride Cancelled',   body: 'This ride has been cancelled.' },
+  no_drivers:     { title: 'No Drivers Available', body: 'Sorry, no drivers are currently available.' },
 };
 
 const OFFER_TTL_MS = 60 * 1000;
 const DRIVER_STALE_MS = 12 * 60 * 60 * 1000;
 
-//
-// ──────────────────────────────────────────────────────────────────────────
-//  Express app
-// ──────────────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health
+/// Health
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-//
-// ──────────────────────────────────────────────────────────────────────────
-//  Helpers
-// ──────────────────────────────────────────────────────────────────────────
+/// ──────────────────────────────────────────────────────────────────────────
+/// Helpers
+/// ──────────────────────────────────────────────────────────────────────────
 async function getAdminTokens() {
   const tokens = [];
   try {
@@ -164,11 +152,7 @@ async function getAdminTokens() {
   return tokens;
 }
 
-/**
- * Send FCM to a single user token pulled from Firestore users/{uid}.fcmToken
- * androidSound - raw resource name (without extension) e.g. 'ride_incoming_15s'
- * iosSound - bundle filename e.g. 'ride_incoming_15s.wav'
- */
+/** Send FCM to a user by uid; supports optional sound/channel hints. */
 async function fcmToUser(uid, payload = {}, { androidSound, iosSound, androidChannelId } = {}) {
   try {
     const snap = await db.collection('users').doc(uid).get();
@@ -197,7 +181,6 @@ async function fcmToUser(uid, payload = {}, { androidSound, iosSound, androidCha
       },
     };
 
-    // Remove undefined nested fields to avoid API warnings
     if (!message.notification) delete message.notification;
     if (!message.data) delete message.data;
     if (!androidSound && !androidChannelId) delete message.android.notification.sound;
@@ -229,12 +212,11 @@ function asNum(v) {
   return null;
 }
 
-//
-// ──────────────────────────────────────────────────────────────────────────
-//  Routes
-// ──────────────────────────────────────────────────────────────────────────
+/// ──────────────────────────────────────────────────────────────────────────
+/// Routes
+/// ──────────────────────────────────────────────────────────────────────────
 
-// 0) Ride creation hook
+// 0) Hook to seed ridesLive
 app.post('/rides/init', async (req, res) => {
   const { rideId } = req.body;
   if (!rideId) return res.status(400).json({ error: 'rideId required' });
@@ -246,7 +228,7 @@ app.post('/rides/init', async (req, res) => {
   }
 });
 
-// 1) Notify rider of a status change
+// 1) Generic rider status notifier (server-side)
 app.post('/notify/status', async (req, res) => {
   const { riderId, status, rideId } = req.body;
   if (!riderId || !status || !rideId || !StatusTitles[status]) {
@@ -256,7 +238,7 @@ app.post('/notify/status', async (req, res) => {
     await fcmToUser(riderId, {
       notification: StatusTitles[status],
       data: { status, rideId },
-    }, { androidSound: undefined, iosSound: undefined });
+    }, { androidSound: undefined, iosSound: undefined, androidChannelId: 'ride_progress_ch' });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -277,11 +259,11 @@ app.post('/pair/ride', async (req, res) => {
     const rideDoc = await db.collection(AppPaths.ridesCollection).doc(rideId).get();
     const r = rideDoc.data() || {};
     const payloadBase = {
-      [AppFields.pickup]: r[AppFields.pickup] ?? '',
-      [AppFields.dropoff]: r[AppFields.dropoff] ?? '',
+      [AppFields.pickup]:     r[AppFields.pickup] ?? '',
+      [AppFields.dropoff]:    r[AppFields.dropoff] ?? '',
       [AppFields.dropoffLat]: r[AppFields.dropoffLat] ?? 0,
       [AppFields.dropoffLng]: r[AppFields.dropoffLng] ?? 0,
-      [AppFields.fare]: r[AppFields.fare] ?? 0,
+      [AppFields.fare]:       r[AppFields.fare] ?? 0,
     };
 
     const hash = geohashEncode(pLat, pLng, 9);
@@ -292,8 +274,7 @@ app.post('/pair/ride', async (req, res) => {
       const snap = await rtdb
         .child(AppPaths.driversOnline)
         .orderByChild(AppFields.geohash)
-        .startAt(h)
-        .endAt(`${h}\uf8ff`)
+        .startAt(h).endAt(`${h}\uf8ff`)
         .get();
 
       snap.forEach((c) => {
@@ -305,14 +286,22 @@ app.post('/pair/ride', async (req, res) => {
     }
 
     if (!candidates.length) {
-      await db.collection(AppPaths.ridesCollection).doc(rideId).set(
-        { [AppFields.status]: 'no_drivers' },
-        { merge: true },
-      );
+      await db.collection(AppPaths.ridesCollection).doc(rideId)
+        .set({ [AppFields.status]: RideStatus.noDrivers }, { merge: true });
       await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
-        [AppFields.status]: 'no_drivers',
+        [AppFields.status]: RideStatus.noDrivers,
         updatedAt: admin.database.ServerValue.TIMESTAMP,
       });
+
+      // Notify rider (no drivers)
+      const riderId = r[AppFields.riderId];
+      if (riderId) {
+        await fcmToUser(riderId, {
+          notification: StatusTitles.no_drivers,
+          data: { status: RideStatus.noDrivers, rideId },
+        }, { androidChannelId: 'ride_progress_ch' });
+      }
+
       return res.json({ ok: true, targeted: 0 });
     }
 
@@ -330,25 +319,24 @@ app.post('/pair/ride', async (req, res) => {
         [AppFields.pickupLat]: pLat,
         [AppFields.pickupLng]: pLng,
         [AppFields.timestamp]: nowTS,
+        rideId,
       };
     }
     await rtdb.update(updates);
 
-    // 🔊 Send FCM (with sound) to top N drivers
+    // Push FCM to top N drivers with ring
     const topN = Math.min(10, candidates.length);
     let fcmCount = 0;
     for (let i = 0; i < topN; i++) {
-      const lat = pLat.toFixed(4);
-      const lng = pLng.toFixed(4);
       const ok = await fcmToUser(candidates[i].uid, {
         notification: {
           title: 'Ride Request Nearby',
-          body: `Pickup near ${lat}, ${lng}`,
+          body:  `Pickup near ${pLat.toFixed(4)}, ${pLng.toFixed(4)}`,
         },
         data: { rideId, action: 'NEW_REQUEST' },
       }, {
         androidSound: 'ride_incoming_15s',
-        iosSound: 'ride_incoming_15s.wav',
+        iosSound:     'ride_incoming_15s.wav',
         androidChannelId: 'ride_incoming_ch',
       });
       if (ok) fcmCount++;
@@ -361,7 +349,7 @@ app.post('/pair/ride', async (req, res) => {
   }
 });
 
-// 3) Driver accept (race-protected)
+// 3) Driver accept (race-protected) → notify rider
 app.post('/accept/driver', async (req, res) => {
   const { rideId, driverUid } = req.body;
   if (!rideId || !driverUid) return res.status(400).json({ error: 'Missing rideId/driverUid' });
@@ -371,17 +359,12 @@ app.post('/accept/driver', async (req, res) => {
     const result = await db.runTransaction(async (t) => {
       const snap = await t.get(rideRef);
       const cur = snap.data() || {};
-      if (cur[AppFields.driverId]) return { assigned: false };
-
-      t.set(
-        rideRef,
-        {
-          [AppFields.driverId]: driverUid,
-          [AppFields.status]: RideStatus.accepted,
-          [AppFields.acceptedAt]: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
+      if (cur[AppFields.driverId]) return { assigned: false }; // already won elsewhere
+      t.set(rideRef, {
+        [AppFields.driverId]: driverUid,
+        [AppFields.status]:   RideStatus.accepted,
+        [AppFields.acceptedAt]: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
       return { assigned: true };
     });
 
@@ -392,7 +375,7 @@ app.post('/accept/driver', async (req, res) => {
         updatedAt: admin.database.ServerValue.TIMESTAMP,
       });
 
-      // remove driver_notifications for this ride from all drivers
+      // Clean driver notifications for this ride
       const all = await rtdb.child(AppPaths.driverNotifications).get();
       const del = {};
       all.forEach((driverSnap) => {
@@ -402,20 +385,24 @@ app.post('/accept/driver', async (req, res) => {
       });
       if (Object.keys(del).length) await rtdb.update(del);
 
-      // remove legacy pending nodes
+      // Remove legacy queues
       await Promise.all([
         rtdb.child(`${AppPaths.ridesPendingA}/${rideId}`).remove().catch(() => {}),
         rtdb.child(`${AppPaths.ridesPendingB}/${rideId}`).remove().catch(() => {}),
       ]);
 
-      // Notify rider (with accept sound)
+      // Notify rider (accepted)
       const snap = await rideRef.get();
       const riderId = snap.data()?.[AppFields.riderId];
       if (riderId) {
         await fcmToUser(riderId, {
           notification: StatusTitles.accepted,
           data: { status: 'accepted', rideId },
-        }, { androidSound: 'ride_accept_3s', iosSound: 'ride_accept_3s.wav', androidChannelId: 'ride_accept_ch' });
+        }, {
+          androidSound: 'ride_accept_3s',
+          iosSound:     'ride_accept_3s.wav',
+          androidChannelId: 'ride_accept_ch',
+        });
       }
     }
 
@@ -426,7 +413,7 @@ app.post('/accept/driver', async (req, res) => {
   }
 });
 
-// 4) Counter fare (driver -> rider)
+// 4) Counter fare (driver → rider)
 app.post('/ride/counter-fare', async (req, res) => {
   const { rideId, driverUid, counterFare } = req.body;
   if (!rideId || !driverUid || typeof counterFare !== 'number') {
@@ -454,7 +441,11 @@ app.post('/ride/counter-fare', async (req, res) => {
       await fcmToUser(riderId, {
         notification: { title: 'Counter Fare', body: `Driver offered $${counterFare.toFixed(2)}` },
         data: { rideId, action: 'COUNTER_FARE' },
-      }, { androidSound: 'ride_accept_3s', iosSound: 'ride_accept_3s.wav', androidChannelId: 'ride_accept_ch' });
+      }, {
+        androidSound: 'ride_accept_3s',
+        iosSound:     'ride_accept_3s.wav',
+        androidChannelId: 'ride_accept_ch',
+      });
     }
     res.json({ ok: true });
   } catch (e) {
@@ -462,7 +453,40 @@ app.post('/ride/counter-fare', async (req, res) => {
   }
 });
 
-// 5) Status progression
+// 4b) Counter fare resolution (rider → driver)
+app.post('/ride/counter-fare/resolve', async (req, res) => {
+  const { rideId, riderUid, accepted } = req.body;
+  if (!rideId || typeof accepted !== 'boolean') {
+    return res.status(400).json({ error: 'Missing rideId/accepted' });
+  }
+  try {
+    const ref = db.collection(AppPaths.ridesCollection).doc(rideId);
+    const snap = await ref.get();
+    const data = snap.data() || {};
+    const driverId = data[AppFields.driverId];
+    if (!driverId) return res.json({ ok: true, skipped: 'no_driver' });
+
+    // Push to driver
+    await fcmToUser(driverId, {
+      notification: {
+        title: accepted ? 'Counter Fare Accepted' : 'Counter Fare Rejected',
+        body:   accepted ? 'Rider accepted your counter offer.'
+                         : 'Rider rejected your counter offer.',
+      },
+      data: { rideId, action: accepted ? 'COUNTER_FARE_ACCEPTED' : 'COUNTER_FARE_REJECTED' },
+    }, {
+      androidChannelId: accepted ? 'ride_accept_ch' : 'ride_cancel_ch',
+      androidSound: accepted ? 'ride_accept_3s' : 'ride_cancel_2s',
+      iosSound:     accepted ? 'ride_accept_3s.wav' : 'ride_cancel_2s.wav',
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 5) Status progression → notify rider for known titles
 app.post('/ride/status', async (req, res) => {
   const { rideId, newStatus } = req.body;
   if (!rideId || !newStatus) return res.status(400).json({ error: 'Missing rideId/newStatus' });
@@ -472,10 +496,7 @@ app.post('/ride/status', async (req, res) => {
   try {
     const ref = db.collection(AppPaths.ridesCollection).doc(rideId);
     await ref.set(
-      {
-        [AppFields.status]: newStatus,
-        [`${newStatus}At`]: admin.firestore.FieldValue.serverTimestamp(),
-      },
+      { [AppFields.status]: newStatus, [`${newStatus}At`]: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true },
     );
     await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
@@ -494,7 +515,7 @@ app.post('/ride/status', async (req, res) => {
       await fcmToUser(riderId, {
         notification: StatusTitles[newStatus],
         data: { rideId, status: newStatus },
-      }, { androidSound: undefined, iosSound: undefined });
+      }, { androidChannelId: 'ride_progress_ch' });
     }
     res.json({ ok: true });
   } catch (e) {
@@ -502,7 +523,7 @@ app.post('/ride/status', async (req, res) => {
   }
 });
 
-// 6) Cancel ride
+// 6) Cancel ride → notify BOTH parties with role-aware wording
 app.post('/ride/cancel', async (req, res) => {
   const { rideId, byUid } = req.body;
   if (!rideId) return res.status(400).json({ error: 'Missing rideId' });
@@ -510,23 +531,23 @@ app.post('/ride/cancel', async (req, res) => {
   try {
     const ref = db.collection(AppPaths.ridesCollection).doc(rideId);
     const snap = await ref.get();
-    const riderId = snap.data()?.[AppFields.riderId];
+    const ride = snap.data() || {};
+    const riderId  = ride[AppFields.riderId];
+    const driverId = ride[AppFields.driverId];
 
-    await ref.set(
-      {
-        [AppFields.status]: RideStatus.cancelled,
-        [AppFields.driverId]: admin.firestore.FieldValue.delete(),
-        driverName: admin.firestore.FieldValue.delete(),
-        [AppFields.cancelledAt]: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await ref.set({
+      [AppFields.status]: RideStatus.cancelled,
+      [AppFields.driverId]: admin.firestore.FieldValue.delete(),
+      driverName: admin.firestore.FieldValue.delete(),
+      [AppFields.cancelledAt]: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
 
     await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
       [AppFields.status]: RideStatus.cancelled,
       updatedAt: admin.database.ServerValue.TIMESTAMP,
     });
 
+    // Remove pending notifications
     const all = await rtdb.child(AppPaths.driverNotifications).get();
     const del = {};
     all.forEach((driverSnap) => {
@@ -536,15 +557,32 @@ app.post('/ride/cancel', async (req, res) => {
     });
     if (Object.keys(del).length) await rtdb.update(del);
 
+    // Role-aware pushes
+    const byIsRider  = byUid && riderId && byUid === riderId;
+    const byIsDriver = byUid && driverId && byUid === driverId;
+
     if (riderId) {
       await fcmToUser(riderId, {
-        notification: StatusTitles.cancelled,
+        notification: { title: 'Ride Cancelled', body: byIsDriver ? 'Driver cancelled this ride.' : 'Ride cancelled.' },
         data: { status: 'cancelled', rideId, byUid: byUid ?? '' },
-      }, { androidSound: 'ride_cancel_2s', iosSound: 'ride_cancel_2s.wav', androidChannelId: 'ride_cancel_ch' });
+      }, {
+        androidChannelId: 'ride_cancel_ch',
+        androidSound: 'ride_cancel_2s', iosSound: 'ride_cancel_2s.wav',
+      });
       await rtdb.child(`${AppPaths.notifications}/${riderId}`).push().set({
         [AppFields.type]: 'ride_cancelled',
         [AppFields.rideId]: rideId,
         [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
+      });
+    }
+
+    if (driverId) {
+      await fcmToUser(driverId, {
+        notification: { title: 'Ride Cancelled', body: byIsRider ? 'Rider cancelled this ride.' : 'Ride cancelled.' },
+        data: { action: byIsRider ? 'CANCELLED_BY_RIDER' : 'CANCELLED_BY_DRIVER', rideId, byUid: byUid ?? '' },
+      }, {
+        androidChannelId: byIsRider ? 'ride_cancel_ch' : 'ride_cancel_ch',
+        androidSound: 'ride_cancel_2s', iosSound: 'ride_cancel_2s.wav',
       });
     }
 
@@ -554,7 +592,7 @@ app.post('/ride/cancel', async (req, res) => {
   }
 });
 
-// Emergency endpoint
+// 7) Emergency endpoint (also notifies reported user)
 app.post('/emergency', async (req, res) => {
   const { rideId, reportedBy, otherUid } = req.body;
   if (!rideId || !reportedBy || !otherUid) {
@@ -562,7 +600,6 @@ app.post('/emergency', async (req, res) => {
   }
 
   try {
-    // 1) Persist emergency
     await db.collection('emergencies').add({
       [AppFields.rideId]: rideId,
       [AppFields.reportedBy]: reportedBy,
@@ -570,14 +607,12 @@ app.post('/emergency', async (req, res) => {
       [AppFields.timestamp]: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 2) Soft action on involved account/ride
     await db.collection('users').doc(otherUid).set({ [AppFields.verified]: false }, { merge: true });
     await db.collection(AppPaths.ridesCollection).doc(rideId).set(
-      { [AppFields.status]: RideStatus.cancelled },
-      { merge: true },
+      { [AppFields.status]: RideStatus.cancelled }, { merge: true },
     );
 
-    // 3) RTDB admin alert
+    // RTDB admin alert
     const alertRef = rtdb.child(AppPaths.adminAlerts).push();
     await alertRef.set({
       [AppFields.rideId]: rideId,
@@ -588,7 +623,7 @@ app.post('/emergency', async (req, res) => {
       acknowledged: false,
     });
 
-    // 4) Optional: FCM push to admins (multicast)
+    // Multicast to admins
     const adminTokens = await getAdminTokens();
     if (adminTokens.length) {
       await fcm.sendMulticast({
@@ -597,48 +632,30 @@ app.post('/emergency', async (req, res) => {
           title: '🚨 Emergency Triggered',
           body: `Ride ${rideId} — reported by ${reportedBy}`,
         },
-        data: {
-          action: 'EMERGENCY',
-          rideId,
-          reportedBy,
-          otherUid,
-        },
-        android: {
-          priority: 'high',
-          notification: {
-            channelId: 'ride_incoming_ch',
-            sound: 'ride_incoming_15s',
-          },
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'ride_incoming_15s.wav',
-              contentAvailable: 1,
-            },
-          },
-          headers: { 'apns-priority': '10' },
-        },
+        data: { action: 'EMERGENCY', rideId, reportedBy, otherUid },
+        android: { priority: 'high', notification: { channelId: 'ride_incoming_ch', sound: 'ride_incoming_15s' } },
+        apns: { payload: { aps: { sound: 'ride_incoming_15s.wav', contentAvailable: 1 } },
+                headers: { 'apns-priority': '10' } },
       });
     }
 
-    // 4b) Also notify a specific admin user (if you have a main admin UID)
-    const adminUid = process.env.MAIN_ADMIN_UID || null;
-    if (adminUid) {
-      await fcmToUser(adminUid, {
-        notification: {
-          title: '🚨 Emergency Triggered',
-          body: `Ride ${rideId} reported by ${reportedBy}`,
-        },
-        data: { action: 'EMERGENCY', rideId },
-      }, {
-        androidSound: 'ride_incoming_15s',
-        iosSound: 'ride_incoming_15s.wav',
-        androidChannelId: 'ride_incoming_ch',
-      });
-    }
+    // Notify the reported user
+    await fcmToUser(otherUid, {
+      notification: { title: 'Safety Report Filed', body: `A report was filed against you for ride ${rideId}.` },
+      data: { action: 'REPORTED_AGAINST_YOU', rideId, reportedBy },
+    }, { androidChannelId: 'ride_reports_ch' });
 
-    // 5) Mail (optional)
+    // Notify the reporter
+    await fcmToUser(reportedBy, {
+      notification: { title: 'Emergency Sent', body: `We’ve notified support and the other party for ride ${rideId}.` },
+      data: { action: 'EMERGENCY', rideId },
+    }, {
+      androidChannelId: 'ride_incoming_ch',
+      androidSound: 'ride_incoming_15s',
+      iosSound: 'ride_incoming_15s.wav',
+    });
+
+    // Optional mail
     await db.collection('mail').add({
       to: 'ops@example.com',
       subject: '🚨 Emergency Triggered',
@@ -652,7 +669,27 @@ app.post('/emergency', async (req, res) => {
   }
 });
 
-// Housekeeping helpers: prune stale drivers and expired offers
+// 8) Payments (optional hooks you can call from your PaymentService)
+app.post('/notify/payment', async (req, res) => {
+  const { rideId, toUid, ok } = req.body; // ok=true/false
+  if (!rideId || !toUid || typeof ok !== 'boolean') {
+    return res.status(400).json({ error: 'Missing rideId/toUid/ok' });
+  }
+  try {
+    await fcmToUser(toUid, {
+      notification: {
+        title: ok ? 'Payment Confirmed' : 'Payment Failed',
+        body:  ok ? 'Your payment was successful.' : 'Please update your payment method.',
+      },
+      data: { rideId, action: ok ? 'PAYMENT_CONFIRMED' : 'PAYMENT_FAILED' },
+    }, { androidChannelId: 'ride_payments_ch' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Housekeeping
 async function pruneStaleDrivers() {
   const now = Date.now();
   const snap = await rtdb.child(AppPaths.driversOnline).get();
