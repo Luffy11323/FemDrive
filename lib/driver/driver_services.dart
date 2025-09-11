@@ -586,60 +586,49 @@ class DriverService {
   Future<void> proposeCounterFare(String rideId, double newFare) async {
     final fire = FirebaseFirestore.instance;
     final rtdb = FirebaseDatabase.instance.ref();
-
     final rideRef = fire.collection('rides').doc(rideId);
 
     String riderId = '';
-    String status = '';
 
-    // 1) Firestore txn: validate + persist counter fare
     await fire.runTransaction((txn) async {
       final snap = await txn.get(rideRef);
-      if (!snap.exists) {
-        throw Exception('Ride not found');
-      }
+      if (!snap.exists) throw Exception('Ride not found');
       final data = snap.data() as Map<String, dynamic>;
 
-      status = (data['status'] ?? '').toString();
+      final status = (data['status'] ?? '').toString();
       riderId = (data['riderId'] ?? '').toString();
-
-      // Guard rails: don’t counter on finished rides
       if (status == 'cancelled' || status == 'completed') {
         throw Exception('Ride is no longer active');
       }
 
+      final me = FirebaseAuth.instance.currentUser!.uid;
       txn.update(rideRef, {
         'counterFare': newFare,
         'counterProposedAt': FieldValue.serverTimestamp(),
-        // (do NOT flip status here; rider may accept/reject)
+        'counterDriverId': me,
       });
     });
 
-    // 2) RTDB mirrors (live for rider UI)
     final now = ServerValue.timestamp;
 
-    // 2a) Live broadcast node (optional, keeps parity with other live fields)
     await rtdb.child('ridesLive/$rideId').update({
       'counterFare': newFare,
       'updatedAt': now,
     });
 
-    // 2b) Rider’s latest-ride stream node  ✅ required for popup
     if (riderId.isNotEmpty) {
       await rtdb.child('rides/$riderId/$rideId').update({
         'counterFare': newFare,
         'updatedAt': now,
       });
-    }
 
-    // 3) (Optional) Rider-side heads-up via RTDB notification fanout
-    // This is optional; your modal shows without it. Keep if you want a chime:
-    await rtdb.child('rider_notifications/$riderId/$rideId').set({
-      'rideId': rideId,
-      'action': 'COUNTER',
-      'counterFare': newFare,
-      'timestamp': now,
-    });
+      await rtdb.child('rider_notifications/$riderId/$rideId').set({
+        'rideId': rideId,
+        'action': 'COUNTER',
+        'counterFare': newFare,
+        'timestamp': now,
+      });
+    }
   }
 
   // STATUS (accepted -> driver_arrived -> in_progress -> completed)
@@ -864,6 +853,7 @@ class DriverMapWidget extends ConsumerStatefulWidget {
   final void Function(GoogleMapController) onMapCreated;
   final Function(String newStatus) onStatusChange;
   final VoidCallback onComplete;
+  final VoidCallback onContactRider; // NEW
 
   const DriverMapWidget({
     super.key,
@@ -871,6 +861,7 @@ class DriverMapWidget extends ConsumerStatefulWidget {
     required this.onMapCreated,
     required this.onStatusChange,
     required this.onComplete,
+    required this.onContactRider,
   });
 
   @override
@@ -893,6 +884,36 @@ class _StepInfo {
 }
 
 class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
+  // Add this helper near the top of the class
+  bool get _showRideActions =>
+      _status == RideStatus.accepted ||
+      _status == RideStatus.driverArrived ||
+      _status == RideStatus.inProgress ||
+      _status == RideStatus.onTrip;
+
+  String _primaryLabel() {
+    if (_status == RideStatus.accepted) return "I'm here";
+    if (_status == RideStatus.driverArrived) return 'Start Ride';
+    return 'Complete Ride';
+  }
+
+  bool _nearPickup([double meters = 150]) {
+    if (_currentPosition == null) return false;
+    final d = Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      _pickup.latitude,
+      _pickup.longitude,
+    );
+    return d <= meters;
+  }
+
+  bool _primaryEnabled() {
+    if (_statusBusy) return false;
+    if (_status == RideStatus.accepted) return _nearPickup();
+    return true;
+  }
+
   // --- live position subscription
   StreamSubscription<Position>? _posSub;
 
@@ -1528,46 +1549,114 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
             ),
           ),
 
-        // primary action
-        Positioned(
-          bottom: 96,
-          left: 20,
-          right: 20,
-          child: ElevatedButton(
-            onPressed: _statusBusy ? null : _progressStatus,
-            child: _statusBusy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(),
-                  )
-                : Text(
-                    _status == RideStatus.accepted
-                        ? "I'm here"
-                        : _status == RideStatus.driverArrived
-                        ? 'Start Ride'
-                        : 'Complete Ride',
+        // ---- Modern 4-button overlay: Primary + (Emergency | Cancel | Contact rider)
+        if (_showRideActions)
+          Positioned(
+            bottom: 16,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _primaryEnabled() ? _progressStatus : null,
+                      child: _statusBusy
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(_primaryLabel()),
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      // Emergency
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
+                          ),
+                          onPressed: _emergencyBusy ? null : _sendEmergency,
+                          child: _emergencyBusy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Emergency'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Cancel
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Cancel Ride'),
+                                content: const Text(
+                                  'Are you sure you want to cancel this ride?',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('No'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Yes'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              await ref
+                                  .read(driverDashboardProvider.notifier)
+                                  .cancelRide(
+                                    widget.rideData['rideId'] as String,
+                                  );
+                              // ignore: use_build_context_synchronously
+                              if (mounted) Navigator.of(context).maybePop();
+                            }
+                          },
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Contact rider
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: widget.onContactRider,
+                          child: const Text('Info'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_status == RideStatus.accepted && !_nearPickup())
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        'Move closer to pickup to continue',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
-        ),
-
-        // emergency
-        Positioned(
-          bottom: 24,
-          left: 20,
-          right: 20,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: _emergencyBusy ? null : _sendEmergency,
-            child: _emergencyBusy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(),
-                  )
-                : const Text('Emergency'),
-          ),
-        ),
 
         if (_timerExpired)
           Positioned(

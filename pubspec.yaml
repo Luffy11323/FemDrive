@@ -65,9 +65,10 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 
 flutter:
-  assets:
-    - car.png
-    - bike.png
-  uses-material-design: true
+uses-material-design: true
+assets:
+    - assets/images/bike_marker.png
+    - assets/images/car_marker.png
+  
 
   

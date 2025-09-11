@@ -762,35 +762,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
         _loc.setActiveRide(newRideId);
       });
-
-      // 3. Push ride details page
-      ref.listen<AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>>(
-        driverDashboardProvider,
-        (prev, next) {
-          final doc = next.asData?.value;
-          if (doc == null) {
-            _detailsPushedFor = null;
-            return;
-          }
-
-          final data = doc.data();
-          if (data == null) return;
-          final rideId = doc.id;
-          final status = (data[AppFields.status] ?? '').toString();
-
-          if (RideStatus.ongoingSet.contains(status) &&
-              _detailsPushedFor != rideId) {
-            _detailsPushedFor = rideId;
-            if (mounted) {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => DriverRideDetailsPage(rideId: rideId),
-                ),
-              );
-            }
-          }
-        },
-      );
     }
 
     final pages = [
@@ -873,17 +844,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                               }
 
                               showAccepted(rideId: active.rideId);
-                              // open details immediately (don’t wait for the stream to push it)
-                              if (mounted) {
-                                // ignore: use_build_context_synchronously
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => DriverRideDetailsPage(
-                                      rideId: active.rideId,
-                                    ),
-                                  ),
-                                );
-                              }
                             },
 
                             onDecline: () async {
@@ -907,6 +867,17 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                                   .read(driverDashboardProvider.notifier)
                                   .proposeCounterFare(active.rideId, newFare);
 
+                              final uid =
+                                  FirebaseAuth.instance.currentUser?.uid;
+                              if (uid != null) {
+                                await FirebaseDatabase.instance
+                                    .ref(
+                                      '${AppPaths.driverNotifications}/$uid/${active.rideId}',
+                                    )
+                                    .remove();
+                              }
+                            },
+                            onExpire: () async {
                               final uid =
                                   FirebaseAuth.instance.currentUser?.uid;
                               if (uid != null) {
@@ -1225,12 +1196,13 @@ class _OfferCard extends StatefulWidget {
   final Future<void> Function() onAccept;
   final Future<void> Function() onDecline;
   final Future<void> Function(double newFare) onCounter;
-
+  final Future<void> Function()? onExpire;
   const _OfferCard({
     required this.offer,
     required this.onAccept,
     required this.onDecline,
     required this.onCounter,
+    this.onExpire,
   });
 
   @override
@@ -1242,6 +1214,7 @@ class _OfferCardState extends State<_OfferCard> {
   late int _secondsLeft;
   Timer? _ticker;
   final _counterCtrl = TextEditingController();
+  bool _expiredHandled = false;
 
   @override
   void initState() {
@@ -1249,11 +1222,17 @@ class _OfferCardState extends State<_OfferCard> {
     final ts = (widget.offer.raw['timestamp'] as num?)?.toInt();
     _secondsLeft = _computeLeft(ts);
 
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) async {
       final left = _computeLeft(ts);
       if (!mounted) return;
       setState(() => _secondsLeft = left);
-      if (left <= 0) _ticker?.cancel();
+      if (left <= 0 && !_expiredHandled) {
+        _expiredHandled = true;
+        _ticker?.cancel();
+        if (widget.onExpire != null) {
+          await widget.onExpire!(); // <-- remove notif -> overlay disappears
+        }
+      }
     });
   }
 

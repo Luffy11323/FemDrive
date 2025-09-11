@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/rider/nearby_drivers_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -396,25 +397,121 @@ class RideService {
     }
   }
 
-  Future<void> acceptCounterFare(String rideId, double counterFare) async {
+  /// Rider accepts a driver's counter-fare.
+  /// - Locks fare
+  /// - Assigns the proposing driver
+  /// - Marks status=accepted
+  /// - Mirrors to RTDB live node
+  /// - Deletes other drivers' notifications for this ride (best-effort)
+  /// - Removes from pending queues (best-effort)
+  Future<void> fanoutDeleteDriverNotificationsForRide(String rideId) async {
+    final root = FirebaseDatabase.instance.ref();
+
     try {
-      // Firestore
-      await _firestore.collection('rides').doc(rideId).update({
-        'fare': counterFare,
-        'counterFare': null,
-        'status': 'accepted',
-        'acceptedAt': FieldValue.serverTimestamp(),
+      final snap = await root.child(AppPaths.driverNotifications).get();
+      if (!snap.exists || snap.value is! Map) return;
+
+      final updates = <String, Object?>{};
+      final map = Map<Object?, Object?>.from(snap.value as Map);
+
+      map.forEach((driverKey, ridesMap) {
+        if (ridesMap is Map && ridesMap.containsKey(rideId)) {
+          updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] = null;
+        }
       });
 
-      // ✅ Live
-      await _rtdb.child('ridesLive/$rideId').update({
-        'status': 'accepted',
-        'fare': counterFare,
-        'acceptedAt': ServerValue.timestamp,
-      });
+      if (updates.isNotEmpty) {
+        await root.update(updates);
+      }
     } catch (e) {
-      Logger().e('Failed to accept counter-fare: $e');
-      throw Exception('Unable to accept counter-fare: $e');
+      // Best-effort cleanup; don't fail the main flow on this.
+      // You can log it if you like.
+      // debugPrint('[fanoutDeleteDriverNotificationsForRide] $e');
+    }
+  }
+
+  Future<void> acceptCounterFare(String rideId, double counterFare) async {
+    final fire = FirebaseFirestore.instance;
+    final rtdb = FirebaseDatabase.instance.ref();
+    final rideRef = fire.collection(AppPaths.ridesCollection).doc(rideId);
+
+    String? driverId;
+
+    // 1) Firestore: atomically accept the counter fare and lock the driver
+    await fire.runTransaction((txn) async {
+      final snap = await txn.get(rideRef);
+      if (!snap.exists) throw Exception('Ride not found');
+      final data = snap.data() as Map<String, dynamic>;
+
+      final status = (data[AppFields.status] ?? '').toString();
+      if (status == RideStatus.cancelled || status == RideStatus.completed) {
+        throw Exception('Ride is no longer active');
+      }
+
+      final proposedBy = (data['counterDriverId'] ?? '').toString();
+      if (proposedBy.isEmpty) throw Exception('Missing counterDriverId');
+
+      driverId = proposedBy;
+
+      txn.update(rideRef, {
+        AppFields.fare: counterFare,
+        'counterFare': FieldValue.delete(),
+        'counterDriverId': FieldValue.delete(),
+        AppFields.status: RideStatus.accepted,
+        AppFields.driverId: driverId,
+        AppFields.acceptedAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    // 2) RTDB live mirror
+    final now = ServerValue.timestamp;
+    await rtdb.child('${AppPaths.ridesLive}/$rideId').update({
+      AppFields.status: RideStatus.accepted,
+      AppFields.fare: counterFare,
+      AppFields.driverId: driverId,
+      AppFields.acceptedAt: now,
+      AppFields.updatedAt: now,
+    });
+
+    // 3) Best-effort: remove from any legacy/pending queues
+    try {
+      await rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+    } catch (_) {}
+    try {
+      await rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+    } catch (_) {}
+
+    // 4) ✅ Fan-out delete: remove this ride's popup from ALL drivers
+    try {
+      final notifsSnap = await rtdb.child(AppPaths.driverNotifications).get();
+      if (notifsSnap.exists && notifsSnap.value is Map) {
+        final map = Map<Object?, Object?>.from(notifsSnap.value as Map);
+        final updates = <String, Object?>{};
+
+        map.forEach((driverKey, ridesMap) {
+          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
+            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
+                null;
+          }
+        });
+
+        if (updates.isNotEmpty) {
+          await rtdb.update(updates);
+        }
+      }
+    } catch (_) {
+      // Best-effort cleanup; ignore if rules block cross-user read/write.
+    }
+
+    // 5) Optional: nudge the selected driver (toast/chime)
+    if (driverId != null && driverId!.isNotEmpty) {
+      try {
+        await rtdb.child('${AppPaths.notifications}/$driverId').push().set({
+          AppFields.type: OfferType.rideAccepted,
+          AppFields.rideId: rideId,
+          AppFields.timestamp: now,
+        });
+      } catch (_) {}
     }
   }
 

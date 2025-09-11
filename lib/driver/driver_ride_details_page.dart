@@ -53,6 +53,129 @@ class DriverRideDetailsPage extends ConsumerStatefulWidget {
 
 class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
   final _messageController = TextEditingController();
+  void _openContactRiderSheet({
+    required BuildContext context,
+    required Map<String, dynamic> rideData,
+    required String? riderId,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) {
+        final messages = ref.watch(messagesProvider(widget.rideId));
+        final riderInfo = riderId != null
+            ? ref.watch(riderInfoProvider(riderId))
+            : const AsyncValue.data(null);
+
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          minChildSize: 0.35,
+          maxChildSize: 0.95,
+          builder: (_, controller) => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Ride + rider quick info
+                riderInfo.when(
+                  data: (info) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${rideData[AppFields.pickup] ?? '-'} → ${rideData[AppFields.dropoff] ?? '-'}',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Fare: \$${rideData[AppFields.fare] is num ? (rideData[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
+                      ),
+                      const SizedBox(height: 6),
+                      Text('Rider: ${info?[AppFields.username] ?? '-'}'),
+                      Text('Phone: ${info?[AppFields.phone] ?? '-'}'),
+                      const Divider(height: 20),
+                    ],
+                  ),
+                  loading: () => const LinearProgressIndicator(),
+                  error: (e, _) => Text('Rider info failed: $e'),
+                ),
+
+                // Messages list
+                Expanded(
+                  child: messages.when(
+                    data: (list) => ListView.builder(
+                      controller: controller,
+                      itemCount: list.length,
+                      itemBuilder: (ctx, i) {
+                        final msg = list[i];
+                        final mine =
+                            msg[AppFields.senderId] == _auth.currentUser?.uid;
+                        return Align(
+                          alignment: mine
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: mine
+                                  ? Theme.of(
+                                      context,
+                                    ).colorScheme.primary.withValues(alpha: 25)
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(msg[AppFields.text] ?? ''),
+                          ),
+                        );
+                      },
+                    ),
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (e, _) =>
+                        Center(child: Text('Failed to load messages: $e')),
+                  ),
+                ),
+
+                // Composer
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        decoration: const InputDecoration(
+                          hintText: 'Write a message…',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.send),
+                      onPressed: () {
+                        final t = _messageController.text.trim();
+                        if (t.isEmpty) return;
+                        ref
+                            .read(driverDashboardProvider.notifier)
+                            .sendMessage(widget.rideId, t);
+                        _messageController.clear();
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   void dispose() {
@@ -84,9 +207,6 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
         }
 
         final riderId = data[AppFields.riderId] as String?;
-        final riderInfo = riderId != null
-            ? ref.watch(riderInfoProvider(riderId))
-            : const AsyncValue.data(null);
 
         // Wrap UI with RTDB live status
         return StreamBuilder<Map<String, dynamic>?>(
@@ -108,6 +228,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
               });
             }
 
+            // --- paste-ready replacement for the whole `return Scaffold(...)` block ---
             return Scaffold(
               appBar: AppBar(
                 title: Text(
@@ -115,133 +236,27 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-              body: Column(
-                children: [
-                  Expanded(
-                    child: DriverMapWidget(
-                      rideData: {...data, 'rideId': widget.rideId},
-                      onMapCreated: (_) {},
-                      onStatusChange: (newStatus) {
-                        ref
-                            .read(driverDashboardProvider.notifier)
-                            .updateStatus(widget.rideId, newStatus);
-                      },
-                      onComplete: () => _showCompletionDialog(
-                        context,
-                        widget.rideId,
-                        riderId,
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'From: ${data[AppFields.pickup] ?? '-'}',
-                              style: Theme.of(context).textTheme.bodyLarge,
-                            ),
-                            Text(
-                              'To: ${data[AppFields.dropoff] ?? '-'}',
-                              style: Theme.of(context).textTheme.bodyLarge,
-                            ),
-                            Text(
-                              'Fare: \$${data[AppFields.fare] is num ? (data[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
-                              style: Theme.of(context).textTheme.bodyLarge,
-                            ),
-                            riderInfo.when(
-                              data: (info) => Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Rider Name: ${info?[AppFields.username] ?? '-'}',
-                                  ),
-                                  Text(
-                                    'Rider Phone: ${info?[AppFields.phone] ?? '-'}',
-                                  ),
-                                ],
-                              ),
-                              loading: () => const CircularProgressIndicator(),
-                              error: (e, _) =>
-                                  Text('Failed to load rider info: $e'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (!isCompleted) _buildMessagingSection(),
-                ],
+              // 👇 Only the map page; info/chat is opened from "Contact rider"
+              body: DriverMapWidget(
+                rideData: {...data, 'rideId': widget.rideId},
+                onMapCreated: (_) {},
+                onStatusChange: (newStatus) {
+                  ref
+                      .read(driverDashboardProvider.notifier)
+                      .updateStatus(widget.rideId, newStatus);
+                },
+                onComplete: () =>
+                    _showCompletionDialog(context, widget.rideId, riderId),
+                onContactRider: () => _openContactRiderSheet(
+                  context: context,
+                  rideData: data,
+                  riderId: riderId,
+                ),
               ),
-              floatingActionButton: isCompleted
-                  ? null
-                  : _CancelRideButton(rideId: widget.rideId),
             );
           },
         );
       },
-    );
-  }
-
-  Widget _buildMessagingSection() {
-    final messages = ref.watch(messagesProvider(widget.rideId));
-    return Expanded(
-      child: Column(
-        children: [
-          Expanded(
-            child: messages.when(
-              data: (list) => ListView.builder(
-                itemCount: list.length,
-                itemBuilder: (ctx, i) {
-                  final msg = list[i];
-                  return ListTile(
-                    title: Text(msg[AppFields.text]),
-                    subtitle: Text(
-                      msg[AppFields.senderId] == _auth.currentUser?.uid
-                          ? 'You'
-                          : 'Rider',
-                    ),
-                  );
-                },
-              ),
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) =>
-                  Center(child: Text('Failed to load messages: $e')),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: const InputDecoration(labelText: 'Message'),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: () {
-                    if (_messageController.text.trim().isNotEmpty) {
-                      ref
-                          .read(driverDashboardProvider.notifier)
-                          .sendMessage(
-                            widget.rideId,
-                            _messageController.text.trim(),
-                          );
-                      _messageController.clear();
-                    }
-                  },
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -307,6 +322,7 @@ class _CancelRideNotifier extends AutoDisposeFamilyAsyncNotifier<void, String> {
   }
 }
 
+// ignore: unused_element
 class _CancelRideButton extends ConsumerWidget {
   final String rideId;
   const _CancelRideButton({required this.rideId});
