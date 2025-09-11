@@ -16,6 +16,9 @@ import 'package:dart_geohash/dart_geohash.dart';
 
 import 'package:femdrive/location/directions_service.dart';
 import 'package:femdrive/shared/emergency_service.dart';
+// ignore: unused_import
+import 'package:http/http.dart' as http; // (safe even if unused elsewhere)
+import 'package:femdrive/location/directions_http.dart';
 
 class AppPaths {
   static const driversOnline = 'drivers_online';
@@ -102,11 +105,49 @@ class OfferType {
   static const rideCompleted = 'ride_completed';
 }
 
+const _darkGuidanceStyle = '''
+[
+  {"elementType":"geometry","stylers":[{"color":"#1f2630"}]},
+  {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#cfe2ff"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#1f2630"}]},
+  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#343c4a"}]},
+  {"featureType":"poi","elementType":"geometry","stylers":[{"color":"#293141"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#0f1827"}]}
+]
+''';
+
 class GeoCfg {
   static const driverHashPrecision = 9;
   static const popupProximityPrecision = 5;
 }
 
+Future<String> getCarMarkerAsset() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+
+  if (uid == null) {
+    throw Exception("User not logged in");
+  }
+
+  final userDoc = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(uid)
+      .get();
+
+  if (!userDoc.exists) {
+    throw Exception("User document not found");
+  }
+
+  final carType = userDoc.data()?['carType'] ?? 'car'; // default to 'car'
+
+  final asset = (carType.toLowerCase() == 'bike')
+      ? 'assets/images/bike_marker.png'
+      : 'assets/images/car_marker.png';
+
+  return asset;
+}
+
+final googleMapsApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 // Fares config (exported so UI can import it)
 final faresConfigProvider = FutureProvider<Map<String, double>>((ref) async {
   final snap = await FirebaseFirestore.instance
@@ -884,6 +925,38 @@ class _StepInfo {
 }
 
 class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
+  double _distanceFromPolyline(
+    LatLng p,
+    List<LatLng> line, {
+    int startIndex = 0,
+  }) {
+    if (line.length < 2) return double.infinity;
+    double best = double.infinity;
+    for (int i = startIndex; i < line.length - 1; i++) {
+      best = math.min(best, _distanceToSegment(p, line[i], line[i + 1]));
+      if (i - startIndex > 200 && best < 10) break; // perf window
+    }
+    return best;
+  }
+
+  double _distanceToSegment(LatLng p, LatLng v, LatLng w) {
+    final px = p.latitude, py = p.longitude;
+    final vx = v.latitude, vy = v.longitude;
+    final wx = w.latitude, wy = w.longitude;
+
+    final dx = wx - vx, dy = wy - vy;
+    if (dx == 0 && dy == 0) return _distanceMeters(p, v);
+
+    double t = ((px - vx) * dx + (py - vy) * dy) / (dx * dx + dy * dy);
+    t = t.clamp(0.0, 1.0);
+    final proj = LatLng(vx + t * dx, vy + t * dy);
+    return _distanceMeters(p, proj);
+  }
+
+  static const double _offRouteMeters = 35.0;
+  static const int _rerouteCooldownSec = 8;
+
+  DateTime? _lastRerouteAt;
   // Add this helper near the top of the class
   bool get _showRideActions =>
       _status == RideStatus.accepted ||
@@ -925,8 +998,6 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   Polyline? _polylineCovered;
 
   int _nearestIdx = 0;
-  DateTime? _lastRerouteAt;
-  int _offRouteStrikes = 0;
 
   List<_StepInfo> _steps = [];
   int _currentStep = 0;
@@ -1027,17 +1098,13 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
 
     // light off-route detection + cooldowned reroute
     if (_route.isNotEmpty) {
-      final d = _distanceMeters(me, _route[_nearestIdx]);
-      final tooFar = d > 30.0; // meters
-      _offRouteStrikes = tooFar ? (_offRouteStrikes + 1) : 0;
-
+      final d = _distanceFromPolyline(me, _route, startIndex: _nearestIdx);
       final now = DateTime.now();
-      final canReroute =
+      final cool =
           _lastRerouteAt == null ||
-          now.difference(_lastRerouteAt!).inSeconds > 10;
-      final needReroute = _offRouteStrikes >= 4;
-      if (needReroute && canReroute) {
-        _offRouteStrikes = 0;
+          now.difference(_lastRerouteAt!).inSeconds > _rerouteCooldownSec;
+
+      if (d > _offRouteMeters && cool) {
         _lastRerouteAt = now;
         final target =
             (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
@@ -1055,24 +1122,21 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   Future<void> _fetchRoute() async {
     setState(() => _loadingRoute = true);
     try {
+      // Determine leg
       final pos = await Geolocator.getCurrentPosition();
-      final start =
-          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
-          ? _pickup
+      final isTrip =
+          (_status == RideStatus.inProgress || _status == RideStatus.onTrip);
+      final origin = isTrip
+          ? _pickup /* already at pickup when trip starts */
           : LatLng(pos.latitude, pos.longitude);
-      final end =
-          (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
-          ? _dropoff
-          : _pickup;
+      final dest = isTrip ? _dropoff : _pickup;
 
-      final payload = await DirectionsService.getRoute(
-        start,
-        end,
-        role: 'driver',
-      );
-      if (!mounted || payload == null) return;
+      final dir = DirectionsHttp(googleMapsApiKey);
+      final payload = await dir.fetchRoute(origin, dest);
 
-      final points = _extractRoutePoints(payload);
+      final points = (payload['points'] as List<LatLng>);
+      final rawSteps = (payload['steps'] as List);
+
       if (points.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1082,79 +1146,53 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
         return;
       }
 
+      // Map into your structures
       _route = points;
       _nearestIdx = 0;
       _rebuildProgressPolylines(cutAt: 0);
 
-      // optional: parse step list if your DirectionsService provides it
-      final rawSteps = (payload['steps'] as List?) ?? const [];
-      _steps = rawSteps.map((m) {
+      _steps = rawSteps.map<_StepInfo>((m) {
         final s = LatLng(
-          ((m['start']?['lat'] as num?) ?? 0).toDouble(),
-          ((m['start']?['lng'] as num?) ?? 0).toDouble(),
-        );
-        final e = LatLng(
           ((m['end']?['lat'] as num?) ?? 0).toDouble(),
           ((m['end']?['lng'] as num?) ?? 0).toDouble(),
         );
-        final enc = (m['polyline'] as String? ?? '');
-        final pts = enc.isNotEmpty ? _decodePolyline(enc) : <LatLng>[];
         return _StepInfo(
-          start: s,
-          end: e,
-          html: (m['html'] as String? ?? ''),
-          maneuver: (m['maneuver'] as String? ?? ''),
-          distanceM: (m['distanceM'] as int? ?? 0),
-          points: pts,
+          start: _route.first,
+          end: s,
+          html: (m['primaryText'] as String?) ?? '',
+          maneuver: (m['maneuver'] as String?) ?? '',
+          distanceM: (m['distanceM'] as num?)?.toInt() ?? 0,
+          points: const <LatLng>[], // optional per-step polyline
         );
       }).toList();
-      _currentStep = 0;
-      _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
 
-      // ETA text (fallback to speed heuristic if not present)
-      final etaSecs = (payload['etaSeconds'] as num?)?.toInt();
-      String? etaText = payload['etaText']?.toString();
-      final distanceKm = (payload['distanceKm'] as num?)?.toDouble();
-      if ((etaText == null || etaText.isEmpty) && distanceKm != null) {
-        etaText = '${(distanceKm / 30.0 * 60.0).round()} min';
+      // ETA text from totalSeconds
+      final totalSeconds = (payload['totalSeconds'] as int?) ?? 0;
+      String? etaText;
+      if (totalSeconds > 0) {
+        final mins = (totalSeconds / 60).round();
+        etaText = mins >= 60 ? '${mins ~/ 60}h ${mins % 60}m' : '$mins min';
       }
-
       setState(() {
         _eta = etaText;
         _loadingRoute = false;
+        _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
       });
 
-      // fit bounds (first<->last quick fit)
-      if (_route.length >= 2) {
-        final sw = LatLng(
-          math.min(_route.first.latitude, _route.last.latitude),
-          math.min(_route.first.longitude, _route.last.longitude),
-        );
-        final ne = LatLng(
-          math.max(_route.first.latitude, _route.last.latitude),
-          math.max(_route.first.longitude, _route.last.longitude),
-        );
-        await _mapController?.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(southwest: sw, northeast: ne),
-            60,
-          ),
-        );
-      }
-
-      // push ETA to RTDB for rider UI
+      // Push ETA to RTDB (unchanged)
       final rideId = widget.rideData['rideId'] as String?;
-      if (rideId != null && etaSecs != null) {
+      final etaSecs = totalSeconds;
+      if (rideId != null && etaSecs > 0) {
         await FirebaseDatabase.instance
             .ref('${AppPaths.ridesLive}/$rideId')
             .update({AppFields.etaSecs: etaSecs});
       }
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingRoute = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Route error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Route error: $e')));
+      }
     } finally {
       if (mounted) setState(() => _loadingRoute = false);
     }
@@ -1163,43 +1201,35 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   Future<void> _refetchFromPos(LatLng from, LatLng to) async {
     setState(() => _loadingRoute = true);
     try {
-      final payload = await DirectionsService.getRoute(
-        from,
-        to,
-        role: 'driver',
-      );
-      if (!mounted || payload == null) return;
+      final dir = DirectionsHttp(googleMapsApiKey);
+      final payload = await dir.fetchRoute(from, to);
 
-      final points = _extractRoutePoints(payload);
+      final points = (payload['points'] as List<LatLng>);
       if (points.isEmpty) return;
 
       _route = points;
       _nearestIdx = 0;
       _rebuildProgressPolylines(cutAt: 0);
 
-      final rawSteps = (payload['steps'] as List?) ?? const [];
-      _steps = rawSteps.map((m) {
+      final rawSteps = (payload['steps'] as List);
+      _steps = rawSteps.map<_StepInfo>((m) {
         final s = LatLng(
-          ((m['start']?['lat'] as num?) ?? 0).toDouble(),
-          ((m['start']?['lng'] as num?) ?? 0).toDouble(),
-        );
-        final e = LatLng(
           ((m['end']?['lat'] as num?) ?? 0).toDouble(),
           ((m['end']?['lng'] as num?) ?? 0).toDouble(),
         );
-        final enc = (m['polyline'] as String? ?? '');
-        final pts = enc.isNotEmpty ? _decodePolyline(enc) : <LatLng>[];
         return _StepInfo(
-          start: s,
-          end: e,
-          html: (m['html'] as String? ?? ''),
-          maneuver: (m['maneuver'] as String? ?? ''),
-          distanceM: (m['distanceM'] as int? ?? 0),
-          points: pts,
+          start: _route.first,
+          end: s,
+          html: (m['primaryText'] as String?) ?? '',
+          maneuver: (m['maneuver'] as String?) ?? '',
+          distanceM: (m['distanceM'] as num?)?.toInt() ?? 0,
+          points: const <LatLng>[],
         );
       }).toList();
-      _currentStep = 0;
-      _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+
+      setState(() {
+        _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -1212,55 +1242,6 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   }
 
   // === helpers ==============================================================
-
-  List<LatLng> _extractRoutePoints(Map<String, dynamic> payload) {
-    final p = payload['points'];
-    if (p is List<LatLng>) return p;
-    if (p is List) {
-      final out = <LatLng>[];
-      for (final e in p) {
-        if (e is LatLng) {
-          out.add(e);
-        } else if (e is Map) {
-          final lat = (e['lat'] as num?)?.toDouble();
-          final lng = (e['lng'] as num?)?.toDouble();
-          if (lat != null && lng != null) out.add(LatLng(lat, lng));
-        }
-      }
-      if (out.isNotEmpty) return out;
-    }
-    final enc = payload['overview_polyline']?['points'];
-    if (enc is String && enc.isNotEmpty) return _decodePolyline(enc);
-    return const <LatLng>[];
-  }
-
-  List<LatLng> _decodePolyline(String encoded) {
-    final points = <LatLng>[];
-    int index = 0, lat = 0, lng = 0;
-    while (index < encoded.length) {
-      int b, shift = 0, result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
-      lng += dlng;
-
-      points.add(LatLng(lat / 1E5, lng / 1E5));
-    }
-    return points;
-  }
 
   int _nearestRouteIndex(LatLng p, {int startFrom = 0}) {
     if (_route.isEmpty) return 0;
@@ -1507,10 +1488,12 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
             if (_polylineRemaining != null) _polylineRemaining!,
             if (_polylineCovered != null) _polylineCovered!,
           },
-          onMapCreated: (controller) {
+          style: _darkGuidanceStyle,
+          onMapCreated: (controller) async {
             _mapController = controller;
             widget.onMapCreated(controller);
           },
+
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
