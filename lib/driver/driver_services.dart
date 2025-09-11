@@ -13,7 +13,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dart_geohash/dart_geohash.dart';
-import 'package:async/async.dart';
 
 import 'package:femdrive/location/directions_service.dart';
 import 'package:femdrive/shared/emergency_service.dart';
@@ -494,42 +493,6 @@ class DriverService {
     });
   }
 
-  Stream<List<PendingRequest>> listenPendingRequestsMerged() {
-    Stream<List<PendingRequest>> readNode(String node) {
-      return _rtdb.child(node).onValue.map((event) {
-        final v = event.snapshot.value;
-        if (v == null || v is! Map) return <PendingRequest>[];
-        final res = <PendingRequest>[];
-        (v).forEach((k, val) {
-          if (val is Map) {
-            try {
-              res.add(
-                PendingRequest.fromMap(
-                  k.toString(),
-                  Map<String, dynamic>.from(val),
-                ),
-              );
-            } catch (_) {}
-          }
-        });
-        return res;
-      });
-    }
-
-    final a = readNode(AppPaths.ridesPendingA);
-    final b = readNode(AppPaths.ridesPendingB);
-
-    return StreamZip<List<PendingRequest>>([a, b]).map((lists) {
-      final merged = <String, PendingRequest>{};
-      for (final lst in lists) {
-        for (final r in lst) {
-          merged[r.rideId] = r;
-        }
-      }
-      return merged.values.toList();
-    });
-  }
-
   // ACCEPT
   Future<void> acceptRide(String rideId, PendingRequest? contextData) async {
     final user = _auth.currentUser;
@@ -760,59 +723,46 @@ class DriverService {
   }
 
   Future<void> declineRide(String rideId) async {
-    // Remove ride from pending queues (best-effort)
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(code: 'no-user', message: 'Not logged in');
+    }
+    final driverId = user.uid;
+
+    // 1) Remove ONLY this driver's local popup
     try {
-      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
-      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
+      await _rtdb
+          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
+          .remove();
     } catch (e) {
       if (kDebugMode) {
-        print(
-          '[DriverService.declineRide] Failed to remove from pending queues: $e',
-        );
+        print('[DriverService.declineRide] Remove my notif failed: $e');
       }
     }
 
-    // Notify rider (best-effort)
+    // 2) Optional rider heads-up (no status change)
     try {
-      final riderDoc = await _fire
+      final rideSnap = await _fire
           .collection(AppPaths.ridesCollection)
           .doc(rideId)
           .get();
-      final riderId = riderDoc.data()?[AppFields.riderId];
+      final riderId = rideSnap.data()?[AppFields.riderId];
       if (riderId != null) {
         await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
           AppFields.type: 'ride_declined',
           AppFields.rideId: rideId,
           AppFields.timestamp: ServerValue.timestamp,
+          'by': driverId, // optional attribution
         });
       }
     } catch (e) {
       if (kDebugMode) {
-        print('[DriverService.declineRide] Failed to notify rider: $e');
+        print('[DriverService.declineRide] Rider notify failed: $e');
       }
     }
 
-    // Fan-out delete the notification from all drivers (optional but recommended)
-    try {
-      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
-      final updates = <String, Object?>{};
-      if (notifsSnap.exists && notifsSnap.value is Map) {
-        final map = notifsSnap.value as Map;
-        map.forEach((driverKey, ridesMap) {
-          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
-            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
-                null;
-          }
-        });
-      }
-      if (updates.isNotEmpty) {
-        await _rtdb.update(updates);
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('[DriverService.declineRide] Fan-out delete failed: $e');
-      }
-    }
+    // 3) DO NOT modify rides/{rideId} or ridesLive/{rideId}
+    // 4) DO NOT remove from global pending queues or other drivers’ notifications
   }
 
   // RTDB chat under /rides/{rideId}/messages
@@ -1798,34 +1748,4 @@ class DriverOffer {
           DateTime.now().millisecondsSinceEpoch,
     );
   }
-}
-
-// config
-const int kOfferExpiryMs = 60 * 1000; // 60s
-
-Stream<List<DriverOffer>> listenDriverOffers(String driverId) {
-  final ref = FirebaseDatabase.instance.ref(
-    '${AppPaths.driverNotifications}/$driverId',
-  );
-  return ref.onValue.map((ev) {
-    final v = ev.snapshot.value;
-    if (v is! Map) return <DriverOffer>[];
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    final out = <DriverOffer>[];
-    v.forEach((k, raw) {
-      if (raw is Map) {
-        final offer = DriverOffer.fromRTDB(k.toString(), raw);
-
-        // 🔹 prune stale
-        if (now - offer.createdAtMs <= kOfferExpiryMs) {
-          out.add(offer);
-        }
-      }
-    });
-
-    // newest first
-    out.sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
-    return out;
-  });
 }

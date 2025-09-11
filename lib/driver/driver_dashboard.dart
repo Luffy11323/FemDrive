@@ -43,7 +43,7 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
     if (v == null) return <PendingRequest>[];
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    const ttlMs = 60 * 1000; // 60s TTL - tweak as needed
+    const ttlMs = 15 * 1000; // 60s TTL - tweak as needed
 
     final list = <PendingRequest>[];
     v.forEach((rideId, payload) {
@@ -92,15 +92,6 @@ class RideStatus {
 }
 
 final _rtdb = FirebaseDatabase.instance.ref();
-
-/// Live ride snapshot used by both rider & driver UIs
-Stream<Map<String, dynamic>?> ridesLiveStream(String rideId) {
-  return _rtdb.child('ridesLive/$rideId').onValue.map((e) {
-    final v = e.snapshot.value;
-    if (v is Map) return Map<String, dynamic>.from(v.cast<String, dynamic>());
-    return null;
-  });
-}
 
 /// Driver’s live location — rider map marker
 Stream<LatLng?> driverLocationStream(String driverId) {
@@ -1247,7 +1238,7 @@ class _OfferCard extends StatefulWidget {
 }
 
 class _OfferCardState extends State<_OfferCard> {
-  static const int _ttlMs = 60 * 1000;
+  static const int _ttlMs = 15 * 1000;
   late int _secondsLeft;
   Timer? _ticker;
   final _counterCtrl = TextEditingController();
@@ -1267,7 +1258,7 @@ class _OfferCardState extends State<_OfferCard> {
   }
 
   int _computeLeft(int? tsMs) {
-    if (tsMs == null) return 60;
+    if (tsMs == null) return (_ttlMs / 1000).floor(); // 15;
     final now = DateTime.now().millisecondsSinceEpoch;
     final leftMs = _ttlMs - (now - tsMs);
     return leftMs <= 0 ? 0 : (leftMs / 1000).floor();
