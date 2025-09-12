@@ -45,7 +45,7 @@ subprojects {
 subprojects {
     plugins.withId("com.android.library") {
         extensions.configure(LibraryExtension::class.java) {
-            compileSdk = 34
+            compileSdk = 36
             defaultConfig {
                 minSdk = 21
             }

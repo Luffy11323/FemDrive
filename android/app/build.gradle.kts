@@ -12,7 +12,7 @@ android {
     namespace = "com.company.FemDrive"
 
     // Pin explicit SDKs (avoid plugin subproject issues)
-    compileSdk = 34
+    compileSdk = 36
 
     // Set NDK version to highest needed (Fixes mismatch)
     ndkVersion = "27.0.12077973"
