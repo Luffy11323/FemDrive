@@ -10,7 +10,9 @@ plugins {
 
 android {
     namespace = "com.company.FemDrive"
-    compileSdk = flutter.compileSdkVersion
+
+    // Pin explicit SDKs (avoid plugin subproject issues)
+    compileSdk = 34
 
     // Set NDK version to highest needed (Fixes mismatch)
     ndkVersion = "27.0.12077973"
@@ -18,6 +20,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // Desugaring for newer Java APIs
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -28,18 +31,21 @@ android {
     defaultConfig {
         applicationId = "com.company.FemDrive"
 
-minSdk = (project.findProperty("MIN_SDK_VERSION")?.toString()?.toInt()
-    ?: flutter.minSdkVersion)
+        // Prefer explicit values; fall back to project props if provided
+        minSdk = (project.findProperty("MIN_SDK_VERSION")?.toString()?.toInt() ?: 21)
+        targetSdk = (project.findProperty("TARGET_SDK_VERSION")?.toString()?.toInt() ?: 34)
 
-targetSdk = (project.findProperty("TARGET_SDK_VERSION")?.toString()?.toInt()
-    ?: flutter.targetSdkVersion)
-
-versionCode = (project.findProperty("VERSION_CODE")?.toString()?.toInt()
-    ?: flutter.versionCode)
-
-versionName = (project.findProperty("VERSION_NAME")?.toString()
-    ?: flutter.versionName)
-
+        // Versioning: use explicit fallbacks if custom props not set
+        versionCode = (
+            project.findProperty("VERSION_CODE")?.toString()?.toInt()
+                ?: project.findProperty("flutter.versionCode")?.toString()?.toInt()
+                ?: 1
+        )
+        versionName = (
+            project.findProperty("VERSION_NAME")?.toString()
+                ?: project.findProperty("flutter.versionName")?.toString()
+                ?: "1.0"
+        )
     }
 
     buildTypes {
@@ -68,7 +74,7 @@ flutter {
 }
 
 dependencies {
-      // Required for Java 8+ API desugaring
+    // Required for Java 8+ API desugaring
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
     // Firebase BOM for version alignment
@@ -79,5 +85,4 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-storage")
-
 }
