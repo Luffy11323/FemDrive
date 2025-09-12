@@ -108,6 +108,7 @@ class RiderDashboard extends ConsumerStatefulWidget {
 }
 
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
+  BitmapDescriptor? _driverPng;
   final _logger = Logger();
   GoogleMapController? _mapController;
   LatLng? _currentLocation;
@@ -151,18 +152,24 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   }) {
     if (route.length < 2) return;
     final cutAt = _nearestIndex(route, me);
+
     final remaining = <LatLng>[
       me,
       ...route.sublist(cutAt.clamp(0, route.length - 1)),
     ];
     final covered = route.sublist(0, cutAt.clamp(0, route.length));
 
+    // demo palette + width
+    const baseLight = Color(0xFF90B6FF); // remaining
+    const progDark = Color(0xFF1A57E8); // covered
+    const w = 10;
+
     _trimmed = {
       Polyline(
         polylineId: PolylineId('${id}_remaining'),
         points: remaining,
-        color: Colors.blue,
-        width: 6,
+        color: baseLight,
+        width: w,
         startCap: Cap.roundCap,
         endCap: Cap.roundCap,
         jointType: JointType.round,
@@ -171,8 +178,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         Polyline(
           polylineId: PolylineId('${id}_covered'),
           points: covered,
-          color: Colors.grey,
-          width: 6,
+          color: progDark,
+          width: w,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
@@ -230,6 +237,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   void initState() {
     super.initState();
     _loadCurrentLocation();
+    _loadDriverIcon();
   }
 
   @override
@@ -237,6 +245,19 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     _pickupController.dispose();
     _dropoffController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDriverIcon() async {
+    try {
+      final icon = await BitmapDescriptor.asset(
+        const ImageConfiguration(size: Size(48, 48)),
+        'assets/images/bike_marker.png',
+      );
+      if (mounted) {
+        setState(() => _driverPng = icon);
+      }
+      // ignore: empty_catches
+    } catch (e) {}
   }
 
   Future<void> _drawRoute({
@@ -515,10 +536,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         Marker(
                           markerId: const MarkerId('driver_live'),
                           position: driverLatLng,
-                          icon: BitmapDescriptor.defaultMarkerWithHue(
-                            BitmapDescriptor.hueOrange,
-                          ),
+                          icon:
+                              _driverPng ??
+                              BitmapDescriptor.defaultMarkerWithHue(
+                                BitmapDescriptor.hueOrange,
+                              ),
                           infoWindow: const InfoWindow(title: 'Driver'),
+                          anchor: const Offset(0.5, 0.5),
+                          flat: true,
                         ),
 
                       // Nearby drivers (hidden once one is assigned)
@@ -549,9 +574,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             return Marker(
                               markerId: MarkerId('driver_$id'),
                               position: pos,
-                              icon: BitmapDescriptor.defaultMarkerWithHue(
-                                BitmapDescriptor.hueOrange,
-                              ),
+                              icon:
+                                  _driverPng ??
+                                  BitmapDescriptor.defaultMarkerWithHue(
+                                    BitmapDescriptor.hueOrange,
+                                  ),
+                              anchor: const Offset(0.5, 0.5),
+                              flat: true,
                               infoWindow: InfoWindow(
                                 title: username,
                                 snippet: '⭐ $rating • $rideType',
@@ -571,9 +600,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             zoom: 14,
                           ),
                           padding: const EdgeInsets.only(bottom: 280),
+                          style: _darkGuidanceStyle,
                           onMapCreated: (controller) =>
                               _mapController = controller,
-
                           myLocationEnabled: true,
                           myLocationButtonEnabled: false,
                           compassEnabled: false,
@@ -738,7 +767,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           from: origin,
                           to: _dropoffLatLng!,
                           id: 'to_dropoff_live',
-                          color: Colors.blue,
+                          color: const Color(0xFF90B6FF), // base light
+                          width: 10,
                         );
                       }
                     }
@@ -1007,8 +1037,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     Polyline(
                                       polylineId: const PolylineId('route'),
                                       points: routePoints,
-                                      color: Colors.blue,
-                                      width: 6,
+                                      color: const Color(
+                                        0xFF90B6FF,
+                                      ), // base light
+                                      width: 10,
                                       startCap: Cap.roundCap,
                                       endCap: Cap.roundCap,
                                       jointType: JointType.round,
@@ -2508,6 +2540,7 @@ class _RiderNavMap extends ConsumerStatefulWidget {
 }
 
 class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
+  BitmapDescriptor? _driverPng;
   final _log = Logger();
 
   GoogleMapController? _ctrl;
@@ -2532,12 +2565,26 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
     // Seed route from pickup→dropoff if pickup provided; else from dropoff→dropoff (no-op) until first driver point arrives.
     final seedStart = widget.pickup ?? widget.dropoff;
     _buildRoute(from: seedStart, to: widget.dropoff);
+    _loadDriverIcon();
   }
 
   @override
   void dispose() {
     _ctrl?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDriverIcon() async {
+    try {
+      final icon = await BitmapDescriptor.asset(
+        const ImageConfiguration(size: Size(48, 48)),
+        'assets/images/bike_marker.png',
+      );
+      if (mounted) {
+        setState(() => _driverPng = icon);
+      }
+      // ignore: empty_catches
+    } catch (e) {}
   }
 
   // -------- Route building / trimming ---------------------------------------
@@ -2554,7 +2601,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
           polylineId: const PolylineId('covered'),
           points: _covered,
           color: Colors.grey,
-          width: 6,
+          width: 10,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
@@ -2563,7 +2610,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
           polylineId: const PolylineId('remaining'),
           points: _remaining,
           color: Colors.blueAccent,
-          width: 6,
+          width: 10,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
@@ -2614,7 +2661,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
             polylineId: const PolylineId('covered'),
             points: _covered,
             color: Colors.grey,
-            width: 6,
+            width: 10,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
@@ -2625,7 +2672,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
             polylineId: const PolylineId('remaining'),
             points: _remaining,
             color: Colors.blueAccent,
-            width: 6,
+            width: 10,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
@@ -2713,24 +2760,6 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
       });
     }
 
-    final markers = <Marker>{
-      if (driverPos != null)
-        Marker(
-          markerId: const MarkerId('driver'),
-          position: driverPos,
-          rotation: 0,
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueOrange,
-          ),
-        ),
-      // Keep only dropoff marker in nav mode
-      Marker(
-        markerId: const MarkerId('dropoff'),
-        position: widget.dropoff,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-      ),
-    };
-
     final polylines = <Polyline>{
       if (_polyCovered != null) _polyCovered!,
       if (_polyRemaining != null) _polyRemaining!,
@@ -2738,7 +2767,26 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
 
     return GoogleMap(
       initialCameraPosition: CameraPosition(target: widget.dropoff, zoom: 15),
-      markers: markers,
+      markers: {
+        if (driverPos != null)
+          Marker(
+            markerId: const MarkerId('driver'),
+            position: driverPos,
+            rotation: 0,
+            icon:
+                _driverPng ??
+                BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueOrange,
+                ),
+            anchor: const Offset(0.5, 0.5),
+            flat: true,
+          ),
+        Marker(
+          markerId: const MarkerId('dropoff'),
+          position: widget.dropoff,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        ),
+      },
       polylines: polylines,
       myLocationEnabled: false,
       myLocationButtonEnabled: false,
@@ -2749,3 +2797,111 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
     );
   }
 }
+
+const _darkGuidanceStyle = '''
+[
+  // General map geometry background
+  {
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#f7f9fb" } // Light neutral tone for background
+    ]
+  },
+  {
+    "elementType": "labels.icon",
+    "stylers": [
+      { "visibility": "off" } // No icons for cleaner look
+    ]
+  },
+  {
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#3b4a5a" } // Dark gray-blue for good legibility
+    ]
+  },
+  {
+    "elementType": "labels.text.stroke",
+    "stylers": [
+      { "color": "#ffffff" } // White stroke improves contrast
+    ]
+  },
+
+  // Roads
+  {
+    "featureType": "road",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#e0e4ea" } // Slightly more contrast than background
+    ]
+  },
+  {
+    "featureType": "road.arterial",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d0d4dc" } // More prominent for arterial roads
+    ]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#c4c9d1" } // Clearly distinguish highways
+    ]
+  },
+  {
+    "featureType": "road.highway.controlled_access",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#babfc7" } // Highest priority roads — highest contrast
+    ]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#5e6d7a" }
+    ]
+  },
+
+  // Points of Interest
+  {
+    "featureType": "poi",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#eef2f7" } // Subtle but visible
+    ]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#e3f2e0" } // Soft green for parks
+    ]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#7cac7a" } // Green label text for parks
+    ]
+  },
+
+  // Transit
+  {
+    "featureType": "transit.line",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d6dbe4" } // Transit lines muted but visible
+    ]
+  },
+
+  // Water
+  {
+    "featureType": "water",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d0e6f8" } // Light blue for water
+    ]
+  }
+]
+''';

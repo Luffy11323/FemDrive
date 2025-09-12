@@ -107,13 +107,109 @@ class OfferType {
 
 const _darkGuidanceStyle = '''
 [
-  {"elementType":"geometry","stylers":[{"color":"#1f2630"}]},
-  {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
-  {"elementType":"labels.text.fill","stylers":[{"color":"#cfe2ff"}]},
-  {"elementType":"labels.text.stroke","stylers":[{"color":"#1f2630"}]},
-  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#343c4a"}]},
-  {"featureType":"poi","elementType":"geometry","stylers":[{"color":"#293141"}]},
-  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#0f1827"}]}
+  // General map geometry background
+  {
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#f7f9fb" } // Light neutral tone for background
+    ]
+  },
+  {
+    "elementType": "labels.icon",
+    "stylers": [
+      { "visibility": "off" } // No icons for cleaner look
+    ]
+  },
+  {
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#3b4a5a" } // Dark gray-blue for good legibility
+    ]
+  },
+  {
+    "elementType": "labels.text.stroke",
+    "stylers": [
+      { "color": "#ffffff" } // White stroke improves contrast
+    ]
+  },
+
+  // Roads
+  {
+    "featureType": "road",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#e0e4ea" } // Slightly more contrast than background
+    ]
+  },
+  {
+    "featureType": "road.arterial",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d0d4dc" } // More prominent for arterial roads
+    ]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#c4c9d1" } // Clearly distinguish highways
+    ]
+  },
+  {
+    "featureType": "road.highway.controlled_access",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#babfc7" } // Highest priority roads — highest contrast
+    ]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#5e6d7a" }
+    ]
+  },
+
+  // Points of Interest
+  {
+    "featureType": "poi",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#eef2f7" } // Subtle but visible
+    ]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#e3f2e0" } // Soft green for parks
+    ]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels.text.fill",
+    "stylers": [
+      { "color": "#7cac7a" } // Green label text for parks
+    ]
+  },
+
+  // Transit
+  {
+    "featureType": "transit.line",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d6dbe4" } // Transit lines muted but visible
+    ]
+  },
+
+  // Water
+  {
+    "featureType": "water",
+    "elementType": "geometry",
+    "stylers": [
+      { "color": "#d0e6f8" } // Light blue for water
+    ]
+  }
 ]
 ''';
 
@@ -1493,7 +1589,8 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
             _mapController = controller;
             widget.onMapCreated(controller);
           },
-
+          buildingsEnabled: true,
+          trafficEnabled: false,
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
