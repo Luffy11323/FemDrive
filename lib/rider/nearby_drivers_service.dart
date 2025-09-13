@@ -53,7 +53,7 @@ class NearbyDriversService {
               'id': doc.id,
               'username': data['username'] ?? 'Unknown Driver',
               'location': data['location'],
-              'rideType': data['availableRideType'] ?? 'Ride mini',
+              'rideType': (data['carType'] ?? '').toString(),
               'rating': data['rating'] ?? 0,
             };
           }).toList();
@@ -141,7 +141,7 @@ class NearbyDriversService {
               'id': driverId,
               'username': meta['username'] ?? 'Unknown Driver',
               'location': LatLng(lat, lng),
-              'rideType': meta['availableRideType'] ?? 'Ride mini',
+              'rideType': (meta['carType'] ?? '').toString(),
               'rating': meta['rating'] ?? 0,
               'distanceKm': distanceKm,
               'updatedAt': updatedAt,

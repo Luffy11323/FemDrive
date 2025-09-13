@@ -272,13 +272,10 @@ class RideService {
           );
 
       // 🔒 Filter drivers by the selected rideType
-      final wantedType = (rideData['rideType'] ?? '').toString();
+      String norm(String s) => s.toLowerCase().trim();
+      final wantedType = norm((rideData['rideType'] ?? '').toString());
       final filteredDrivers = drivers
-          .where(
-            (d) =>
-                (d['rideType'] ?? '').toString().toLowerCase().trim() ==
-                wantedType.toLowerCase().trim(),
-          )
+          .where((d) => norm((d['rideType'] ?? '').toString()) == wantedType)
           .toList();
 
       if (filteredDrivers.isEmpty) {
