@@ -745,17 +745,19 @@ class DriverService {
         'counterDriverId': me,
       });
     });
-
+    final me = FirebaseAuth.instance.currentUser!.uid;
     final now = ServerValue.timestamp;
 
     await rtdb.child('ridesLive/$rideId').update({
       'counterFare': newFare,
+      'counterDriverId': me,
       'updatedAt': now,
     });
 
     if (riderId.isNotEmpty) {
       await rtdb.child('rides/$riderId/$rideId').update({
         'counterFare': newFare,
+        'counterDriverId': me,
         'updatedAt': now,
       });
 

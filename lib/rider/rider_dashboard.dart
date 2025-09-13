@@ -37,24 +37,33 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
   driverId,
 ) {
   final root = FirebaseDatabase.instance.ref();
-  // Canonical
+
   final a = root.child('driverLocations/$driverId').onValue.map((e) {
     final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
     final lat = (m?['lat'] as num?)?.toDouble();
     final lng = (m?['lng'] as num?)?.toDouble();
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
   });
-  // Legacy fallback
+
   final b = root.child('drivers/$driverId/location').onValue.map((e) {
     final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
     final lat = (m?['lat'] as num?)?.toDouble();
     final lng = (m?['lng'] as num?)?.toDouble();
     return (lat != null && lng != null) ? LatLng(lat, lng) : null;
   });
-  // Prefer A; if it emits nulls, continue listening to both and pick the first non-null
+
+  // ✅ NEW: RTDB fast presence
+  final c = root.child('drivers_online/$driverId').onValue.map((e) {
+    final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
+    final lat = (m?['lat'] as num?)?.toDouble();
+    final lng = (m?['lng'] as num?)?.toDouble();
+    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+  });
+
   return StreamZip<LatLng?>([
     a,
     b,
+    c,
   ]).map((vals) => vals.firstWhere((v) => v != null, orElse: () => null));
 });
 
@@ -108,6 +117,20 @@ class RiderDashboard extends ConsumerStatefulWidget {
 }
 
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
+  bool _hasActive(String? raw) {
+    final s = (raw ?? '').trim();
+    // normalize both variants
+    final arrived = s == 'driverArrived' || s == 'driver_arrived';
+    return const {
+          'pending',
+          'searching',
+          'accepted',
+          'in_progress',
+          'onTrip',
+        }.contains(s) ||
+        arrived;
+  }
+
   BitmapDescriptor? _driverPng;
   final _logger = Logger();
   GoogleMapController? _mapController;
@@ -444,14 +467,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       }
     }
 
-    final hasActive = const {
-      'pending',
-      'searching',
-      'accepted',
-      'driverArrived', // ✅ keep form hidden & continue tracking
-      'in_progress',
-      'onTrip',
-    }.contains(status);
+    final hasActive = _hasActive(status);
 
     if (!hasActive &&
         _pickupLatLng == null &&
@@ -511,7 +527,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                       // Pickup shown only until trip starts
                       if (_pickupLatLng != null &&
-                          (status == 'accepted' || status == 'driverArrived'))
+                          status != 'completed' &&
+                          status != 'cancelled')
                         Marker(
                           markerId: const MarkerId("pickup"),
                           position: _pickupLatLng!,
@@ -522,7 +539,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                       // Dropoff shown only during trip
                       if (_dropoffLatLng != null &&
-                          (status == 'in_progress' || status == 'onTrip'))
+                          status != 'completed' &&
+                          status != 'cancelled')
                         Marker(
                           markerId: const MarkerId("dropoff"),
                           position: _dropoffLatLng!,
@@ -741,7 +759,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         from: driverLatLng,
                         to: _pickupLatLng!,
                         id: 'driver_to_pickup',
-                        color: Colors.orange,
+                        color: const ui.Color.fromARGB(255, 255, 8, 0),
                       );
                     } else {
                       // No driver yet: keep map clean (avoid stale planning line)
@@ -775,12 +793,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     break;
 
                   case 'searching':
-                    // Optional: keep the map clean during searching
-                    if (_polylines.isNotEmpty) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _polylines = {});
-                      });
-                    }
                     break;
 
                   case 'completed':
@@ -823,6 +835,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     }
                     break;
                   case 'driver_arrived':
+                  case 'driverArrived':
                     if (_arrivedNotified.add(ride['id'])) {
                       showDriverArrived(rideId: ride['id']);
                     }
@@ -1738,16 +1751,32 @@ class SOSButton extends StatelessWidget {
       icon: const Icon(Icons.sos),
       onPressed: () async {
         try {
+          final rid = (ride['id'] ?? '').toString();
+          var other = (ride['driverId'] ?? '').toString();
+
+          if (other.isEmpty && rid.isNotEmpty) {
+            try {
+              final live = await FirebaseDatabase.instance
+                  .ref('ridesLive/$rid')
+                  .get();
+              final m = (live.value as Map?)?.cast<String, dynamic>();
+              other = (m?['driverId'] ?? '').toString();
+            } catch (_) {}
+          }
+          if (other.isEmpty) {
+            throw 'No driver assigned yet';
+          }
+
           await EmergencyService.sendEmergency(
-            rideId: ride['id'],
+            rideId: rid,
             currentUid: FirebaseAuth.instance.currentUser!.uid,
-            otherUid: ride['driverId'] ?? '',
+            otherUid: other,
           );
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Emergency reported successfully")),
             );
-            showEmergencyAlert(rideId: ride['id']);
+            showEmergencyAlert(rideId: rid);
           }
         } catch (e) {
           if (context.mounted) {
@@ -2793,6 +2822,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
       compassEnabled: false,
       zoomControlsEnabled: false,
       mapToolbarEnabled: false,
+      style: _darkGuidanceStyle,
       onMapCreated: (c) => _ctrl = c,
     );
   }

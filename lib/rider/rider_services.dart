@@ -448,8 +448,26 @@ class RideService {
         throw Exception('Ride is no longer active');
       }
 
-      final proposedBy = (data['counterDriverId'] ?? '').toString();
-      if (proposedBy.isEmpty) throw Exception('Missing counterDriverId');
+      // ✅ tolerate both snake/camel, and fallback to live node mirrored by driver
+      String proposedBy =
+          (data['counterDriverId'] ?? data['counter_driver_id'] ?? '')
+              .toString();
+
+      if (proposedBy.isEmpty) {
+        try {
+          final live = await rtdb.child('${AppPaths.ridesLive}/$rideId').get();
+          final liveMap = (live.value as Map?)?.cast<String, dynamic>();
+          proposedBy =
+              (liveMap?['counterDriverId'] ??
+                      liveMap?['counter_driver_id'] ??
+                      '')
+                  .toString();
+        } catch (_) {}
+      }
+
+      if (proposedBy.isEmpty) {
+        throw Exception('Missing counterDriverId');
+      }
 
       driverId = proposedBy;
 
@@ -457,21 +475,36 @@ class RideService {
         AppFields.fare: counterFare,
         'counterFare': FieldValue.delete(),
         'counterDriverId': FieldValue.delete(),
+        'counter_driver_id': FieldValue.delete(), // ✅ clear both
         AppFields.status: RideStatus.accepted,
         AppFields.driverId: driverId,
         AppFields.acceptedAt: FieldValue.serverTimestamp(),
       });
     });
 
-    // 2) RTDB live mirror
+    // 2) RTDB live mirror: also clear counter fields
     final now = ServerValue.timestamp;
     await rtdb.child('${AppPaths.ridesLive}/$rideId').update({
       AppFields.status: RideStatus.accepted,
       AppFields.fare: counterFare,
       AppFields.driverId: driverId,
+      'counterFare': null, // ✅ important
+      'counterDriverId': null, // ✅ important
       AppFields.acceptedAt: now,
       AppFields.updatedAt: now,
     });
+
+    // (Optional) also clear rider mirror if you rely on it in UI:
+    try {
+      final riderId = FirebaseAuth.instance.currentUser?.uid;
+      if (riderId != null) {
+        await rtdb.child('rides/$riderId/$rideId').update({
+          'counterFare': null, // ✅ prevent re-pop
+          'counterDriverId': null,
+          'updatedAt': now,
+        });
+      }
+    } catch (_) {}
 
     // 3) Best-effort: remove from any legacy/pending queues
     try {
@@ -481,7 +514,7 @@ class RideService {
       await rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
     } catch (_) {}
 
-    // 4) ✅ Fan-out delete: remove this ride's popup from ALL drivers
+    // 4) Fan-out delete: remove this ride's popup from ALL drivers
     try {
       final notifsSnap = await rtdb.child(AppPaths.driverNotifications).get();
       if (notifsSnap.exists && notifsSnap.value is Map) {
