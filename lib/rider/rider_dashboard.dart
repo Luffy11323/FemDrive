@@ -99,15 +99,6 @@ final rtdbRideLiveProvider = StreamProvider.family<RideLive?, String>((
   });
 });
 
-/// Provides nearby online drivers (live updates) for the map overlay
-//final nearbyDriversProvider =
-//  StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) async* {
-//  final loc = await MapService().currentLocation();
-//yield* NearbyDriversService().streamNearbyDriversFast(
-//loc,
-//  ); // RTDB version
-//  });
-
 /// Rider Dashboard Main Page
 class RiderDashboard extends ConsumerStatefulWidget {
   const RiderDashboard({super.key});
@@ -736,6 +727,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   driverId: driverId,
                   dropoff: _dropoffLatLng!,
                   pickup: _pickupLatLng,
+                  driverIcon: liveIcon,
                 ),
               ),
             // --- Fare/ETA/Distance pill (like route summary) ---
@@ -2579,12 +2571,13 @@ class _RiderNavMap extends ConsumerStatefulWidget {
   final String driverId;
   final LatLng dropoff;
   final LatLng? pickup; // optional; used to seed the first route
-
+  final BitmapDescriptor driverIcon;
   const _RiderNavMap({
     required this.rideId,
     required this.driverId,
     required this.dropoff,
     this.pickup,
+    required this.driverIcon,
   });
 
   @override
@@ -2592,7 +2585,6 @@ class _RiderNavMap extends ConsumerStatefulWidget {
 }
 
 class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
-  BitmapDescriptor? _driverPng;
   final _log = Logger();
 
   GoogleMapController? _ctrl;
@@ -2628,13 +2620,11 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
 
   Future<void> _loadDriverIcon() async {
     try {
-      final icon = await BitmapDescriptor.asset(
+      await BitmapDescriptor.asset(
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/bike_marker.png',
       );
-      if (mounted) {
-        setState(() => _driverPng = icon);
-      }
+      if (mounted) {}
       // ignore: empty_catches
     } catch (e) {}
   }
@@ -2825,11 +2815,7 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
             markerId: const MarkerId('driver'),
             position: driverPos,
             rotation: 0,
-            icon:
-                _driverPng ??
-                BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueOrange,
-                ),
+            icon: widget.driverIcon,
             anchor: const Offset(0.5, 0.5),
             flat: true,
           ),
