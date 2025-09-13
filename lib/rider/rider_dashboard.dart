@@ -439,7 +439,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     if (rideId != null) {
       live = ref.watch(rtdbRideLiveProvider(rideId)).value;
     }
-
+    final String? liveDriverId = live?.driverId;
+    final String? driverId = (liveDriverId != null && liveDriverId.isNotEmpty)
+        ? liveDriverId
+        : (rideData?['driverId'] as String?);
     // Prefer live status if present
     final status = (live?.status.isNotEmpty == true)
         ? live!.status
@@ -447,15 +450,27 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
     // Prefer live driver lat/lng
     LatLng? driverLatLng = live?.driverLatLng;
+    if (driverLatLng == null && driverId != null && driverId.isNotEmpty) {
+      driverLatLng = ref.watch(driverLocationProvider(driverId)).value;
+    }
+    if (rideData != null) {
+      final pLat = (rideData['pickupLat'] as num?)?.toDouble();
+      final pLng = (rideData['pickupLng'] as num?)?.toDouble();
+      final dLat = (rideData['dropoffLat'] as num?)?.toDouble();
+      final dLng = (rideData['dropoffLng'] as num?)?.toDouble();
+      _pickupLatLng ??= (pLat != null && pLng != null)
+          ? LatLng(pLat, pLng)
+          : null;
+      _dropoffLatLng ??= (dLat != null && dLng != null)
+          ? LatLng(dLat, dLng)
+          : null;
+    }
 
     // Fallback to driver stream if live didn’t include coords
     final dlat = (rideData?['driverLat'] as num?)?.toDouble();
     final dlng = (rideData?['driverLng'] as num?)?.toDouble();
     if (dlat != null && dlng != null) {
       driverLatLng = LatLng(dlat, dlng);
-    } else if (assignedDriverId != null && assignedDriverId.isNotEmpty) {
-      // fallback to driver location provider
-      driverLatLng = ref.watch(driverLocationProvider(assignedDriverId)).value;
     }
     // live trim + follow camera while heading to pickup
     if (driverLatLng != null && status == 'accepted' && _driverLeg.isNotEmpty) {
@@ -582,6 +597,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           .where(
                             (d) => (d['id'] ?? d['uid']) != assignedDriverId,
                           )
+                          .where((d) {
+                            final dType = (d['rideType'] ?? d['carType'] ?? '')
+                                .toString()
+                                .toLowerCase();
+                            return dType ==
+                                rideType.toLowerCase(); // <-- enforce match
+                          })
                           .map((d) {
                             final loc = d['location'];
                             LatLng? pos;
@@ -707,11 +729,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
             if (rideData != null &&
                 (status == 'in_progress' || status == 'onTrip') &&
                 _dropoffLatLng != null &&
-                assignedDriverId != null)
+                driverId != null)
               Positioned.fill(
                 child: _RiderNavMap(
                   rideId: rideId!,
-                  driverId: assignedDriverId,
+                  driverId: driverId,
                   dropoff: _dropoffLatLng!,
                   pickup: _pickupLatLng,
                 ),
