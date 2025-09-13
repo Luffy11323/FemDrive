@@ -131,7 +131,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         arrived;
   }
 
-  BitmapDescriptor? _driverPng;
+  BitmapDescriptor? _bikeIcon;
+  BitmapDescriptor? _carIcon;
+
   final _logger = Logger();
   GoogleMapController? _mapController;
   LatLng? _currentLocation;
@@ -272,15 +274,22 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
   Future<void> _loadDriverIcon() async {
     try {
-      final icon = await BitmapDescriptor.asset(
+      final bike = await BitmapDescriptor.asset(
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/bike_marker.png',
       );
+      // Use your car PNG path here (add it to pubspec assets):
+      final car = await BitmapDescriptor.asset(
+        const ImageConfiguration(size: Size(48, 48)),
+        'assets/images/car_marker.png',
+      );
       if (mounted) {
-        setState(() => _driverPng = icon);
+        setState(() {
+          _bikeIcon = bike;
+          _carIcon = car;
+        });
       }
-      // ignore: empty_catches
-    } catch (e) {}
+    } catch (_) {}
   }
 
   Future<void> _drawRoute({
@@ -487,7 +496,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         rideData != null &&
         (status == 'pending' || status == 'searching') &&
         safePickup != null;
-
+    final rideType = (rideData?['rideType'] ?? '').toString();
+    final liveIcon = (rideType.toLowerCase() == 'bike')
+        ? (_bikeIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
+        : (_carIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueOrange,
+              ));
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rider Dashboard'),
@@ -554,11 +570,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         Marker(
                           markerId: const MarkerId('driver_live'),
                           position: driverLatLng,
-                          icon:
-                              _driverPng ??
-                              BitmapDescriptor.defaultMarkerWithHue(
-                                BitmapDescriptor.hueOrange,
-                              ),
+                          icon: liveIcon,
                           infoWindow: const InfoWindow(title: 'Driver'),
                           anchor: const Offset(0.5, 0.5),
                           flat: true,
@@ -592,11 +604,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             return Marker(
                               markerId: MarkerId('driver_$id'),
                               position: pos,
-                              icon:
-                                  _driverPng ??
-                                  BitmapDescriptor.defaultMarkerWithHue(
-                                    BitmapDescriptor.hueOrange,
-                                  ),
+                              icon: liveIcon,
                               anchor: const Offset(0.5, 0.5),
                               flat: true,
                               infoWindow: InfoWindow(
@@ -761,13 +769,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         id: 'driver_to_pickup',
                         color: const ui.Color.fromARGB(255, 255, 8, 0),
                       );
-                    } else {
-                      // No driver yet: keep map clean (avoid stale planning line)
-                      if (_polylines.isNotEmpty) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) setState(() => _polylines = {});
-                        });
-                      }
                     }
                     break;
 
