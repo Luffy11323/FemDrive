@@ -953,7 +953,42 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           },
                         ),
                       ),
-
+                    if (status == 'accepted' ||
+                        status == 'in_progress' ||
+                        status == 'onTrip')
+                      Positioned(
+                        bottom: 222, // above Share button
+                        right: 16,
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.chat_bubble),
+                          label: const Text('Chat'),
+                          onPressed: () async {
+                            String? driverName;
+                            try {
+                              if (driverId != null && driverId.isNotEmpty) {
+                                final doc = await FirebaseFirestore.instance
+                                    .collection('users')
+                                    .doc(driverId)
+                                    .get();
+                                driverName =
+                                    (doc.data()?['username'] as String?)
+                                        ?.trim();
+                              }
+                            } catch (_) {}
+                            if (rideId != null && rideId.isNotEmpty) {
+                              if (!context.mounted) return;
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => RiderChatPage(
+                                    rideId: rideId,
+                                    otherDisplayName: driverName,
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
                     if (status == 'completed')
                       Align(
                         alignment: Alignment.bottomCenter,

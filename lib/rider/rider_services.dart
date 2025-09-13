@@ -778,3 +778,260 @@ class MapService {
     }
   }
 }
+
+final riderServiceProvider = Provider<RideService>((ref) => RideService());
+final riderMessagesProvider =
+    StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
+      final svc = ref.watch(
+        riderServiceProvider,
+      ); // you already expose RiderService
+      return svc.listenMessages(rideId);
+    });
+final riderCurrentUserIdProvider = Provider<String?>(
+  (_) => FirebaseAuth.instance.currentUser?.uid,
+);
+
+class ChatPaths {
+  static const rides = 'rides';
+  static const messages = 'messages';
+}
+
+class ChatFields {
+  static const senderId = 'senderId';
+  static const text = 'text';
+  static const timestamp = 'timestamp';
+}
+
+extension RiderChat on RideService {
+  DatabaseReference get _db => FirebaseDatabase.instance.ref();
+  FirebaseAuth get _auth => FirebaseAuth.instance;
+
+  /// Send a chat message to /rides/{rideId}/messages/{autoKey}
+  Future<void> sendMessage(String rideId, String message) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) throw Exception('Not logged in');
+    if (rideId.isEmpty || message.trim().isEmpty) return;
+
+    await _db
+        .child('${ChatPaths.rides}/$rideId/${ChatPaths.messages}')
+        .push()
+        .set({
+          ChatFields.senderId: uid,
+          ChatFields.text: message.trim(),
+          ChatFields.timestamp: ServerValue.timestamp,
+        });
+  }
+
+  /// Live stream of messages sorted by timestamp ASC
+  Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
+    final ref = _db.child('${ChatPaths.rides}/$rideId/${ChatPaths.messages}');
+    return ref.onValue.map((event) {
+      final raw = event.snapshot.value as Map?;
+      if (raw == null) return <Map<String, dynamic>>[];
+
+      final list = raw.entries.map((e) {
+        final m = Map<String, dynamic>.from(e.value as Map);
+        m['id'] = e.key;
+        return m;
+      }).toList();
+
+      list.sort((a, b) {
+        final ta = (a[ChatFields.timestamp] as num?)?.toInt() ?? 0;
+        final tb = (b[ChatFields.timestamp] as num?)?.toInt() ?? 0;
+        return ta.compareTo(tb);
+      });
+      return list;
+    });
+  }
+}
+
+class RiderChatController extends StateNotifier<AsyncValue<void>> {
+  RiderChatController(this.ref) : super(const AsyncData(null));
+  final Ref ref;
+
+  Future<void> send(String rideId, String text) async {
+    if (text.trim().isEmpty) return;
+    state = const AsyncLoading();
+    try {
+      await ref.read(riderServiceProvider).sendMessage(rideId, text.trim());
+      state = const AsyncData(null);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+}
+
+final riderChatControllerProvider =
+    StateNotifierProvider<RiderChatController, AsyncValue<void>>(
+      (ref) => RiderChatController(ref),
+    );
+
+class RiderChatPage extends ConsumerStatefulWidget {
+  final String rideId;
+  final String? otherDisplayName; // optional title (driver name)
+  const RiderChatPage({super.key, required this.rideId, this.otherDisplayName});
+
+  @override
+  ConsumerState<RiderChatPage> createState() => _RiderChatPageState();
+}
+
+class _RiderChatPageState extends ConsumerState<RiderChatPage> {
+  final _text = TextEditingController();
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final t = _text.text.trim();
+    if (t.isEmpty) return;
+    await ref.read(riderChatControllerProvider.notifier).send(widget.rideId, t);
+    _text.clear();
+    await Future.delayed(const Duration(milliseconds: 40));
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent + 72,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = ref.watch(riderCurrentUserIdProvider);
+    final msgs = ref.watch(riderMessagesProvider(widget.rideId));
+    final sending = ref.watch(riderChatControllerProvider).isLoading;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.otherDisplayName == null
+              ? 'Chat'
+              : 'Chat with ${widget.otherDisplayName}',
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: msgs.when(
+              data: (list) {
+                if (list.isEmpty) {
+                  return const Center(child: Text('Say hi 👋'));
+                }
+
+                // Add post frame callback to scroll to the bottom
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (_scroll.hasClients) {
+                    _scroll.animateTo(
+                      _scroll.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                  }
+                });
+
+                return ListView.separated(
+                  controller: _scroll,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 16,
+                  ),
+                  itemCount: list.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) {
+                    final m = list[i];
+                    final sender = m[ChatFields.senderId]?.toString();
+                    final text = (m[ChatFields.text] ?? '').toString();
+                    final ts = (m[ChatFields.timestamp] as num?)?.toInt();
+                    final isMe = (sender != null && sender == uid);
+
+                    final timeStr = ts == null
+                        ? ''
+                        : DateTime.fromMillisecondsSinceEpoch(
+                            ts,
+                          ).toLocal().toString().substring(11, 16);
+
+                    return Align(
+                      alignment: isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: isMe
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Colors.grey.shade200,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: isMe
+                                ? CrossAxisAlignment.end
+                                : CrossAxisAlignment.start,
+                            children: [
+                              Text(text),
+                              const SizedBox(height: 2),
+                              Text(
+                                timeStr,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: Colors.black54),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Chat error: $e')),
+            ),
+          ),
+
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _text,
+                      decoration: const InputDecoration(
+                        hintText: 'Type a message…',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _send(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: sending ? null : _send,
+                    child: sending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
