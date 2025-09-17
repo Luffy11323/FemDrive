@@ -10,7 +10,7 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
-        // plugin resolution repos
+        // Plugin resolution repos
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -18,7 +18,7 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    // Choose PREFER_SETTINGS to avoid the "FAIL_ON_PROJECT_REPOS" conflict
+    // Use PREFER_SETTINGS to avoid the "FAIL_ON_PROJECT_REPOS" conflict you hit
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
 
     repositories {
@@ -26,13 +26,16 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
 
-        // TransistorSoft native AARs required by flutter_background_geolocation / background_fetch
+        // Optional local Maven (helps local AAR resolution)
+        mavenLocal()
+
+        // TransistorSoft native AARs (hosted on S3)
         maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
 
-        // Gradle plugin repo (sometimes required)
+        // Gradle plugin repo
         maven { url = uri("https://plugins.gradle.org/m2/") }
 
-        // Flutter plugin artifact mirror (important for some Flutter plugin AARs)
+        // Flutter plugin artifact mirror (download.flutter.io)
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
@@ -40,9 +43,8 @@ dependencyResolutionManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.7.3" apply false
-    // START: FlutterFire Configuration
+    // Google services plugin (Firebase)
     id("com.google.gms.google-services") version("4.3.15") apply false
-    // END: FlutterFire Configuration
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 
