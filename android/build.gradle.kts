@@ -1,28 +1,31 @@
+// android/build.gradle.kts (project-level)
 import com.android.build.gradle.LibraryExtension
 import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
 
-// NOTE: Do NOT duplicate repository declarations here if you are using
-// dependencyResolutionManagement in settings.gradle.kts with PREFER_SETTINGS.
-// Keep buildscript minimal and rely on settings pluginManagement for plugin resolution.
-
 buildscript {
-    // You can keep this minimal. pluginManagement in settings.gradle.kts will resolve plugins.
-    // But Gradle still runs the buildscript block; avoid declaring conflicting repositories here.
+    // Keep the buildscript block but rely on settings repositories.
+    // If a repository is required here, settings.gradle.kts already provides it.
+    repositories {
+        google()
+        mavenCentral()
+        // Flutter plugin mirror (ensure plugin AAR resolution)
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+    }
     dependencies {
-        // If your build requires classpath dependencies, keep them here but resolution will use settings repos.
-        // Example kept for compatibility; versions can be updated as needed.
+        // Android Gradle Plugin
         classpath("com.android.tools.build:gradle:8.4.2")
+        // Kotlin Gradle plugin
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
+        // Google services (Firebase) plugin
         classpath("com.google.gms:google-services:4.4.2")
     }
 }
 
-allprojects {
-    // Do NOT declare repositories here if you've configured dependencyResolutionManagement in settings.
-    // If you must declare any project-level repositories, ensure settings.gradle.kts repositoriesMode allows it.
-}
-
+/**
+ * Optional: relocate build/ out of android/ to keep repo cleaner.
+ * Keep this if you were already using it.
+ */
 val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
 rootProject.layout.buildDirectory.value(newBuildDir)
 
@@ -31,7 +34,10 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 
-// Ensure plugin library modules compiled with at least a reasonable compileSdk/minSdk (safety net)
+/**
+ * Critical safety net: ensure all Android library subprojects (Flutter plugins)
+ * have explicit compileSdk/minSdk so they don't rely on old defaults.
+ */
 subprojects {
     plugins.withId("com.android.library") {
         extensions.configure(LibraryExtension::class.java) {
@@ -39,7 +45,7 @@ subprojects {
             defaultConfig {
                 minSdk = 21
             }
-            // Optional: pin NDK if required by any native plugin
+            // Keep your pinned NDK for native plugins (optional)
             ndkVersion = "27.0.12077973"
         }
     }
