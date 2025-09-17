@@ -178,21 +178,18 @@ class PaymentService {
 
     switch (rideType) {
       case 'Ride X':
-        baseFare = 5.0;
-        perKmRate = 1.0;
+        baseFare = 20.0;
+        perKmRate = 44.55;
         break;
       case 'Bike':
-        baseFare = 7.0;
-        perKmRate = 1.5;
-        break;
-      case 'Electric':
-        baseFare = 4.0;
-        perKmRate = 0.8;
+        baseFare = 10.0;
+        perKmRate = 11.82;
         break;
       case 'Ride mini':
       default:
-        baseFare = 2.0;
-        perKmRate = 0.5;
+        baseFare = 20.0;
+        perKmRate = 33.18;
+        break;
     }
 
     final distanceFare = double.parse(

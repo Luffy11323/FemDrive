@@ -77,8 +77,13 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+        
 
         <!-- Small monochrome notification icon for Firebase messages -->
+        <service
+            android:name="com.transistorsoft.flutter.backgroundgeolocation.HeadlessTask"
+            android:exported="true" />
+
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_stat_femdrive"/>

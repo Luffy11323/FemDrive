@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
 
-import 'package:async/async.dart';
 import 'package:femdrive/shared/emergency_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
@@ -36,35 +35,24 @@ final driverLocationProvider = StreamProvider.family<LatLng?, String>((
   ref,
   driverId,
 ) {
-  final root = FirebaseDatabase.instance.ref();
+  final refDb = FirebaseDatabase.instance.ref('drivers_online/$driverId');
 
-  final a = root.child('driverLocations/$driverId').onValue.map((e) {
+  return refDb.onValue.map((e) {
     final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
-    final lat = (m?['lat'] as num?)?.toDouble();
-    final lng = (m?['lng'] as num?)?.toDouble();
-    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-  });
+    if (m == null) return null;
 
-  final b = root.child('drivers/$driverId/location').onValue.map((e) {
-    final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
-    final lat = (m?['lat'] as num?)?.toDouble();
-    final lng = (m?['lng'] as num?)?.toDouble();
-    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-  });
+    final lat = (m['lat'] as num?)?.toDouble();
+    final lng = (m['lng'] as num?)?.toDouble();
+    final ts = (m['updatedAt'] as num?)?.toInt() ?? 0;
 
-  // ✅ NEW: RTDB fast presence
-  final c = root.child('drivers_online/$driverId').onValue.map((e) {
-    final m = (e.snapshot.value as Map?)?.cast<String, dynamic>();
-    final lat = (m?['lat'] as num?)?.toDouble();
-    final lng = (m?['lng'] as num?)?.toDouble();
-    return (lat != null && lng != null) ? LatLng(lat, lng) : null;
-  });
+    if (lat == null || lng == null) return null;
 
-  return StreamZip<LatLng?>([
-    a,
-    b,
-    c,
-  ]).map((vals) => vals.firstWhere((v) => v != null, orElse: () => null));
+    // 60s freshness gate
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (ts <= 0 || (now - ts) > 60 * 1000) return null;
+
+    return LatLng(lat, lng);
+  });
 });
 
 /// Live ride status + (optionally) driver live lat/lng from RTDB
@@ -89,11 +77,16 @@ final rtdbRideLiveProvider = StreamProvider.family<RideLive?, String>((
   return liveRef.onValue.map((event) {
     final data = (event.snapshot.value as Map?)?.cast<String, dynamic>();
     if (data == null) return null;
+
+    LatLng? driverLL;
+    final dlat = (data['driverLat'] as num?)?.toDouble();
+    final dlng = (data['driverLng'] as num?)?.toDouble();
+    if (dlat != null && dlng != null) driverLL = LatLng(dlat, dlng);
+
     return RideLive(
       status: (data['status'] ?? '').toString(),
       driverId: data['driverId'] as String?,
-      driverLatLng:
-          null, // ← keep null; location comes from driverLocationProvider
+      driverLatLng: driverLL,
       etaSecs: (data['etaSecs'] as num?)?.toInt(),
     );
   });
@@ -108,6 +101,10 @@ class RiderDashboard extends ConsumerStatefulWidget {
 }
 
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
+  static const activeStatuses = {'accepted', 'driver_arrived', 'in_progress'};
+
+  bool _chatVisible(String? raw) =>
+      activeStatuses.contains((raw ?? '').trim().toLowerCase());
   bool _hasActive(String? raw) {
     final s = (raw ?? '').trim();
     // normalize both variants
@@ -741,7 +738,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     _InfoPill(
                       icon: Icons.attach_money_rounded,
                       label: 'Fare',
-                      value: '\$${_fare!.toStringAsFixed(2)}',
+                      value: 'PKR ${_fare!.toStringAsFixed(2)}',
                     ),
                     const SizedBox(width: 8),
                     _InfoPill(
@@ -953,11 +950,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           },
                         ),
                       ),
-                    if (status == 'accepted' ||
-                        status == 'in_progress' ||
-                        status == 'onTrip')
+                    if (_chatVisible(status))
                       Positioned(
-                        bottom: 222, // above Share button
+                        bottom: 222,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.chat_bubble),
@@ -1623,7 +1618,7 @@ class _RideFormState extends ConsumerState<RideForm> {
               child: Text(
                 _fare == null
                     ? 'Find a driver'
-                    : 'Request Ride (\$${_fare!.toStringAsFixed(2)})',
+                    : 'Request Ride (PKR ${_fare!.toStringAsFixed(2)})',
               ),
             ),
 
@@ -1944,7 +1939,7 @@ class ReceiptWidget extends StatelessWidget {
             const Divider(),
             Text('Pickup: ${ride['pickup']}'),
             Text('Dropoff: ${ride['dropoff']}'),
-            Text('Fare: \$${fare.toStringAsFixed(2)}'),
+            Text('Fare: PKR ${fare.toStringAsFixed(2)}'),
             Text('Payment: ${ride['paymentMethod'] ?? '—'}'),
             if (ts != null) Text('Date: $ts'),
           ],
@@ -1987,7 +1982,7 @@ class PastRidesListWidget extends StatelessWidget {
                 leading: const Icon(Icons.receipt_long),
                 title: Text("${ride['pickup']} → ${ride['dropoff']}"),
                 subtitle: Text(
-                  "Fare: \$${fare.toStringAsFixed(2)} • ${ride['rideType'] ?? '—'}"
+                  "Fare: PKR ${fare.toStringAsFixed(2)} • ${ride['rideType'] ?? '—'}"
                   "${completedAt != null ? " • ${completedAt.toLocal()}" : ""}",
                 ),
                 onTap: () {
@@ -2001,7 +1996,7 @@ class PastRidesListWidget extends StatelessWidget {
                         children: [
                           Text('From: ${ride['pickup']}'),
                           Text('To: ${ride['dropoff']}'),
-                          Text('Fare: \$${fare.toStringAsFixed(2)}'),
+                          Text('Fare: PKR ${fare.toStringAsFixed(2)}'),
                           Text('Ride Type: ${ride['rideType'] ?? '—'}'),
                           Text('Payment: ${ride['paymentMethod'] ?? '—'}'),
                           if (completedAt != null)
@@ -2089,30 +2084,36 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
 class _CounterFareDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic> ride;
   final int ttlSeconds; // countdown length
-  const _CounterFareDialog({
-    required this.ride,
-    this.ttlSeconds = 15, // default 30s
-  });
+  const _CounterFareDialog({required this.ride, this.ttlSeconds = 15});
 
   @override
   ConsumerState<_CounterFareDialog> createState() => _CounterFareDialogState();
 }
 
-class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
+class _CounterFareDialogState extends ConsumerState<_CounterFareDialog>
+    with SingleTickerProviderStateMixin {
   late int _remaining;
   Timer? _timer;
+
+  // slide-in from right
+  late final AnimationController _slideCtl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(1.0, 0.0),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _slideCtl, curve: Curves.easeOutCubic));
 
   @override
   void initState() {
     super.initState();
     _remaining = widget.ttlSeconds;
 
-    // start 1s countdown
+    // start countdown
     _timer = Timer.periodic(const Duration(seconds: 1), (t) async {
       if (!mounted) return;
       setState(() => _remaining--);
-
-      // Auto-expire when countdown hits 0
       if (_remaining <= 0) {
         t.cancel();
         _timer = null;
@@ -2120,19 +2121,21 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
           await ref
               .read(riderDashboardProvider.notifier)
               .expireCounterFare(widget.ride['id']);
-        } catch (_) {
-          // swallow — UI will still close when counter value disappears
-        }
+        } catch (_) {}
         if (mounted && Navigator.of(context).canPop()) {
-          Navigator.of(context).pop(); // auto-hide
+          Navigator.of(context).pop();
         }
       }
     });
+
+    // start slide-in
+    _slideCtl.forward();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _slideCtl.dispose();
     super.dispose();
   }
 
@@ -2140,90 +2143,326 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog> {
   Widget build(BuildContext context) {
     final cf = (widget.ride['counterFare'] as num?)?.toDouble() ?? 0;
     final baseFare = (widget.ride['fare'] as num?)?.toDouble() ?? 0;
-    final pickup = (widget.ride['pickup'] ?? '—').toString();
-    final dropoff = (widget.ride['dropoff'] ?? '—').toString();
+    final rid = (widget.ride['id'] ?? '').toString();
 
-    return AlertDialog(
-      title: Row(
-        children: [
-          const Text('Driver Counter-Offer'),
-          const Spacer(),
-          // small countdown pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black12,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text('${_remaining}s'),
-          ),
-        ],
+    // live node for ETA and (counter) driverId
+    final liveRef = FirebaseDatabase.instance.ref('ridesLive/$rid');
+
+    return SlideTransition(
+      position: _slide,
+      child: Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: StreamBuilder<DatabaseEvent>(
+          stream: liveRef.onValue,
+          builder: (context, liveSnap) {
+            Map<String, dynamic>? live = (liveSnap.data?.snapshot.value as Map?)
+                ?.cast<String, dynamic>();
+            final liveEtaSecs = (live?['etaSecs'] as num?)?.toInt();
+            final driverId =
+                (live?['counterDriverId'] ??
+                        live?['driverId'] ??
+                        widget.ride['driverId'])
+                    ?.toString();
+
+            // driver profile stream (if we have an id)
+            Stream<DocumentSnapshot<Map<String, dynamic>>>? profileStream;
+            if (driverId != null && driverId.isNotEmpty) {
+              profileStream = FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(driverId)
+                  .snapshots();
+            }
+
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: profileStream,
+              builder: (context, profSnap) {
+                final d = profSnap.data?.data();
+                final name = (d?['username'] ?? 'Your driver').toString();
+                final photo = (d?['photoUrl'] ?? '').toString();
+                final carType = (d?['carType'] ?? d?['rideType'] ?? '')
+                    .toString();
+                final rating = (d?['averageRating'] ?? d?['avgRating'] ?? '—')
+                    .toString();
+
+                return _CounterFareCard(
+                  remainingSecs: _remaining,
+                  driverName: name,
+                  driverPhotoUrl: photo,
+                  carType: carType,
+                  rating: rating,
+                  etaSecs: liveEtaSecs,
+                  baseFare: baseFare,
+                  counterFare: cf,
+                  pickup: (widget.ride['pickup'] ?? '—').toString(),
+                  dropoff: (widget.ride['dropoff'] ?? '—').toString(),
+                  onAccept: () async {
+                    try {
+                      await ref
+                          .read(riderDashboardProvider.notifier)
+                          .handleCounterFare(rid, cf, true);
+                      await showCounterFareAccepted(rideId: rid);
+                      if (context.mounted) {
+                        Navigator.of(context, rootNavigator: true).pop();
+                      }
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+                    }
+                  },
+                  onReject: () async {
+                    try {
+                      await ref
+                          .read(riderDashboardProvider.notifier)
+                          .handleCounterFare(rid, cf, false);
+                      await showCounterFareRejected(rideId: rid);
+                      if (context.mounted) {
+                        Navigator.of(context, rootNavigator: true).pop();
+                      }
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+                    }
+                  },
+                );
+              },
+            );
+          },
+        ),
       ),
-      content: Column(
+    );
+  }
+}
+
+class _CounterFareCard extends StatelessWidget {
+  final int remainingSecs;
+  final String driverName;
+  final String driverPhotoUrl;
+  final String carType;
+  final String rating;
+  final int? etaSecs;
+  final double baseFare;
+  final double counterFare;
+  final String pickup;
+  final String dropoff;
+  final VoidCallback onAccept;
+  final VoidCallback onReject;
+
+  const _CounterFareCard({
+    required this.remainingSecs,
+    required this.driverName,
+    required this.driverPhotoUrl,
+    required this.carType,
+    required this.rating,
+    required this.etaSecs,
+    required this.baseFare,
+    required this.counterFare,
+    required this.pickup,
+    required this.dropoff,
+    required this.onAccept,
+    required this.onReject,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final etaText = etaSecs == null ? null : '${(etaSecs! / 60).ceil()} min';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('From: $pickup'),
-          Text('To:   $dropoff'),
-          const SizedBox(height: 8),
-          Text('Your fare:  \$${baseFare.toStringAsFixed(2)}'),
-          Text(
-            'Counter:   \$${cf.toStringAsFixed(2)}',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+          // Header row: avatar + name + ride type + ETA chip + countdown
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundImage: (driverPhotoUrl.isNotEmpty)
+                    ? NetworkImage(driverPhotoUrl)
+                    : null,
+                child: driverPhotoUrl.isEmpty ? const Icon(Icons.person) : null,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      driverName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        if (carType.isNotEmpty)
+                          Text(
+                            carType,
+                            style: TextStyle(
+                              color: cs.onSurfaceVariant,
+                              fontSize: 12,
+                            ),
+                          ),
+                        if (carType.isNotEmpty && rating.isNotEmpty)
+                          const SizedBox(width: 8),
+                        if (rating.isNotEmpty)
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.star,
+                                size: 14,
+                                color: Colors.amber,
+                              ),
+                              const SizedBox(width: 2),
+                              Text(
+                                rating,
+                                style: TextStyle(
+                                  color: cs.onSurfaceVariant,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (etaText != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: cs.primary.withValues(alpha: 0.12 * 255),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    etaText,
+                    style: TextStyle(
+                      color: cs.primary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${remainingSecs}s',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+          // Big price like Uber tile
+          Center(
+            child: Column(
+              children: [
+                Text(
+                  '\$${counterFare.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Your fare: \$${baseFare.toStringAsFixed(2)}',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+          // Two bullet rows (pickup & dropoff), optional like the sample
+          _bulletRow(
+            context,
+            icon: Icons.my_location_rounded,
+            title: pickup,
+            subtitle: 'Pickup',
           ),
           const SizedBox(height: 6),
-          const Text(
-            'If you don’t respond, this counter will auto-expire.',
-            style: TextStyle(fontSize: 12, color: Colors.black54),
+          _bulletRow(
+            context,
+            icon: Icons.place_rounded,
+            title: dropoff,
+            subtitle: 'Destination',
+          ),
+
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onReject,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(46),
+                  ),
+                  child: const Text('Decline'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed: onAccept,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(46),
+                  ),
+                  child: const Text('Accept'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(riderDashboardProvider.notifier)
-                  .handleCounterFare(widget.ride['id'], cf, false);
+    );
+  }
 
-              showCounterFareRejected(rideId: widget.ride['id']);
-
-              if (context.mounted) {
-                Navigator.of(context, rootNavigator: true).pop();
-              }
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text('Error: $e')));
-              }
-            }
-          },
-          style: TextButton.styleFrom(foregroundColor: Colors.red),
-          child: const Text('Reject'),
-        ),
-
-        FilledButton(
-          onPressed: () async {
-            try {
-              await ref
-                  .read(riderDashboardProvider.notifier)
-                  .handleCounterFare(widget.ride['id'], cf, true);
-
-              showCounterFareAccepted(rideId: widget.ride['id']);
-
-              if (context.mounted) {
-                Navigator.of(context, rootNavigator: true).pop();
-              }
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text('Error: $e')));
-              }
-            }
-          },
-          child: const Text('Accept'),
+  Widget _bulletRow(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: cs.primary),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
         ),
       ],
     );

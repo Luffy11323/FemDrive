@@ -1,4 +1,6 @@
+import 'package:femdrive/location/location_service.dart';
 import 'package:femdrive/past_rides_page.dart';
+import 'package:femdrive/rider/rider_notification_service.dart';
 import 'package:femdrive/rider/rider_profile_page.dart';
 import 'package:femdrive/shared/notifications.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -29,7 +31,22 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  debugPrint("🔔 Background Notification: ${message.messageId}");
+  debugPrint("🔔 BG Notification: ${message.messageId}, data=${message.data}");
+
+  final data = message.data;
+  final action = data['action'];
+  final rideId = data['rideId'];
+
+  if (action == 'NEW_REQUEST') {
+    // 🔹 Driver: notified of nearby ride request
+    debugPrint("📩 Driver BG NEW_REQUEST for ride $rideId");
+    // Show local notification
+    await RiderNotificationService.instance.show(message);
+  } else if (action == 'COUNTER_FARE') {
+    // 🔹 Rider: notified of driver counter offer
+    debugPrint("📩 Rider BG COUNTER_FARE for ride $rideId");
+    await RiderNotificationService.instance.show(message);
+  }
 }
 
 void main() async {
@@ -105,11 +122,21 @@ Future<void> _setupFcmAndToken() async {
 
   // F) Optional: keep your SnackBar preview (or remove—your notifications.dart will show proper sounds)
   FirebaseMessaging.onMessage.listen((msg) {
-    final notif = msg.notification;
-    if (notif != null) {
-      debugPrint('📨 FG msg: ${notif.title} — ${notif.body}');
-      // Lightweight preview; your notifications.dart will also play channel sounds.
-      // You can remove this SnackBar if it feels duplicate.
+    final data = msg.data;
+    final action = data['action'];
+    final rideId = data['rideId'];
+
+    if (action == 'NEW_REQUEST') {
+      debugPrint("📨 FG Driver NEW_REQUEST: $rideId");
+      RiderNotificationService.instance.show(msg);
+    } else if (action == 'COUNTER_FARE') {
+      debugPrint("📨 FG Rider COUNTER_FARE: $rideId");
+      RiderNotificationService.instance.show(msg);
+    } else {
+      final notif = msg.notification;
+      if (notif != null) {
+        debugPrint('📨 FG msg: ${notif.title} — ${notif.body}');
+      }
     }
   });
 
@@ -151,6 +178,8 @@ Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
       '/driver-ride-details',
       arguments: rideId,
     );
+  } else if (action == 'COUNTER_FARE') {
+    navigatorKey.currentState?.pushNamed('/dashboard', arguments: rideId);
   } else if (action == 'RIDER_STATUS') {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
@@ -454,8 +483,24 @@ class InitialScreen extends ConsumerWidget {
                   });
                   return const LoginPage();
                 }
+
+                // ✅ Initialize background geolocation once driver logs in
+                final driverId = user.uid;
+                WidgetsBinding.instance.addPostFrameCallback((_) async {
+                  try {
+                    await LocationService().initBackgroundTracking(driverId);
+                    await LocationService().startBackground();
+                    debugPrint(
+                      "🚀 Background tracking initialized for driver $driverId",
+                    );
+                  } catch (e) {
+                    debugPrint("❗ Failed to init background tracking: $e");
+                  }
+                });
+
                 debugPrint("🔐 Redirecting to DriverDashboard");
                 return const DriverDashboard();
+
               case 'rider':
                 debugPrint("🔐 Redirecting to RiderDashboard");
                 return const RiderDashboard();

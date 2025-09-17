@@ -13,7 +13,7 @@ import 'rider_services.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseRiderBackgroundHandler(RemoteMessage message) async {
   await RiderNotificationService.instance.initialize();
-  await RiderNotificationService.instance._show(message);
+  await RiderNotificationService.instance.show(message);
 }
 
 class RiderNotificationService {
@@ -47,7 +47,7 @@ class RiderNotificationService {
     }
 
     FirebaseMessaging.onMessage.listen((msg) {
-      _show(msg);
+      show(msg);
       _handleInAppUI(msg);
     });
 
@@ -56,7 +56,7 @@ class RiderNotificationService {
     });
   }
 
-  Future<void> _show(RemoteMessage msg) async {
+  Future<void> show(RemoteMessage msg) async {
     final notif = msg.notification;
     if (notif == null) return;
 
@@ -103,7 +103,9 @@ class RiderNotificationService {
       final message = switch (status) {
         'pending' => 'Ride requested. Waiting for driver...',
         'accepted' => 'Driver accepted your ride!',
+        'driver_arrived' => 'Your driver has arrived.',
         'in_progress' => 'Your ride is now in progress.',
+        'onTrip' => 'Your ride is now in progress.',
         'completed' => 'Your ride is completed.',
         'cancelled' => 'Your ride was cancelled.',
         _ => 'Ride status updated.',
