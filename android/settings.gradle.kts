@@ -10,6 +10,7 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
+        // plugin resolution repos
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -17,21 +18,25 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
+    // Keep FAIL_ON_PROJECT_REPOS to centralize repo configuration and avoid surprises.
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+
     repositories {
+        // Standard Android repos
         google()
         mavenCentral()
 
-        // TransistorSoft native AARs
+        // TransistorSoft native AARs required by flutter_background_geolocation / background_fetch
+        // (This hosts tsbackgroundfetch, tslocationmanager artifacts.)
         maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+
         // Gradle plugin repo (sometimes required)
         maven { url = uri("https://plugins.gradle.org/m2/") }
 
-        // Flutter storage (ensure plugin resolution)
+        // Flutter plugin artifact mirror (important for some Flutter plugin AARs)
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
-
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
