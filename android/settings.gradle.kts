@@ -1,4 +1,3 @@
-// android/settings.gradle.kts
 pluginManagement {
     val flutterSdkPath = run {
         val properties = java.util.Properties()
@@ -20,6 +19,7 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+
     repositories {
         google()
         mavenCentral()
@@ -37,3 +37,5 @@ plugins {
 }
 
 include(":app")
+include(":flutter_background_geolocation")
+include(":background_fetch")

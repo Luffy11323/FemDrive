@@ -1,4 +1,3 @@
-// android/build.gradle.kts (Project-level)
 import com.android.build.gradle.LibraryExtension
 import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
@@ -46,6 +45,9 @@ allprojects {
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
-        // Removed: maven { url = uri("${project(':background_fetch').projectDir}/libs") }
+        // [required] For flutter_background_geolocation
+        maven { url = uri("${project(":flutter_background_geolocation").projectDir}/libs") }
+        // [required] For background_fetch (dependency of flutter_background_geolocation)
+        maven { url = uri("${project(":background_fetch").projectDir}/libs") }
     }
 }
