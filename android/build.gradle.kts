@@ -2,30 +2,27 @@ import com.android.build.gradle.LibraryExtension
 import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
 
-/*
- Project-level Gradle (Kotlin DSL)
- - Keeps buildscript repositories so AGP/Kotlin/google-services classpath can be resolved.
- - Adds TransistorSoft AAR maven repo for flutter_background_geolocation / background_fetch.
-*/
-
 buildscript {
+    // ensure classpath dependencies (AGP/Kotlin/google-services) resolve
     repositories {
-        // Needed to resolve Android Gradle Plugin / Kotlin / google-services classpath
         google()
         mavenCentral()
+        mavenLocal()
 
         // TransistorSoft native AARs required by flutter_background_geolocation / background_fetch
         maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
 
-        // Gradle plugin portal sometimes required
-        maven { url = uri("https://plugins.gradle.org/m2/") }
+        // JitPack (GitHub-hosted libs)
+        maven { url = uri("https://jitpack.io") }
 
-        // Flutter plugin artifact mirror (helps plugin AAR resolution)
+        // Flutter plugin AAR mirror
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+
+        // Gradle plugin portal (rarely needed)
+        maven { url = uri("https://plugins.gradle.org/m2/") }
     }
 
     dependencies {
-        // Match versions to your Flutter/AGP compatibility
         classpath("com.android.tools.build:gradle:8.4.2")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
         classpath("com.google.gms:google-services:4.4.2")
@@ -34,27 +31,27 @@ buildscript {
 
 allprojects {
     repositories {
-        // Standard repos
         google()
         mavenCentral()
-
-        // Optional local Maven repo
         mavenLocal()
 
-        // TransistorSoft native AARs (important)
+        // TransistorSoft native AARs
         maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
 
-        // Gradle plugin repo (sometimes required for some plugins)
-        maven { url = uri("https://plugins.gradle.org/m2/") }
+        // JitPack for GitHub-hosted artifacts (flutter_js, ucrop etc)
+        maven { url = uri("https://jitpack.io") }
 
         // Flutter plugin artifact mirror
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+
+        // Gradle plugin repo
+        maven { url = uri("https://plugins.gradle.org/m2/") }
     }
 }
 
 /**
  * Optional: relocate build/ out of android/ to keep repo cleaner.
- * Remove or keep as you prefer.
+ * Keep this if you were already using it.
  */
 val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
 rootProject.layout.buildDirectory.value(newBuildDir)
@@ -65,7 +62,7 @@ subprojects {
 }
 
 /**
- * Ensure Android library subprojects have compileSdk/minSdk set.
+ * Ensure Android library subprojects (Flutter plugins) have explicit compileSdk/minSdk.
  */
 subprojects {
     plugins.withId("com.android.library") {
@@ -74,7 +71,6 @@ subprojects {
             defaultConfig {
                 minSdk = 21
             }
-            // Optional pinned NDK version if you need one
             ndkVersion = "27.0.12077973"
         }
     }
