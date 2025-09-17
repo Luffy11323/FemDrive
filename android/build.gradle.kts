@@ -1,4 +1,5 @@
-// android/build.gradle.kts (project-level)
+// android/build.gradle.kts (Project-level)
+
 import com.android.build.gradle.LibraryExtension
 import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
@@ -51,6 +52,19 @@ subprojects {
     }
 }
 
+// Clean task to remove old build artifacts
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+
+        // Add the local repository for the background_fetch library
+        maven { url = uri("${project(':background_fetch').projectDir}/libs") }
+    }
 }
