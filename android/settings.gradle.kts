@@ -1,5 +1,4 @@
 // android/settings.gradle.kts
-
 pluginManagement {
     val flutterSdkPath = run {
         val properties = java.util.Properties()
@@ -12,31 +11,20 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
-        // pluginManagement must include google() and mavenCentral() so classpath deps resolve
         google()
         mavenCentral()
         gradlePluginPortal()
-        // Flutter plugin mirror
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
 
 dependencyResolutionManagement {
-    // Let settings repositories be preferred so all plugin and module resolution uses the same sources
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-
     repositories {
-        // Core repos
         google()
         mavenCentral()
-
-        // Flutter plugin artifact mirror (important for some Flutter plugin AARs)
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
-
-        // JitPack (some Android libs are hosted here, e.g. ucrop or other GitHub libs)
         maven { url = uri("https://jitpack.io") }
-
-        // Gradle plugins (some artifacts might be published here)
         maven { url = uri("https://plugins.gradle.org/m2/") }
     }
 }
