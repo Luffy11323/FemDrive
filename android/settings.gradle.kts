@@ -18,8 +18,8 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    // Keep FAIL_ON_PROJECT_REPOS to centralize repo configuration and avoid surprises.
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // Choose PREFER_SETTINGS to avoid the "FAIL_ON_PROJECT_REPOS" conflict
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
 
     repositories {
         // Standard Android repos
@@ -27,7 +27,6 @@ dependencyResolutionManagement {
         mavenCentral()
 
         // TransistorSoft native AARs required by flutter_background_geolocation / background_fetch
-        // (This hosts tsbackgroundfetch, tslocationmanager artifacts.)
         maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
 
         // Gradle plugin repo (sometimes required)

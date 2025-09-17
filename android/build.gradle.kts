@@ -3,8 +3,21 @@ import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
 
 buildscript {
-    // NOTE: repository resolution is centralized in settings.gradle.kts (dependencyResolutionManagement)
-    // Do not declare repositories here when using RepositoriesMode.FAIL_ON_PROJECT_REPOS.
+    // repositories here so classpath plugins (AGP, Kotlin, google-services) can be resolved reliably
+    repositories {
+        google()
+        mavenCentral()
+
+        // TransistorSoft native AARs required by flutter_background_geolocation / background_fetch
+        maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+
+        // Gradle plugin portal (sometimes needed)
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+
+        // Flutter plugin artifact mirror
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+    }
+
     dependencies {
         // Android Gradle Plugin
         classpath("com.android.tools.build:gradle:8.4.2")
@@ -16,7 +29,19 @@ buildscript {
 }
 
 allprojects {
-    // Intentionally left blank for repositories — settings.gradle.kts controls repositories centrally.
+    repositories {
+        google()
+        mavenCentral()
+
+        // TransistorSoft native AARs
+        maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+
+        // Gradle plugin repo
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+
+        // Flutter's plugin mirror (important for some Flutter plugin AARs)
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+    }
 }
 
 /**
