@@ -698,12 +698,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         );
       }
 
-      // Optional: if completed/cancelled, close details and reset
-      if (status == RideStatus.completed || status == RideStatus.cancelled) {
-        _detailsPushed = false;
-      }
       if (status == RideStatus.completed || status == RideStatus.cancelled) {
         _loc.setActiveRide(null);
+        _detailsPushed = false;
       }
     });
   }
@@ -713,7 +710,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     _connSub.cancel();
     _mapController?.dispose();
     _liveRideSub?.cancel(); // <— NEW
-    _loc.goOffline();
     _posSub?.cancel();
     super.dispose();
   }
