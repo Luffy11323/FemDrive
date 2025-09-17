@@ -650,6 +650,22 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
       );
     });
+    _initInitialPosition();
+  }
+
+  Future<void> _initInitialPosition() async {
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      final cur = last ?? await Geolocator.getCurrentPosition();
+      if (mounted) {
+        setState(() => _currentPosition = cur);
+        debugPrint(
+          '[DriverMapWidget] initial position set: ${cur.latitude},${cur.longitude}',
+        );
+      }
+    } catch (e) {
+      debugPrint('[DriverMapWidget] initial position failed: $e');
+    }
   }
 
   void _attachLiveRide(String rideId) {

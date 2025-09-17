@@ -8,13 +8,19 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+
+        // TransistorSoft native AARs (required by flutter_background_geolocation / background_fetch)
+        maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+
+        // Gradle Plugin Portal sometimes required for plugin resolution
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+
+        // Flutter plugin artifact mirror
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
     dependencies {
-        // Android Gradle Plugin
         classpath("com.android.tools.build:gradle:8.4.2")
-        // Kotlin
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
-        // Google Services (Firebase)
         classpath("com.google.gms:google-services:4.4.2")
     }
 }
@@ -23,8 +29,19 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+
+        // TransistorSoft native AARs
+        maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+
+        // Gradle plugin repo
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+
+        // Flutter's plugin mirror (important for some Flutter plugin AARs)
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
+
+
 
 /**
  * Optional: relocate build/ out of android/ to keep repo cleaner.

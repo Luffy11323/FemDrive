@@ -16,6 +16,23 @@ pluginManagement {
     }
 }
 
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+
+        // TransistorSoft native AARs
+        maven { url = uri("https://s3.amazonaws.com/transistorsoft-maven") }
+        // Gradle plugin repo (sometimes required)
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+
+        // Flutter storage (ensure plugin resolution)
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+    }
+}
+
+
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.7.3" apply false
