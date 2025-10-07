@@ -4,9 +4,7 @@ import 'package:femdrive/main.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
-import 'rider_dashboard_controller.dart';
 // ignore: unused_import
 import 'rider_services.dart';
 
@@ -87,9 +85,9 @@ class RiderNotificationService {
 
   void _handleInAppUI(RemoteMessage msg) {
     final screen = msg.data['screen'];
-    final rideId = msg.data['rideId'];
+    final _ = msg.data['rideId'];
     final status = msg.data['status'];
-    final counterFare = msg.data['counterFare'] != null
+    final _ = msg.data['counterFare'] != null
         ? double.tryParse(msg.data['counterFare'])
         : null;
 
@@ -118,40 +116,6 @@ class RiderNotificationService {
           duration: const Duration(seconds: 3),
         ),
       );
-    } else if (screen == 'counter_fare' &&
-        rideId != null &&
-        counterFare != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        showDialog(
-          context: context,
-          builder: (ctx) => CounterFareDialog(
-            rideId: rideId,
-            counterFare: counterFare,
-            onAccept: () {
-              try {
-                ProviderScope.containerOf(context)
-                    .read(riderDashboardProvider.notifier)
-                    .handleCounterFare(rideId, counterFare, true);
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to accept counter-fare: $e')),
-                );
-              }
-            },
-            onReject: () {
-              try {
-                ProviderScope.containerOf(context)
-                    .read(riderDashboardProvider.notifier)
-                    .handleCounterFare(rideId, counterFare, false);
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to reject counter-fare: $e')),
-                );
-              }
-            },
-          ),
-        );
-      });
     }
   }
 
@@ -170,40 +134,5 @@ class RiderNotificationService {
       _logger.e('Failed to get FCM token: $e');
       return null;
     }
-  }
-}
-
-class CounterFareDialog extends StatelessWidget {
-  final String rideId;
-  final double counterFare;
-  final VoidCallback onAccept;
-  final VoidCallback onReject;
-
-  const CounterFareDialog({
-    super.key,
-    required this.rideId,
-    required this.counterFare,
-    required this.onAccept,
-    required this.onReject,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Driver Counter Offer'),
-      content: Text(
-        'The driver has offered a fare of \$${counterFare.toStringAsFixed(2)}. Accept?',
-      ),
-      actions: [
-        TextButton(onPressed: onReject, child: const Text('Reject')),
-        ElevatedButton(
-          onPressed: onAccept,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.primary,
-          ),
-          child: const Text('Accept'),
-        ),
-      ],
-    );
   }
 }

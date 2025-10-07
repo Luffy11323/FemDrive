@@ -38,16 +38,3 @@ subprojects {
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url = uri("https://jitpack.io") }
-        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
-        // [required] For flutter_background_geolocation
-        maven { url = uri("${project(":flutter_background_geolocation").projectDir}/libs") }
-        // [required] For background_fetch (dependency of flutter_background_geolocation)
-        maven { url = uri("${project(":background_fetch").projectDir}/libs") }
-    }
-}

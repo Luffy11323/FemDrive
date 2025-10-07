@@ -105,7 +105,7 @@ class OfferType {
   static const rideCompleted = 'ride_completed';
 }
 
-const _darkGuidanceStyle = '''
+const darkGuidanceStyle = '''
 [
   // General map geometry background
   {
@@ -1586,7 +1586,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
             if (_polylineRemaining != null) _polylineRemaining!,
             if (_polylineCovered != null) _polylineCovered!,
           },
-          style: _darkGuidanceStyle,
+          style: darkGuidanceStyle,
           onMapCreated: (controller) async {
             _mapController = controller;
             widget.onMapCreated(controller);
