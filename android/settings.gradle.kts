@@ -18,7 +18,8 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    // CHANGE THIS LINE - Allow project-level repositories
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)  // Changed from PREFER_SETTINGS
 
     repositories {
         google()
@@ -26,7 +27,6 @@ dependencyResolutionManagement {
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
         maven { url = uri("https://jitpack.io") }
         maven { url = uri("https://plugins.gradle.org/m2/") }
-        // ADD THIS LINE - TransistorSoft repository for background plugins
         maven { url = uri("https://dl.cloudsmith.io/public/transistorsoft/android/maven/") }
     }
 }
