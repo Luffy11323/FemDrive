@@ -64,19 +64,3 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-storage")
 }
-
-// ADD THIS SECTION - Force plugin repositories to be ignored
-configurations.all {
-    resolutionStrategy {
-        // Prevent plugins from using dynamic versions (+)
-        eachDependency {
-            if (requested.group == "com.transistorsoft") {
-                // These versions should exist in the plugin's bundled libs
-                when (requested.name) {
-                    "tsbackgroundfetch" -> useVersion("0.7.3")
-                    "tslocationmanager" -> useVersion("3.18.3")
-                }
-            }
-        }
-    }
-}
