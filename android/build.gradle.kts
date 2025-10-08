@@ -34,7 +34,15 @@ subprojects {
         }
     }
 }
-
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+        maven { url = uri("C:/Users/hp/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_background_geolocation-4.14.3/android/libs/com/transistorsoft/tslocationmanager-v21/3.5.4") }
+        maven { url = uri("C:\Users\hp\AppData\Local\Pub\Cache\hosted\pub.dev\background_fetch-1.2.1\android\libs\com\transistorsoft\tsbackgroundfetch\1.0.2") }
+    }
+}
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

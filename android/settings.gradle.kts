@@ -27,7 +27,6 @@ dependencyResolutionManagement {
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
         maven { url = uri("https://jitpack.io") }
         maven { url = uri("https://plugins.gradle.org/m2/") }
-        maven { url = uri("https://dl.cloudsmith.io/public/transistorsoft/android/maven/") }
     }
 }
 
