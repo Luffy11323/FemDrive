@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:workmanager/workmanager.dart';
+import 'package:fl_location/fl_location.dart' as fl;
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:femdrive/driver/driver_services.dart';
 
 class LocationService {
-  StreamSubscription<Position>? _positionSub;
+  StreamSubscription<geo.Position>? _positionSub;
   final _logger = Logger();
 
   String? _driverId;
@@ -20,26 +22,26 @@ class LocationService {
     final hasPermission = await _checkPermission();
     if (!hasPermission) throw Exception('Location permission denied');
 
-    _positionSub =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
-          ),
-        ).listen(
-          (position) {
-            _logger.i(
-              "📍 FG Tracking $role for ride $rideId: ${position.latitude}, ${position.longitude}",
-            );
-            _updateLiveLocation(role, rideId, position);
-            _logLocation(role, rideId, position);
-          },
-          onError: (e) {
-            _logger.e("Location tracking error: $e");
-          },
+    _positionSub = geo.Geolocator.getPositionStream(
+      locationSettings: const geo.LocationSettings(
+        accuracy: geo.LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen(
+      (position) {
+        _logger.i(
+          "📍 FG Tracking $role for ride $rideId: ${position.latitude}, ${position.longitude}",
         );
+        _updateLiveLocation(role, rideId, position);
+        _logLocation(role, rideId, position);
+      },
+      onError: (e) {
+        _logger.e("Location tracking error: $e");
+      },
+    );
   }
 
+  /// UNCHANGED: Same parameters as original
   Future<void> stop(String role, String rideId) async {
     await _positionSub?.cancel();
     _positionSub = null;
@@ -58,74 +60,152 @@ class LocationService {
       _logger.w("Cleanup failed: $e");
     }
 
-    // 🆕 Stop background task (instead of bg.BackgroundGeolocation.stop)
     if (_isTracking) {
-      await Workmanager().cancelAll();
-      _isTracking = false;
-      _logger.i("🛑 Background tracking stopped");
+      await _stopBackgroundService();
     }
   }
 
-  /// 🔹 Initialize background tracking (once, at app startup or driver login)
+  /// 🔹 Initialize background geolocation (once, at app startup or driver login)
   Future<void> initBackgroundTracking(String driverId) async {
     if (_bgInitialized) return;
     _driverId = driverId;
 
-    // 🆕 Initialize Workmanager background job handler
-    await Workmanager().initialize(
-      callbackDispatcher,
-      isInDebugMode: false,
+    // Save driverId to SharedPreferences for foreground service access
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('driverId', driverId);
+
+    // Initialize foreground task
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'femdrive_location',
+        channelName: 'FemDrive Location Service',
+        channelDescription: 'Tracks driver location for rides and availability',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: true,
+        playSound: false,
+      ),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(30000), // Fallback interval
+        autoRunOnBoot: true,
+        autoRunOnMyPackageReplaced: true,
+        allowWakeLock: true,
+        allowWifiLock: true,
+      ),
     );
 
     _bgInitialized = true;
     _logger.i("✅ Background tracking initialized for driver $driverId");
   }
 
-  /// 🆕 Background tracking using WorkManager
+  /// UNCHANGED: Same parameters as original (no parameters)
   Future<void> startBackground() async {
-    if (_isTracking || _driverId == null) return;
+    if (_isTracking) return;
 
-    await Workmanager().registerPeriodicTask(
-      "driverTrackingTask",
-      "updateLocationTask",
-      frequency: const Duration(minutes: 15), // Android’s minimum interval
-      existingWorkPolicy: ExistingWorkPolicy.keep,
-      inputData: {"driverId": _driverId!},
-    );
+    final hasPermission = await _checkPermission();
+    if (!hasPermission) {
+      _logger.e("Cannot start background tracking: permission denied");
+      return;
+    }
 
-    _isTracking = true;
-    _logger.i("🚀 Background tracking started via WorkManager");
+    try {
+      // Determine interval based on ride status (5s during ride, 30s idle)
+      final interval = _activeRideId != null ? 5000 : 30000;
+
+      // Re-initialize with appropriate interval
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'femdrive_location',
+          channelName: 'FemDrive Location Service',
+          channelDescription: 'Tracks driver location for rides and availability',
+          channelImportance: NotificationChannelImportance.LOW,
+          priority: NotificationPriority.LOW,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: true,
+          playSound: false,
+        ),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          eventAction: ForegroundTaskEventAction.repeat(interval),
+          autoRunOnBoot: true,
+          autoRunOnMyPackageReplaced: true,
+          allowWakeLock: true,
+          allowWifiLock: true,
+        ),
+      );
+
+      final notificationText = _activeRideId != null
+          ? 'On active ride'
+          : 'Available for rides';
+
+      // Generate dynamic serviceId based on driverId
+      final prefs = await SharedPreferences.getInstance();
+      final driverId = prefs.getString('driverId') ?? 'default_driver';
+      final serviceId = driverId.hashCode.abs();
+
+      final result = await FlutterForegroundTask.startService(
+        serviceId: serviceId,
+        notificationTitle: 'FemDrive Active',
+        notificationText: notificationText,
+        callback: startLocationCallback,
+      );
+
+      // Check if result is ServiceRequestSuccess type
+      if (result is ServiceRequestSuccess) {
+        _isTracking = true;
+        _logger.i("🚀 Background geolocation started for driver $driverId");
+      } else if (result is ServiceRequestFailure) {
+        _logger.e("Failed to start background service: ${result.error}");
+      }
+    } catch (e) {
+      _logger.e("Error starting background service: $e");
+    }
   }
 
+  /// UNCHANGED: Same parameters as original
   Future<void> setActiveRide(String? rideId) async {
     _activeRideId = rideId;
     _logger.i("🎯 Active ride set to: $rideId");
+
+    // Save to SharedPreferences for foreground service
+    final prefs = await SharedPreferences.getInstance();
+    if (rideId != null) {
+      await prefs.setString('activeRideId', rideId);
+    } else {
+      await prefs.remove('activeRideId');
+    }
+
+    // Restart service with new interval if already tracking
+    if (_isTracking) {
+      await _stopBackgroundService();
+      await startBackground();
+    }
   }
 
-  // 🔹 Presence writer: always online/offline for nearby markers
-  Future<void> _updatePresence(double lat, double lng, int ts) async {
-    if (_driverId == null) return;
-    final ref = FirebaseDatabase.instance.ref('drivers_online/$_driverId');
-    await ref.set({'lat': lat, 'lng': lng, 'updatedAt': ts});
-    ref.onDisconnect().remove();
-  }
+  // 🔹 Internal method to stop background service
+  Future<void> _stopBackgroundService() async {
+    FlutterForegroundTask.stopService();
+    _isTracking = false;
+    _logger.i("🛑 Background geolocation stopped");
 
-  // 🔹 Active ride node: live tracking for a specific ride
-  Future<void> _updateRide(
-    double lat,
-    double lng,
-    int ts,
-    String rideId,
-  ) async {
-    final ref = FirebaseDatabase.instance.ref('ridesLive/$rideId');
-    await ref.update({'driverLat': lat, 'driverLng': lng, 'driverTs': ts});
+    // Clear driver presence
+    if (_driverId != null) {
+      try {
+        final ref = FirebaseDatabase.instance.ref('drivers_online/$_driverId');
+        await ref.remove();
+      } catch (e) {
+        _logger.w("Failed to clear driver presence: $e");
+      }
+    }
   }
 
   /// 🔹 Foreground (Geolocator) helpers
   Future<void> _updateLiveLocation(
     String role,
     String rideId,
-    Position pos,
+    geo.Position pos,
   ) async {
     try {
       final ref = FirebaseDatabase.instance.ref(
@@ -141,67 +221,130 @@ class LocationService {
     }
   }
 
-  Future<void> _logLocation(String role, String rideId, Position pos) async {
+  Future<void> _logLocation(String role, String rideId, geo.Position pos) async {
     try {
       await FirebaseFirestore.instance
           .collection(AppPaths.ridesCollection)
           .doc(rideId)
           .collection('locations')
           .add({
-            'role': role,
-            AppFields.lat: pos.latitude,
-            AppFields.lng: pos.longitude,
-            AppFields.timestamp: FieldValue.serverTimestamp(),
-          });
+        'role': role,
+        AppFields.lat: pos.latitude,
+        AppFields.lng: pos.longitude,
+        AppFields.timestamp: FieldValue.serverTimestamp(),
+      });
     } catch (e) {
       _logger.e("Firestore log failed: $e");
     }
   }
 
   Future<bool> _checkPermission({Function()? onPermissionDenied}) async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      await Geolocator.openLocationSettings();
+      await geo.Geolocator.openLocationSettings();
       return false;
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
+    geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+    if (permission == geo.LocationPermission.denied) {
+      permission = await geo.Geolocator.requestPermission();
+      if (permission == geo.LocationPermission.denied) {
         onPermissionDenied?.call();
         return false;
       }
     }
-    if (permission == LocationPermission.deniedForever) {
-      await Geolocator.openAppSettings();
+    if (permission == geo.LocationPermission.deniedForever) {
+      await geo.Geolocator.openAppSettings();
       return false;
     }
     return true;
   }
 }
 
-/// 🧠 Background location logic (runs every 15 minutes)
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    final driverId = inputData?['driverId'];
-    if (driverId == null) return Future.value(true);
+/// 🧠 Foreground service callback (runs in background isolate)
+@pragma('vm:entry-point')
+void startLocationCallback() {
+  FlutterForegroundTask.setTaskHandler(LocationTaskHandler());
+}
 
-    try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+/// 🧠 Task handler for background location updates
+class LocationTaskHandler extends TaskHandler {
+  final _logger = Logger();
+  StreamSubscription<fl.Location>? _locationSub;
 
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = FirebaseDatabase.instance.ref('drivers_online/$driverId');
-      await ref.set({'lat': pos.latitude, 'lng': pos.longitude, 'updatedAt': ts});
-      ref.onDisconnect().remove();
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _logger.i("🚀 Foreground location service started");
 
-      print("📍 BG Location update: ${pos.latitude}, ${pos.longitude} ($driverId)");
-    } catch (e) {
-      print("⚠️ BG update failed: $e");
-    }
+    // Subscribe to motion-based stream (triggers on movement >10m)
+    _locationSub = fl.FlLocation.getLocationStream(
+      distanceFilter: 10,
+      accuracy: fl.LocationAccuracy.high,
+    ).listen((location) async {
+      try {
+        // Get stored driver and ride info
+        final prefs = await SharedPreferences.getInstance();
+        final driverId = prefs.getString('driverId');
+        final activeRideId = prefs.getString('activeRideId');
 
-    return Future.value(true);
-  });
+        if (driverId == null) {
+          _logger.w("No driverId found, skipping location update");
+          return;
+        }
+
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        final lat = location.latitude;
+        final lng = location.longitude;
+
+        _logger.i("📍 BG Location update: $lat,$lng");
+
+        // Update driver presence (always)
+        final refPresence = FirebaseDatabase.instance.ref('drivers_online/$driverId');
+        await refPresence.set({'lat': lat, 'lng': lng, 'updatedAt': ts});
+        refPresence.onDisconnect().remove();
+
+        // Update active ride if exists
+        if (activeRideId != null && activeRideId.isNotEmpty) {
+          final refRide = FirebaseDatabase.instance.ref('ridesLive/$activeRideId');
+          await refRide.update({'driverLat': lat, 'driverLng': lng, 'driverTs': ts});
+        }
+
+        // Log to Firestore for audit trail
+        await FirebaseFirestore.instance
+            .collection('drivers')
+            .doc(driverId)
+            .collection('bg_locations')
+            .add({
+          'lat': lat,
+          'lng': lng,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
+        // Update notification
+        final notificationText = activeRideId != null
+            ? 'On active ride • ${DateTime.now().toString().substring(11, 19)}'
+            : 'Available • ${DateTime.now().toString().substring(11, 19)}';
+
+        FlutterForegroundTask.updateService(
+          notificationTitle: 'FemDrive Active',
+          notificationText: notificationText,
+        );
+      } catch (e) {
+        _logger.e("⚠️ Background location update failed: $e");
+      }
+    });
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) async {
+    // Fallback: Minimal check every 30s if stream is idle
+    _logger.d("Fallback repeat event triggered (stream should handle updates)");
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool byAppReboot) async {
+    await _locationSub?.cancel();
+    _locationSub = null;
+    _logger.i("🛑 Foreground location service stopped");
+  }
 }

@@ -5,11 +5,13 @@
     <!-- Storage & Media -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="23"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
     <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Network -->
@@ -18,7 +20,6 @@
 
     <!-- Notifications & Foreground Services -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Telephony & Camera -->
@@ -26,7 +27,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
     <!-- Battery & Vibration -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -58,32 +58,23 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-
-            <!-- Flutter's Initial Theme -->
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
-
-            <!-- Launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Foreground Service -->
+        <!-- Foreground Service for flutter_foreground_task -->
         <service
-            android:name="com.YourAppName.YourForegroundService"
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
-        
 
         <!-- Small monochrome notification icon for Firebase messages -->
-        <service
-            android:name="com.transistorsoft.flutter.backgroundgeolocation.HeadlessTask"
-            android:exported="true" />
-
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_stat_femdrive"/>
