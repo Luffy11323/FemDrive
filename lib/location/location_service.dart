@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter_background_geolocation/flutter_background_geolocation.dart'
-    as bg;
 import 'package:geolocator/geolocator.dart';
+import 'package:workmanager/workmanager.dart';
 import 'package:logger/logger.dart';
 import 'package:femdrive/driver/driver_services.dart';
 
@@ -59,50 +58,43 @@ class LocationService {
       _logger.w("Cleanup failed: $e");
     }
 
+    // 🆕 Stop background task (instead of bg.BackgroundGeolocation.stop)
     if (_isTracking) {
-      await bg.BackgroundGeolocation.stop();
+      await Workmanager().cancelAll();
       _isTracking = false;
-      _logger.i("🛑 Background geolocation stopped");
+      _logger.i("🛑 Background tracking stopped");
     }
   }
 
-  /// 🔹 Initialize background geolocation (once, at app startup or driver login)
+  /// 🔹 Initialize background tracking (once, at app startup or driver login)
   Future<void> initBackgroundTracking(String driverId) async {
     if (_bgInitialized) return;
     _driverId = driverId;
 
-    await bg.BackgroundGeolocation.ready(
-      bg.Config(
-        desiredAccuracy: bg.Config.DESIRED_ACCURACY_HIGH,
-        distanceFilter: 10,
-        stopOnTerminate: false, // keep tracking if app is terminated
-        startOnBoot: true, // resume tracking after device reboot
-        debug: false, // set true for dev testing to see system notifications
-        logLevel: bg.Config.LOG_LEVEL_VERBOSE,
-      ),
+    // 🆕 Initialize Workmanager background job handler
+    await Workmanager().initialize(
+      callbackDispatcher,
+      isInDebugMode: false,
     );
 
-    bg.BackgroundGeolocation.onLocation((bg.Location location) {
-      final lat = location.coords.latitude;
-      final lng = location.coords.longitude;
-      final ts = DateTime.now().millisecondsSinceEpoch;
-
-      _logger.i("📍 BG Location update: $lat,$lng");
-
-      _updatePresence(lat, lng, ts);
-      if (_activeRideId != null) {
-        _updateRide(lat, lng, ts, _activeRideId!);
-      }
-    });
-
     _bgInitialized = true;
+    _logger.i("✅ Background tracking initialized for driver $driverId");
   }
 
+  /// 🆕 Background tracking using WorkManager
   Future<void> startBackground() async {
-    if (_isTracking) return;
-    await bg.BackgroundGeolocation.start();
+    if (_isTracking || _driverId == null) return;
+
+    await Workmanager().registerPeriodicTask(
+      "driverTrackingTask",
+      "updateLocationTask",
+      frequency: const Duration(minutes: 15), // Android’s minimum interval
+      existingWorkPolicy: ExistingWorkPolicy.keep,
+      inputData: {"driverId": _driverId!},
+    );
+
     _isTracking = true;
-    _logger.i("🚀 Background geolocation started");
+    _logger.i("🚀 Background tracking started via WorkManager");
   }
 
   Future<void> setActiveRide(String? rideId) async {
@@ -187,4 +179,29 @@ class LocationService {
     }
     return true;
   }
+}
+
+/// 🧠 Background location logic (runs every 15 minutes)
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    final driverId = inputData?['driverId'];
+    if (driverId == null) return Future.value(true);
+
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final ref = FirebaseDatabase.instance.ref('drivers_online/$driverId');
+      await ref.set({'lat': pos.latitude, 'lng': pos.longitude, 'updatedAt': ts});
+      ref.onDisconnect().remove();
+
+      print("📍 BG Location update: ${pos.latitude}, ${pos.longitude} ($driverId)");
+    } catch (e) {
+      print("⚠️ BG update failed: $e");
+    }
+
+    return Future.value(true);
+  });
 }
