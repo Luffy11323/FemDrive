@@ -18,7 +18,6 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
   final _nameController = TextEditingController();
   final _homeController = TextEditingController();
   final _workController = TextEditingController();
-  final _passwordController = TextEditingController();
   bool _isEditing = false;
   String? _localPhotoPath;
   String? _phoneNumber;
@@ -40,7 +39,6 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
     if (user == null) return;
 
     try {
-      // Load user data from local JSON file
       final profileFilePath = await _getProfileFilePath();
       final profileFile = File(profileFilePath);
       if (profileFile.existsSync()) {
@@ -51,19 +49,16 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
           _workController.text = profileData['savedLocations']?['work'] ?? '';
         });
       } else {
-        // Initialize with Firebase Auth displayName if no local file exists
         setState(() {
           _nameController.text = user.displayName ?? '';
         });
       }
 
-      // Load phone number from Firebase Auth (assuming it's stored there)
       setState(() {
         _phoneNumber = user.phoneNumber ?? '';
-        _cnicNumber = ''; // CNIC not stored in Firebase Auth; placeholder
+        _cnicNumber = '';
       });
 
-      // Load local profile photo
       final dir = await getApplicationDocumentsDirectory();
       final photoPath = '${dir.path}/profile_${user.uid}.jpg';
       if (File(photoPath).existsSync()) {
@@ -90,7 +85,6 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // Save the image to the app's documents directory
       final dir = await getApplicationDocumentsDirectory();
       final filePath = '${dir.path}/profile_${user.uid}.jpg';
       final file = File(filePath);
@@ -125,10 +119,8 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
     }
 
     try {
-      // Update Firebase Auth displayName
       await user.updateDisplayName(_nameController.text.trim());
 
-      // Save profile data to local JSON file
       final profileFilePath = await _getProfileFilePath();
       final profileFile = File(profileFilePath);
       final profileData = {
@@ -140,21 +132,8 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
       };
       await profileFile.writeAsString(jsonEncode(profileData));
 
-      // Update password if provided
-      if (_passwordController.text.trim().isNotEmpty) {
-        if (_passwordController.text.trim().length < 6) {
-          // ignore: use_build_context_synchronously
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Password must be at least 6 characters')),
-          );
-          return;
-        }
-        await user.updatePassword(_passwordController.text.trim());
-      }
-
       setState(() {
         _isEditing = false;
-        _passwordController.clear(); // Clear password field after saving
       });
 
       if (mounted) {
@@ -177,7 +156,6 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
     _nameController.dispose();
     _homeController.dispose();
     _workController.dispose();
-    _passwordController.dispose();
     super.dispose();
   }
 
@@ -267,7 +245,7 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                         prefixIcon: const Icon(Icons.phone),
                       ),
-                      enabled: false, // Read-only
+                      enabled: false,
                     ),
                     const SizedBox(height: 16),
                     TextField(
@@ -277,21 +255,8 @@ class _RiderProfilePageState extends ConsumerState<RiderProfilePage> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                         prefixIcon: const Icon(Icons.card_membership),
                       ),
-                      enabled: false, // Read-only
+                      enabled: false,
                     ),
-                    if (_isEditing) ...[
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'New Password (optional)',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                          prefixIcon: const Icon(Icons.lock),
-                        ),
-                        enabled: _isEditing,
-                      ),
-                    ],
                   ],
                 ),
               ),
