@@ -1,3 +1,4 @@
+import 'package:femdrive/driver/profile_page.dart';
 import 'package:femdrive/location/location_service.dart';
 import 'package:femdrive/past_rides_page.dart';
 import 'package:femdrive/rider/rider_notification_service.dart';

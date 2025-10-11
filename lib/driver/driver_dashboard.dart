@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:femdrive/driver/driver_services.dart';
 import 'package:femdrive/driver/driver_ride_details_page.dart';
+import 'package:femdrive/driver/profile_page.dart' as new_profile;
 import 'package:femdrive/shared/emergency_service.dart';
 import 'package:femdrive/shared/notifications.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -25,9 +26,8 @@ class EarningsSummary {
 }
 
 final LocationSettings locationSettings = LocationSettings(
-  accuracy: LocationAccuracy.high, // This replaces desiredAccuracy
-  distanceFilter:
-      0, // Optional: minimum distance (in meters) for location updates
+  accuracy: LocationAccuracy.high,
+  distanceFilter: 0,
 );
 
 final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
@@ -43,12 +43,11 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
     if (v == null) return <PendingRequest>[];
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    const ttlMs = 15 * 1000; // 60s TTL - tweak as needed
+    const ttlMs = 15 * 1000;
 
     final list = <PendingRequest>[];
     v.forEach((rideId, payload) {
       if (payload is! Map) return;
-      // TTL (if your rider wrote timestamp)
       final ts = (payload['timestamp'] as num?)?.toInt();
       if (ts != null && (nowMs - ts) > ttlMs) return;
 
@@ -60,7 +59,6 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
       );
     });
 
-    // Most recent first (if you have a timestamp)
     list.sort((a, b) {
       final at = (a.raw['timestamp'] as num?)?.toInt() ?? 0;
       final bt = (b.raw['timestamp'] as num?)?.toInt() ?? 0;
@@ -70,7 +68,6 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
   });
 });
 
-// === Ride status contract (match driver) ===
 class RideStatus {
   static const pending = 'pending';
   static const searching = 'searching';
@@ -93,7 +90,6 @@ class RideStatus {
 
 final _rtdb = FirebaseDatabase.instance.ref();
 
-/// Driver’s live location — rider map marker
 Stream<LatLng?> driverLocationStream(String driverId) {
   return _rtdb.child('driverLocations/$driverId').onValue.map((e) {
     final v = e.snapshot.value;
@@ -403,139 +399,6 @@ class EarningsPage extends ConsumerWidget {
   }
 }
 
-final driverProfileProvider =
-    StreamProvider<DocumentSnapshot<Map<String, dynamic>>>((ref) async* {
-      final uid = await getDriverUid();
-      if (uid == null) return;
-      yield* _fire.collection('users').doc(uid).snapshots();
-    });
-
-class ProfilePage extends ConsumerStatefulWidget {
-  const ProfilePage({super.key});
-
-  @override
-  ConsumerState<ProfilePage> createState() => _ProfilePageState();
-}
-
-class _ProfilePageState extends ConsumerState<ProfilePage> {
-  final _formKey = GlobalKey<FormState>();
-  late TextEditingController _nameController;
-  late TextEditingController _phoneController;
-  late TextEditingController _vehicleController;
-  bool _isEditing = false;
-  bool _isSaving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController();
-    _phoneController = TextEditingController();
-    _vehicleController = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _vehicleController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final profile = ref.watch(driverProfileProvider);
-    return profile.when(
-      data: (doc) {
-        final data = doc.data() ?? {};
-        if (!_isEditing) {
-          _nameController.text = data[AppFields.username] ?? '';
-          _phoneController.text = data[AppFields.phone] ?? '';
-          _vehicleController.text = data['vehicle'] ?? '';
-        }
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Profile'),
-            actions: [
-              IconButton(
-                icon: Icon(_isEditing ? Icons.save : Icons.edit),
-                onPressed: _isSaving
-                    ? null
-                    : () {
-                        if (_isEditing) {
-                          _saveProfile(doc.id);
-                        } else {
-                          setState(() => _isEditing = true);
-                        }
-                      },
-              ),
-            ],
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                children: [
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(labelText: 'Name'),
-                    enabled: _isEditing,
-                    validator: (value) =>
-                        value?.isEmpty == true ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _phoneController,
-                    decoration: const InputDecoration(labelText: 'Phone'),
-                    enabled: _isEditing,
-                    validator: (value) =>
-                        value?.isEmpty == true ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _vehicleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Vehicle Info',
-                    ),
-                    enabled: _isEditing,
-                  ),
-                  if (_isSaving) const CircularProgressIndicator(),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Failed to load profile: $e')),
-    );
-  }
-
-  Future<void> _saveProfile(String uid) async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _isSaving = true);
-    try {
-      await _fire.collection('users').doc(uid).update({
-        AppFields.username: _nameController.text.trim(),
-        AppFields.phone: _phoneController.text.trim(),
-        'vehicle': _vehicleController.text.trim(),
-      });
-      setState(() => _isEditing = false);
-      ScaffoldMessenger.of(
-        // ignore: use_build_context_synchronously
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Profile updated')));
-    } catch (e) {
-      ScaffoldMessenger.of(
-        // ignore: use_build_context_synchronously
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
-    } finally {
-      setState(() => _isSaving = false);
-    }
-  }
-}
-
 class EmergencyPage extends ConsumerWidget {
   const EmergencyPage({super.key});
 
@@ -595,9 +458,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   late final DriverLocationService _loc;
   StreamSubscription<Position>? _posSub;
 
-  String? _detailsPushedFor; // track last rideId for which we pushed details
-  StreamSubscription? _liveRideSub; // <— NEW
-  bool _detailsPushed = false; // <— NEW
+  String? _detailsPushedFor;
+  StreamSubscription? _liveRideSub;
+  bool _detailsPushed = false;
   String? _liveWatchingRideId;
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
@@ -612,7 +475,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   void initState() {
     super.initState();
     _loc = DriverLocationService();
-    // 1. Internet status listener
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
           results.contains(ConnectivityResult.mobile) ||
@@ -622,7 +484,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       }
     });
 
-    // 2. Driver verification listener
     getDriverUid().then((uid) {
       if (uid == null) return;
       _fire.collection('users').doc(uid).snapshots().listen((snap) async {
@@ -671,9 +532,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   void _attachLiveRide(String rideId) {
     _liveRideSub?.cancel();
     _liveWatchingRideId = rideId;
-    _loc.setActiveRide(
-      rideId,
-    ); // bind writer immediately when we start watching
+    _loc.setActiveRide(rideId);
 
     _detailsPushed = false;
 
@@ -695,7 +554,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           );
         }
       }
-      // Only respond when this ride is assigned to THIS driver (or driverId is not set yet)
       final me = _auth.currentUser?.uid;
       if (driverId.isNotEmpty && me != null && driverId != me) return;
 
@@ -725,7 +583,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   void dispose() {
     _connSub.cancel();
     _mapController?.dispose();
-    _liveRideSub?.cancel(); // <— NEW
+    _liveRideSub?.cancel();
     _posSub?.cancel();
     super.dispose();
   }
@@ -733,7 +591,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   Future<void> _toggleOnline(bool v) async {
     setState(() => _isOnline = v);
     if (v) {
-      await _loc.startOnlineMode(); // no ride yet
+      await _loc.startOnlineMode();
     } else {
       await _loc.goOffline();
       _shownRequestIds.clear();
@@ -744,15 +602,13 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     setState(() => _selectedIndex = index);
   }
 
-  bool _hasAttachedListeners = false; // Add this at the top of your class
+  bool _hasAttachedListeners = false;
 
   @override
   Widget build(BuildContext context) {
-    // 🛡 Ensure ref.listen(...) is called only once
     if (!_hasAttachedListeners) {
       _hasAttachedListeners = true;
 
-      // 2. Watch live ride document
       ref.listen<AsyncValue<DocumentSnapshot?>>(driverDashboardProvider, (
         prev,
         next,
@@ -780,7 +636,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       _buildHomePage(),
       const PastRidesListWidget(),
       const EarningsPage(),
-      const ProfilePage(),
+      const new_profile.ProfilePage(),
       const EmergencyPage(),
     ];
 
@@ -813,8 +669,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
         body: Stack(
           children: [
             pages[_selectedIndex],
-
-            // 🔹 Offer Overlay only on Home tab + when Online
             if (_selectedIndex == 0 && _isOnline)
               Consumer(
                 builder: (context, ref, _) {
@@ -824,7 +678,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                     data: (offers) {
                       if (offers.isEmpty) return const SizedBox.shrink();
 
-                      // Pick the most recent offer (your provider already sorts by timestamp desc)
                       final active = offers.first;
                       if (_shownRequestIds.add(active.rideId)) {
                         showIncomingRide(rideId: active.rideId);
@@ -839,12 +692,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .acceptRide(active.rideId, context: active);
-
-                              // 🔗 bind tracking to this ride
                               _loc.setActiveRide(active.rideId);
                               await _loc.startOnlineMode(rideId: active.rideId);
-
-                              // remove only this popup for this driver
                               final uid =
                                   FirebaseAuth.instance.currentUser?.uid;
                               if (uid != null) {
@@ -854,15 +703,12 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                                     )
                                     .remove();
                               }
-
                               showAccepted(rideId: active.rideId);
                             },
-
                             onDecline: () async {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .declineRide(active.rideId);
-
                               final uid =
                                   FirebaseAuth.instance.currentUser?.uid;
                               if (uid != null) {
@@ -873,12 +719,10 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                                     .remove();
                               }
                             },
-
                             onCounter: (newFare) async {
                               await ref
                                   .read(driverDashboardProvider.notifier)
                                   .proposeCounterFare(active.rideId, newFare);
-
                               final uid =
                                   FirebaseAuth.instance.currentUser?.uid;
                               if (uid != null) {
@@ -911,7 +755,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
               ),
           ],
         ),
-
         bottomNavigationBar: NavigationBar(
           selectedIndex: _selectedIndex,
           onDestinationSelected: _onItemTapped,
@@ -1167,7 +1010,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         StreamBuilder<Map<String, dynamic>?>(
-                          stream: ridesLiveStream(rideId), // <-- RTDB live node
+                          stream: ridesLiveStream(rideId),
                           builder: (_, snap) {
                             final live = snap.data;
                             final liveStatus =
@@ -1242,14 +1085,14 @@ class _OfferCardState extends State<_OfferCard> {
         _expiredHandled = true;
         _ticker?.cancel();
         if (widget.onExpire != null) {
-          await widget.onExpire!(); // <-- remove notif -> overlay disappears
+          await widget.onExpire!();
         }
       }
     });
   }
 
   int _computeLeft(int? tsMs) {
-    if (tsMs == null) return (_ttlMs / 1000).floor(); // 15;
+    if (tsMs == null) return (_ttlMs / 1000).floor();
     final now = DateTime.now().millisecondsSinceEpoch;
     final leftMs = _ttlMs - (now - tsMs);
     return leftMs <= 0 ? 0 : (leftMs / 1000).floor();
