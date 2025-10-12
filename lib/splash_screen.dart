@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'package:femdrive/main.dart'; // Adjust import to match your project structure
+import 'package:femdrive/main.dart'; // Adjust import if needed
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -16,17 +16,19 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.asset('assets/images/splash_video1.mp4')
-      ..initialize().then((_) {
-        setState(() {});
-        _controller.play();
-        _navigateAfterVideo();
-      }).catchError((e) {
-        if (kDebugMode) {
-          print("Video error: $e");
-        }
-        _navigateAfterVideo(); // Fallback if video fails
-      });
+    _controller = VideoPlayerController.asset('assets/images/splash_video2.mp4')
+      ..initialize()
+          .then((_) {
+            setState(() {});
+            _controller.play();
+            _navigateAfterVideo();
+          })
+          .catchError((e) {
+            if (kDebugMode) {
+              print("Video error: $e");
+            }
+            _navigateAfterVideo(); // Fallback if video fails
+          });
   }
 
   void _navigateAfterVideo() {
@@ -54,15 +56,13 @@ class _SplashScreenState extends State<SplashScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: _controller.value.isInitialized
-          ? FittedBox(
-              fit: BoxFit.cover, // Fits video to screen without zooming
-              child: SizedBox(
-                width: _controller.value.size.width,
-                height: _controller.value.size.height,
+          ? Center(
+              child: AspectRatio(
+                aspectRatio: _controller.value.aspectRatio,
                 child: VideoPlayer(_controller),
               ),
             )
-          : const Center(child: CircularProgressIndicator()), // Loading indicator
+          : const Center(child: CircularProgressIndicator()),
     );
   }
 }

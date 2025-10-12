@@ -77,7 +77,7 @@ flutter:
   assets:
     - assets/images/bike_marker.png
     - assets/images/car_marker.png
-    - assets/images/splash_video1.mp4
+    - assets/images/splash_video2.mp4
 
 flutter_launcher_icons:  # Corrected key to avoid deprecation warning
   android: { enabled: true }  # Use map syntax
