@@ -18,12 +18,12 @@ class HelpCenterPage extends StatelessWidget {
           ),
           SizedBox(height: 12),
           ExpansionTile(
-            title: Text('How do I reset my password?'),
+            title: Text('How do I update my account information?'),
             children: [
               Padding(
                 padding: EdgeInsets.all(8.0),
                 child: Text(
-                  'Go to the login screen and tap "Forgot Password".',
+                  'To update your account details, go to your profile settings and select Edit Profile.',
                 ),
               ),
             ],

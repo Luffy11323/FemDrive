@@ -1435,8 +1435,8 @@ class _RideFormState extends ConsumerState<RideForm> {
             RideTypePicker(
               options: const [
                 RideOption('Ride mini', 'Ride', Icons.directions_car_rounded),
-                RideOption('Ride X', 'Comfort', Icons.time_to_leave_rounded),
-                RideOption('Bike', 'EV/Scooty', Icons.local_shipping_rounded),
+                RideOption('Ride X', 'Comfort', Icons.directions_car_filled_rounded),
+                RideOption('Bike', 'EV/Scooty', Icons.electric_scooter_rounded),
               ],
               selected: _selectedRideType!,
               onChanged: (v) async {
