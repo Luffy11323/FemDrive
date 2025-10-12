@@ -88,10 +88,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   File? licenseImage, cnicImage;
   String? licenseBase64, cnicBase64;
 
-  // Multi-angle capture for liveness
   List<File> cnicLivenessFrames = [];
   
-  // Verification results
   Map<String, dynamic>? cnicVerification;
   Map<String, dynamic>? licenseVerification;
   bool documentsValid = false;
@@ -211,7 +209,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     );
   }
 
-  // Modified: Loosen security checks, only check for basic image validity
   Future<Map<String, dynamic>> detectSecurityFeatures(Uint8List imageBytes) async {
     try {
       final image = img.decodeImage(imageBytes);
@@ -222,7 +219,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       List<String> issues = [];
       double confidence = 1.0;
 
-      // Check aspect ratio (Pakistani CNIC is 85.6mm x 54mm = 1.585:1)
       final aspectRatio = image.width / image.height;
       if (aspectRatio < 1.45 || aspectRatio > 1.75) {
         issues.add('Dimensions don\'t match standard CNIC card');
@@ -247,7 +243,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  // Modified: Require at least one tilt test to pass
   Future<Map<String, dynamic>> detectLiveness(List<File> frames) async {
     if (frames.length < 3) {
       return {'live': false, 'confidence': 0.0, 'reason': 'Insufficient frames'};
@@ -264,7 +259,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return {'live': false, 'confidence': 0.0, 'reason': 'Failed to decode frames'};
       }
 
-      // Check 1: Size variance (real card changes size when moved)
       List<double> areas = [];
       for (var image in images) {
         if (image != null) areas.add((image.width * image.height).toDouble());
@@ -276,7 +270,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       
       bool sizeTestPassed = sizeChange >= 0.05;
 
-      // Check 2: Parallax effect (different angles show different reflections)
       int passedPairs = 0;
       for (int i = 0; i < images.length - 1; i++) {
         final img1 = images[i]!;
@@ -304,7 +297,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       
       bool brightnessTestPassed = passedPairs > 0;
 
-      // At least one tilt test must pass
       final confidence = (sizeTestPassed || brightnessTestPassed) ? 0.8 : 0.4;
       final reason = (sizeTestPassed || brightnessTestPassed)
           ? 'At least one tilt test passed'
@@ -368,7 +360,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  // Modified: Require last digit to be even (0-8)
   bool validateCnic(String? cnicText) {
     if (cnicText == null || cnicText.isEmpty) return false;
     
@@ -380,7 +371,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     final lastDigit = int.tryParse(digits[12]);
     if (lastDigit == null || lastDigit % 2 != 0) {
-      return false; // Last digit must be even (0, 2, 4, 6, 8)
+      return false;
     }
 
     return true;
@@ -430,7 +421,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       messages.add('Document does not appear to be a driving license.');
     }
 
-    isValid = true; // Hardcoded as per request
+    isValid = true;
 
     return {
       'valid': isValid,
@@ -451,7 +442,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       List<String> messages = [];
       double trustScore = 1.0;
 
-      // LAYER 1: Basic Security Check (only aspect ratio)
       print('Running security features detection...');
       final securityCheck = await detectSecurityFeatures(cnicBytes);
       trustScore *= securityCheck['confidence'];
@@ -460,7 +450,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         messages.add('⚠️ Document security check: ${securityCheck['reasons'].join(', ')}');
       }
 
-      // LAYER 2: Liveness Detection
       bool livenessPassed = true;
       if (trustScore < 0.7 && cnicLivenessFrames.length >= 3) {
         print('Running liveness detection...');
@@ -484,7 +473,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         };
       }
 
-      // LAYER 3: OCR and Format Validation
       final cnicText = await extractTextFromImage(cnicBytes);
       final dlText = licenseBytes != null ? await extractTextFromImage(licenseBytes) : '';
 
@@ -686,19 +674,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         showSuccess('Documents verified! Trust score: ${(trustScore * 100).toStringAsFixed(0)}%');
       }
 
-      await FirebaseFirestore.instance
-          .collection('phones')
-          .doc(primaryDigits)
-          .set({'uid': user.uid, 'type': 'primary'});
-
-      if (role == 'driver') {
-        altDigits = altContactController.text.replaceAll(RegExp(r'\D'), '');
-        await FirebaseFirestore.instance
-            .collection('phones')
-            .doc(altDigits)
-            .set({'uid': user.uid, 'type': 'alt'});
-      }
-
+      // Prepare user document
       final doc = <String, dynamic>{
         'uid': user.uid,
         'phone': primaryDigits,
@@ -730,7 +706,24 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         });
       }
 
+      // Write user document to Firestore
       await FirebaseFirestore.instance.collection('users').doc(user.uid).set(doc);
+      print('User document created for UID: ${user.uid}');
+
+      // Only store phone numbers in 'phones' collection after successful user creation
+      await FirebaseFirestore.instance
+          .collection('phones')
+          .doc(primaryDigits)
+          .set({'uid': user.uid, 'type': 'primary'});
+      print('Stored primary phone: $primaryDigits in phones collection');
+
+      if (role == 'driver' && altDigits != null) {
+        await FirebaseFirestore.instance
+            .collection('phones')
+            .doc(altDigits)
+            .set({'uid': user.uid, 'type': 'alt'});
+        print('Stored alternate phone: $altDigits in phones collection');
+      }
 
       final message = requiresManualReview
           ? 'Registration successful! Your account is pending manual review for security.'
@@ -756,18 +749,21 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     } catch (e) {
       showError('Registration failed: $e');
       
+      // Clean up phones collection if signup fails
       try {
         if (primaryDigits != null) {
           await FirebaseFirestore.instance
               .collection('phones')
               .doc(primaryDigits)
               .delete();
+          print('Cleaned up primary phone: $primaryDigits from phones collection');
         }
         if (altDigits != null) {
           await FirebaseFirestore.instance
               .collection('phones')
               .doc(altDigits)
               .delete();
+          print('Cleaned up alternate phone: $altDigits from phones collection');
         }
         await FirebaseAuth.instance.signOut();
       } catch (cleanupError) {
@@ -798,7 +794,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       if (compressed == null) throw Exception("Image compression failed");
 
-      // Basic image validation
       final image = img.decodeImage(compressed);
       if (image == null || image.width < 300 || image.height < 300) {
         showError('Image is too small or invalid. Please retake.');
@@ -912,7 +907,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  // Modified: Modernized UI for liveness dialog
   void _showLivenessDialog() {
     showDialog(
       context: context,
