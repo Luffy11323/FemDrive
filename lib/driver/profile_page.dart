@@ -116,7 +116,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
     setState(() => _enteredOtp = clean);
 
     if (clean.length >= 6) {
-      _confirmOtp();
+      _confirmOtp(isAutoFilled: true);
     }
   }
 
@@ -279,7 +279,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
         phoneNumber: phoneNumber,
         timeout: const Duration(seconds: 60),
         verificationCompleted: (PhoneAuthCredential credential) async {
-          await _confirmOtp(autoCredential: credential);
+          await _confirmOtp(autoCredential: credential, isAutoFilled: true);
         },
         verificationFailed: (FirebaseAuthException e) {
           showError(e.message ?? 'OTP verification failed');
@@ -316,7 +316,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
     }
   }
 
-  Future<void> _confirmOtp({PhoneAuthCredential? autoCredential}) async {
+  Future<void> _confirmOtp({PhoneAuthCredential? autoCredential, required bool isAutoFilled}) async {
     if (_isLoading || _pendingPhone == null) return;
     setState(() => _isLoading = true);
 
@@ -339,8 +339,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
             smsCode: _enteredOtp,
           );
 
-      await FirebaseAuth.instance.currentUser!.updatePhoneNumber(credential);
-      await _completeProfileUpdate();
+      try {
+        await FirebaseAuth.instance.currentUser!.updatePhoneNumber(credential);
+        await _completeProfileUpdate();
+      } on FirebaseAuthException catch (e) {
+        if (isAutoFilled && e.code == 'invalid-verification-code') {
+          showError('Auto-filled OTP is invalid. Please enter manually.');
+          setState(() => _isLoading = false);
+        } else {
+          rethrow;
+        }
+      }
     } catch (e) {
       showError('OTP verification failed: $e');
       setState(() {
@@ -423,12 +432,18 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
       // Update Firestore users collection
       await FirebaseFirestore.instance.collection('users').doc(user.uid).set(updateData, SetOptions(merge: true));
 
+      // Refresh UI
+      ref.invalidate(driverProfileProvider);
+
       setState(() {
         _isEditing = false;
         _isOtpSent = false;
         _pendingPhone = null;
         _originalPhone = primaryDigits;
         _originalAltContact = altDigits;
+        _enteredOtp = "";
+        _verificationId = null;
+        _resendTimer?.cancel();
       });
 
       showSuccess('Profile updated successfully');
@@ -778,6 +793,21 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
                                   enabled: !_isLoading,
                                   onCompleted: (code) => setState(() => _enteredOtp = code),
                                 ),
+                                const SizedBox(height: 16),
+                                ElevatedButton(
+                                  onPressed: _isLoading || _enteredOtp.length != 6
+                                      ? null
+                                      : () => _confirmOtp(isAutoFilled: false),
+                                  style: ElevatedButton.styleFrom(
+                                    minimumSize: const Size(double.infinity, 48),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: _isLoading
+                                      ? const CircularProgressIndicator()
+                                      : const Text('Confirm OTP'),
+                                ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
                                 const SizedBox(height: 16),
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
