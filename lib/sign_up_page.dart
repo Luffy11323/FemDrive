@@ -211,7 +211,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     );
   }
 
-  // OPTION 1: Security Features Detection
+  // Modified: Loosen security checks, only check for basic image validity
   Future<Map<String, dynamic>> detectSecurityFeatures(Uint8List imageBytes) async {
     try {
       final image = img.decodeImage(imageBytes);
@@ -222,85 +222,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       List<String> issues = [];
       double confidence = 1.0;
 
-      // 1. Check for hologram/reflective areas (bright spots)
-      int brightPixels = 0;
-      int totalPixels = image.width * image.height;
-      
-      for (int y = 0; y < image.height; y += 3) {
-        for (int x = 0; x < image.width; x += 3) {
-          final pixel = image.getPixel(x, y);
-          final brightness = (pixel.r + pixel.g + pixel.b) / 3;
-          if (brightness > 240) brightPixels++;
-        }
-      }
-      
-      final brightRatio = (brightPixels * 9) / totalPixels;
-      if (brightRatio < 0.001) {
-        issues.add('No reflective security features detected');
-        confidence *= 0.6;
-      }
-
-      // 2. Check for paper texture vs plastic card (edge sharpness)
-      final edges = img.sobel(image);
-      int sharpEdges = 0;
-      int sampledEdges = 0;
-      
-      for (int y = 0; y < edges.height; y += 3) {
-        for (int x = 0; x < edges.width; x += 3) {
-          sampledEdges++;
-          final pixel = edges.getPixel(x, y);
-          if (pixel.r > 150) sharpEdges++;
-        }
-      }
-      
-      final sharpRatio = sharpEdges / sampledEdges;
-      if (sharpRatio > 0.15) {
-        issues.add('Document texture suggests paper printout');
-        confidence *= 0.4;
-      }
-
-      // 3. Check aspect ratio (Pakistani CNIC is 85.6mm x 54mm = 1.585:1)
+      // Check aspect ratio (Pakistani CNIC is 85.6mm x 54mm = 1.585:1)
       final aspectRatio = image.width / image.height;
       if (aspectRatio < 1.45 || aspectRatio > 1.75) {
         issues.add('Dimensions don\'t match standard CNIC card');
         confidence *= 0.8;
-      }
-
-      // 4. Color distribution analysis (Pakistani CNIC has green/blue security patterns)
-      Map<String, int> colorCount = {'green': 0, 'blue': 0, 'red': 0};
-      
-      for (int y = 0; y < image.height; y += 5) {
-        for (int x = 0; x < image.width; x += 5) {
-          final pixel = image.getPixel(x, y);
-          if (pixel.g > pixel.r + 20 && pixel.g > pixel.b) colorCount['green'] = colorCount['green']! + 1;
-          if (pixel.b > pixel.r + 20 && pixel.b > pixel.g) colorCount['blue'] = colorCount['blue']! + 1;
-          if (pixel.r > pixel.g + 20 && pixel.r > pixel.b) colorCount['red'] = colorCount['red']! + 1;
-        }
-      }
-      
-      final greenRatio = colorCount['green']! / (image.width * image.height / 25);
-      if (greenRatio < 0.03) {
-        issues.add('Missing security color patterns');
-        confidence *= 0.7;
-      }
-
-      // 5. Check image quality (too perfect = likely scanned/fake)
-      int noisePixels = 0;
-      for (int y = 1; y < image.height - 1; y += 4) {
-        for (int x = 1; x < image.width - 1; x += 4) {
-          final current = image.getPixel(x, y);
-          final next = image.getPixel(x + 1, y);
-          final diff = (current.r - next.r).abs() + 
-                      (current.g - next.g).abs() + 
-                      (current.b - next.b).abs();
-          if (diff > 30) noisePixels++;
-        }
-      }
-      
-      final noiseRatio = noisePixels / ((image.width * image.height) / 16);
-      if (noiseRatio < 0.05) {
-        issues.add('Image appears artificially clean (possible digital fake)');
-        confidence *= 0.5;
       }
 
       return {
@@ -308,11 +234,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'confidence': confidence,
         'reasons': issues,
         'metrics': {
-          'brightRatio': brightRatio,
-          'sharpRatio': sharpRatio,
           'aspectRatio': aspectRatio,
-          'greenRatio': greenRatio,
-          'noiseRatio': noiseRatio,
         }
       };
     } catch (e) {
@@ -320,12 +242,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       return {
         'secure': false,
         'confidence': 0.3,
-        'reasons': ['Error analyzing document security features']
+        'reasons': ['Error analyzing document']
       };
     }
   }
 
-  // OPTION 2: Liveness Detection (Multi-angle Analysis)
+  // Modified: Require at least one tilt test to pass
   Future<Map<String, dynamic>> detectLiveness(List<File> frames) async {
     if (frames.length < 3) {
       return {'live': false, 'confidence': 0.0, 'reason': 'Insufficient frames'};
@@ -342,7 +264,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return {'live': false, 'confidence': 0.0, 'reason': 'Failed to decode frames'};
       }
 
-      // Check 1: Size variance (real card changes size when moved, photo doesn't)
+      // Check 1: Size variance (real card changes size when moved)
       List<double> areas = [];
       for (var image in images) {
         if (image != null) areas.add((image.width * image.height).toDouble());
@@ -352,16 +274,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final variance = areas.map((a) => math.pow(a - avgArea, 2)).reduce((a, b) => a + b) / areas.length;
       final sizeChange = math.sqrt(variance) / avgArea;
       
-      if (sizeChange < 0.05) {
-        return {
-          'live': false,
-          'confidence': 0.3,
-          'reason': 'No size variance detected (card not physically moved)'
-        };
-      }
+      bool sizeTestPassed = sizeChange >= 0.05;
 
       // Check 2: Parallax effect (different angles show different reflections)
-      double totalBrightnessVariance = 0.0;
+      int passedPairs = 0;
       for (int i = 0; i < images.length - 1; i++) {
         final img1 = images[i]!;
         final img2 = images[i + 1]!;
@@ -380,29 +296,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           }
         }
         
-        totalBrightnessVariance += brightDiff / samples;
+        final avgBrightnessChange = brightDiff / samples;
+        if (avgBrightnessChange >= 5.0) {
+          passedPairs++;
+        }
       }
       
-      final avgBrightnessChange = totalBrightnessVariance / (images.length - 1);
-      if (avgBrightnessChange < 5.0) {
-        return {
-          'live': false,
-          'confidence': 0.4,
-          'reason': 'No lighting variance (possible photo of photo)'
-        };
-      }
+      bool brightnessTestPassed = passedPairs > 0;
 
-      // Check 3: Perspective shift
-      double confidence = 0.5 + (sizeChange * 5) + (avgBrightnessChange / 100);
-      confidence = math.min(1.0, confidence);
+      // At least one tilt test must pass
+      final confidence = (sizeTestPassed || brightnessTestPassed) ? 0.8 : 0.4;
+      final reason = (sizeTestPassed || brightnessTestPassed)
+          ? 'At least one tilt test passed'
+          : 'No tilt tests passed';
 
       return {
-        'live': confidence >= 0.6,
+        'live': sizeTestPassed || brightnessTestPassed,
         'confidence': confidence,
-        'reason': confidence >= 0.6 ? 'Physical card movement detected' : 'Insufficient movement variance',
+        'reason': reason,
         'metrics': {
           'sizeChange': sizeChange,
-          'brightnessChange': avgBrightnessChange,
+          'passedBrightnessPairs': passedPairs,
         }
       };
     } catch (e) {
@@ -454,7 +368,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
   }
 
-  bool validateCnic(String? cnicText, {bool requireFemale = true}) {
+  // Modified: Require last digit to be even (0-8)
+  bool validateCnic(String? cnicText) {
     if (cnicText == null || cnicText.isEmpty) return false;
     
     final pattern = RegExp(r'^\d{5}-\d{7}-\d{1}$');
@@ -464,22 +379,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     if (digits.length != 13) return false;
 
     final lastDigit = int.tryParse(digits[12]);
-    if (lastDigit == null) return false;
-
-    if (requireFemale && lastDigit % 2 != 0) {
-      return false;
+    if (lastDigit == null || lastDigit % 2 != 0) {
+      return false; // Last digit must be even (0, 2, 4, 6, 8)
     }
 
-    try {
-      final sumDigits = digits.substring(0, 12)
-          .split('')
-          .map(int.parse)
-          .reduce((a, b) => a + b);
-      return (sumDigits % 10) == lastDigit;
-    } catch (e) {
-      print('Checksum validation error: $e');
-      return false;
-    }
+    return true;
   }
 
   String? extractCnic(String text) {
@@ -521,13 +425,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
     }
 
-    // Additional check: ensure the image contains expected text patterns
     if (!text.toLowerCase().contains('driving') && !text.toLowerCase().contains('license')) {
       isValid = false;
       messages.add('Document does not appear to be a driving license.');
     }
 
-    isValid = true; // Hardcode to always return valid
+    isValid = true; // Hardcoded as per request
 
     return {
       'valid': isValid,
@@ -548,7 +451,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       List<String> messages = [];
       double trustScore = 1.0;
 
-      // LAYER 1: Security Features Detection
+      // LAYER 1: Basic Security Check (only aspect ratio)
       print('Running security features detection...');
       final securityCheck = await detectSecurityFeatures(cnicBytes);
       trustScore *= securityCheck['confidence'];
@@ -558,22 +461,24 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       // LAYER 2: Liveness Detection
+      bool livenessPassed = true;
       if (trustScore < 0.7 && cnicLivenessFrames.length >= 3) {
         print('Running liveness detection...');
         final livenessCheck = await detectLiveness(cnicLivenessFrames);
         
         if (livenessCheck['live']) {
           trustScore = math.max(trustScore, 0.8);
-          messages.add('✓ Physical card movement verified');
+          messages.add('✓ At least one tilt test passed');
         } else {
+          livenessPassed = false;
           trustScore *= 0.5;
-          messages.add('⚠️ Could not verify physical card: ${livenessCheck['reason']}');
+          messages.add('⚠️ Liveness verification failed: ${livenessCheck['reason']}');
         }
       } else if (trustScore < 0.7) {
         setState(() => requiresLivenessCheck = true);
         return {
           'valid': false,
-          'messages': ['Document appears suspicious. Please capture with liveness verification.'],
+          'messages': ['Please capture with liveness verification.'],
           'trustScore': trustScore,
           'requiresLiveness': true,
         };
@@ -586,18 +491,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final cnicFromCnic = extractCnic(cnicText);
       final cnicFromDl = licenseBytes != null ? extractCnic(dlText) : null;
 
-      final cnicValidCnic = validateCnic(cnicFromCnic, requireFemale: true);
+      final cnicValidCnic = validateCnic(cnicFromCnic);
       if (!cnicValidCnic) {
         if (cnicFromCnic == null) {
           messages.add('Could not read CNIC number. Please retake with better lighting.');
         } else {
-          final digits = cnicFromCnic.replaceAll('-', '');
-          final lastDigit = int.tryParse(digits[12]) ?? 0;
-          if (lastDigit % 2 != 0) {
-            messages.add('⚠️ Women only: CNIC last digit must be even (female). Male CNIC detected.');
-          } else {
-            messages.add('Invalid CNIC format or checksum.');
-          }
+          messages.add('Invalid CNIC: Last digit must be even (0, 2, 4, 6, 8).');
         }
         trustScore *= 0.3;
       }
@@ -611,7 +510,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         dlNumber = dlResult['dlNumber'] as String?;
 
         if (cnicFromDl != null) {
-          final cnicValidDl = validateCnic(cnicFromDl, requireFemale: true);
+          final cnicValidDl = validateCnic(cnicFromDl);
           if (!cnicValidDl) {
             messages.add('Invalid CNIC on license document.');
             dlValid = false;
@@ -622,11 +521,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             dlValid = false;
           }
         }
-
-        if (!dlValid) trustScore *= 0.6;
       }
 
-      final overallValid = cnicValidCnic && dlValid && trustScore >= 0.5;
+      final overallValid = cnicValidCnic && dlValid && livenessPassed;
 
       setState(() {
         cnicVerification = {
@@ -884,13 +781,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Future<void> _captureDocument(bool isLicense) async {
     if (isSubmitting) return;
     try {
+      setState(() => isSubmitting = true);
       final file = await Navigator.push<File?>(
         context,
         MaterialPageRoute(builder: (_) => const FullScreenCamera()),
       );
 
       if (file == null) return;
-      setState(() => isSubmitting = true);
 
       final compressed = await FlutterImageCompress.compressWithFile(
         file.absolute.path,
@@ -959,13 +856,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     } catch (e) {
       showError('Failed to capture image: $e');
     } finally {
-      if (mounted) setState(() => isSubmitting = false);
+      if (mounted) {
+        print('Resetting isSubmitting after capture');
+        setState(() => isSubmitting = false);
+      }
     }
   }
 
   Future<void> _captureLiveness() async {
     if (isSubmitting) return;
     try {
+      setState(() => isSubmitting = true);
       final frames = await Navigator.push<List<File>?>(
         context,
         MaterialPageRoute(builder: (_) => const LivenessCamera()),
@@ -974,7 +875,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (frames == null || frames.isEmpty) return;
       
       setState(() {
-        isSubmitting = true;
         cnicLivenessFrames = frames;
         cnicImage = frames.last;
       });
@@ -1005,36 +905,88 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     } catch (e) {
       showError('Failed to capture liveness: $e');
     } finally {
-      if (mounted) setState(() => isSubmitting = false);
+      if (mounted) {
+        print('Resetting isSubmitting after liveness capture');
+        setState(() => isSubmitting = false);
+      }
     }
   }
 
+  // Modified: Modernized UI for liveness dialog
   void _showLivenessDialog() {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Row(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
+        title: Row(
           children: [
-            Icon(Icons.security, color: Colors.orange),
-            SizedBox(width: 8),
-            Text('Additional Verification Required'),
+            Icon(Icons.security, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            const Text(
+              'Verify Your CNIC',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ],
         ),
-        content: const Text(
-          'Please capture your CNIC with the following movements:\n\n'
-          '1. Hold card flat\n'
-          '2. Tilt card left\n'
-          '3. Tilt card right\n'
-          '4. Move card closer\n\n',
-          style: TextStyle(fontSize: 14),
-        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Capture your CNIC with these movements to verify it:',
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            ...[
+              'Hold card flat',
+              'Tilt card left',
+              'Tilt card right',
+              'Move card closer',
+            ].asMap().entries.map((entry) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.check_circle,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${entry.key + 1}. ${entry.value}',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'Ensure good lighting and align the card within the frame.',
+                style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
+        ).animate().fadeIn(duration: 300.ms),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
             onPressed: () {
               Navigator.pop(context);
               _captureLiveness();
@@ -1042,7 +994,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             child: const Text('Start Verification'),
           ),
         ],
-      ),
+      ).animate().scale(duration: 300.ms),
     );
   }
 
@@ -1326,6 +1278,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 onPressed: isSubmitting
                     ? null
                     : () {
+                        print('Retake button pressed for ${isLicense ? 'License' : 'CNIC'}');
                         setState(() {
                           if (isLicense) {
                             licenseImage = null;
@@ -1442,6 +1395,18 @@ class _LivenessCameraState extends State<LivenessCamera> {
       final xFile = await _controller!.takePicture();
       final file = File(xFile.path);
       
+      final bytes = await file.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null || image.width < 300 || image.height < 300) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Image too small. Please retake.'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+        return;
+      }
+
       setState(() {
         _capturedFrames.add(file);
         _step++;
