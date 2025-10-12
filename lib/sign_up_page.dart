@@ -1022,12 +1022,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           ],
         ),
         content: const Text(
-          'For security, we need to verify this is a physical card. Please capture your CNIC with the following movements:\n\n'
+          'Please capture your CNIC with the following movements:\n\n'
           '1. Hold card flat\n'
           '2. Tilt card left\n'
           '3. Tilt card right\n'
-          '4. Move card closer\n\n'
-          'This helps prevent fake documents.',
+          '4. Move card closer\n\n',
           style: TextStyle(fontSize: 14),
         ),
         actions: [
@@ -1414,7 +1413,7 @@ class _LivenessCameraState extends State<LivenessCamera> {
       setState(() => _isCameraReady = true);
       
       if (!_isManualMode) {
-        Future.delayed(const Duration(seconds: 15), _captureFrame);
+        Future.delayed(const Duration(seconds: 10), _captureFrame);
       }
     } catch (e) {
       if (!mounted) return;
@@ -1453,7 +1452,7 @@ class _LivenessCameraState extends State<LivenessCamera> {
         if (!mounted) return;
         Navigator.pop(context, _capturedFrames);
       } else if (!_isManualMode) {
-        await Future.delayed(const Duration(seconds: 15));
+        await Future.delayed(const Duration(seconds: 10));
         if (mounted) _captureFrame();
       }
     } catch (e) {
@@ -1471,7 +1470,7 @@ class _LivenessCameraState extends State<LivenessCamera> {
     setState(() {
       _isManualMode = !_isManualMode;
       if (!_isManualMode && _step < _instructions.length) {
-        Future.delayed(const Duration(seconds: 15), _captureFrame);
+        Future.delayed(const Duration(seconds: 10), _captureFrame);
       }
     });
   }
