@@ -18,6 +18,7 @@ import 'theme.dart';
 import 'package:femdrive/extras/help_support_page.dart';
 import 'package:femdrive/extras/payment_page.dart';
 import 'package:femdrive/extras/settings_page.dart';
+import 'splash_screen.dart'; // Import the new splash screen
 
 // Pages
 import 'login_page.dart';
@@ -39,18 +40,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final rideId = data['rideId'];
 
   if (action == 'NEW_REQUEST') {
-    // 🔹 Driver: notified of nearby ride request
     debugPrint("📩 Driver BG NEW_REQUEST for ride $rideId");
-    // Show local notification
     await RiderNotificationService.instance.show(message);
   } else if (action == 'COUNTER_FARE') {
-    // 🔹 Rider: notified of driver counter offer
     debugPrint("📩 Rider BG COUNTER_FARE for ride $rideId");
     await RiderNotificationService.instance.show(message);
   }
 }
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
@@ -225,7 +223,6 @@ class FemDriveApp extends StatefulWidget {
 
 class _FemDriveAppState extends State<FemDriveApp> {
   String? _lastKnownUid;
-  bool _isLoadingFCM = true;
 
   @override
   void initState() {
@@ -236,10 +233,8 @@ class _FemDriveAppState extends State<FemDriveApp> {
   Future<void> _initializeApp() async {
     try {
       await _setupFCM();
-    } finally {
-      if (mounted) {
-        setState(() => _isLoadingFCM = false);
-      }
+    } catch (e) {
+      debugPrint('❗ Error during FCM setup in _initializeApp: $e');
     }
   }
 
@@ -360,37 +355,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
       darkTheme: femDarkTheme,
       themeMode: ThemeMode.system,
       debugShowCheckedModeBanner: false,
-      home: Stack(
-        children: [
-          const InitialScreen(),
-          if (_isLoadingFCM)
-            Container(
-              // ignore: deprecated_member_use
-              color: Colors.black.withOpacity(0.5),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Theme.of(context).colorScheme.primary,
-                      ),
-                    ).animate().fadeIn(duration: 400.ms).scale(),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Initializing FemDrive...',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-                  ],
-                ),
-              ),
-            ).animate().fadeIn(duration: 400.ms),
-        ],
-      ),
+      home: const SplashScreen(), // Changed from Stack with InitialScreen to SplashScreen
       routes: {
         '/login': (context) => const LoginPage(),
         '/signup': (context) => const SignUpPage(),
@@ -424,14 +389,13 @@ class _FemDriveAppState extends State<FemDriveApp> {
               final role = snapshot.data!.get('role');
 
               if (role == 'driver') {
-                return const ProfilePage(); // ✅ Your correct driver profile widget
+                return const ProfilePage();
               } else {
                 return const RiderProfilePage();
               }
             },
           );
         },
-
         '/past-rides': (context) => const PastRidesPage(),
         '/driver-ride-details': (context) {
           final rideId = ModalRoute.of(context)?.settings.arguments as String?;
@@ -443,7 +407,6 @@ class _FemDriveAppState extends State<FemDriveApp> {
     );
   }
 }
-
 class InitialScreen extends ConsumerWidget {
   const InitialScreen({super.key});
 

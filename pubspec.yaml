@@ -63,6 +63,7 @@ dependencies:
   fl_location: ^5.0.0
   google_ml_kit: ^0.20.0
   google_mlkit_text_recognition: ^0.15.0
+  video_player: ^2.10.0
 
 dev_dependencies:
   flutter_test:
@@ -76,6 +77,7 @@ flutter:
   assets:
     - assets/images/bike_marker.png
     - assets/images/car_marker.png
+    - assets/images/splash_video2.mp4
 
 flutter_launcher_icons:  # Corrected key to avoid deprecation warning
   android: { enabled: true }  # Use map syntax
