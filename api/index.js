@@ -212,6 +212,17 @@ function asNum(v) {
   return null;
 }
 
+async function validatePhone(phone) {
+  const digitsOnly = phone.replace(/\D/g, '');
+  const snap = await db.collection('phones').doc(digitsOnly).get();
+  return snap.exists;
+}
+
+async function validateCnic(cnicNumber) {
+  const qs = await db.collection('users').where('cnicNumber', '==', cnicNumber).limit(1).get();
+  return !qs.empty;
+}
+
 /// ──────────────────────────────────────────────────────────────────────────
 /// Routes
 /// ──────────────────────────────────────────────────────────────────────────
@@ -362,7 +373,7 @@ app.post('/accept/driver', async (req, res) => {
       if (cur[AppFields.driverId]) return { assigned: false }; // already won elsewhere
       t.set(rideRef, {
         [AppFields.driverId]: driverUid,
-        [AppFields.status]:   RideStatus.accepted,
+        [AppFields.status]: RideStatus.accepted,
         [AppFields.acceptedAt]: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       return { assigned: true };
@@ -600,30 +611,86 @@ app.post('/emergency', async (req, res) => {
   }
 
   try {
-    await db.collection('emergencies').add({
+    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
+    const rideSnap = await rideRef.get();
+    const rideData = rideSnap.data() || {};
+
+    const batch = db.batch();
+    batch.update(db.collection('users').doc(otherUid), { [AppFields.verified]: false });
+    batch.update(rideRef, {
+      [AppFields.status]: RideStatus.cancelled,
+      [AppFields.emergencyTriggered]: true,
+      [AppFields.cancelledBy]: reportedBy,
+      [AppFields.cancelReason]: 'emergency',
+      [AppFields.cancelledAt]: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const emergencyRef = db.collection('emergencies').doc();
+    batch.set(emergencyRef, {
+      type: 'driver_emergency',
       [AppFields.rideId]: rideId,
       [AppFields.reportedBy]: reportedBy,
       [AppFields.otherUid]: otherUid,
-      [AppFields.timestamp]: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      rideSnapshot: {
+        [AppFields.pickup]: rideData[AppFields.pickup],
+        [AppFields.dropoff]: rideData[AppFields.dropoff],
+        [AppFields.pickupLat]: rideData[AppFields.pickupLat],
+        [AppFields.pickupLng]: rideData[AppFields.pickupLng],
+        [AppFields.dropoffLat]: rideData[AppFields.dropoffLat],
+        [AppFields.dropoffLng]: rideData[AppFields.dropoffLng],
+        [AppFields.fare]: rideData[AppFields.fare],
+        rideType: rideData.rideType,
+        [AppFields.riderId]: rideData[AppFields.riderId],
+        [AppFields.driverId]: rideData[AppFields.driverId],
+      },
     });
 
-    await db.collection('users').doc(otherUid).set({ [AppFields.verified]: false }, { merge: true });
-    await db.collection(AppPaths.ridesCollection).doc(rideId).set(
-      { [AppFields.status]: RideStatus.cancelled }, { merge: true },
-    );
+    await batch.commit();
 
-    // RTDB admin alert
-    const alertRef = rtdb.child(AppPaths.adminAlerts).push();
-    await alertRef.set({
+    // RTDB updates
+    await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
+      [AppFields.status]: RideStatus.cancelled,
+      [AppFields.emergencyTriggered]: true,
+      updatedAt: admin.database.ServerValue.TIMESTAMP,
+    });
+
+    await Promise.all([
+      rtdb.child(`${AppPaths.ridesPendingA}/${rideId}`).remove(),
+      rtdb.child(`${AppPaths.ridesPendingB}/${rideId}`).remove(),
+    ]);
+
+    // Clean driver notifications
+    const notifsSnap = await rtdb.child(AppPaths.driverNotifications).get();
+    if (notifsSnap.exists() && typeof notifsSnap.val() === 'object') {
+      const updates = {};
+      const map = notifsSnap.val();
+      Object.entries(map).forEach(([driverKey, ridesMap]) => {
+        if (ridesMap && rideId in ridesMap) {
+          updates[`${AppPaths.driverNotifications}/${driverKey}/${rideId}`] = null;
+        }
+      });
+      if (Object.keys(updates).length) await rtdb.update(updates);
+    }
+
+    // Notify rider
+    await rtdb.child(`${AppPaths.notifications}/${otherUid}`).push().set({
+      [AppFields.type]: 'ride_cancelled',
+      [AppFields.rideId]: rideId,
+      reason: 'emergency',
+      [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
+    });
+
+    // Notify admin
+    await rtdb.child('notifications/admin').push().set({
+      [AppFields.type]: 'emergency',
       [AppFields.rideId]: rideId,
       [AppFields.reportedBy]: reportedBy,
       [AppFields.otherUid]: otherUid,
       [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
-      severity: 'emergency',
-      acknowledged: false,
     });
 
-    // Multicast to admins
+    // FCM to admins
     const adminTokens = await getAdminTokens();
     if (adminTokens.length) {
       await fcm.sendMulticast({
@@ -689,6 +756,195 @@ app.post('/notify/payment', async (req, res) => {
   }
 });
 
+// New: User Signup (from signup_page.dart)
+app.post('/signup', async (req, res) => {
+  const {
+    uid,
+    phone,
+    username,
+    role,
+    cnicNumber,
+    cnicBase64,
+    verifiedCnic,
+    documentsUploaded,
+    carType,
+    carModel,
+    altContact,
+    licenseBase64,
+    verifiedLicense,
+    awaitingVerification,
+  } = req.body;
+
+  if (!uid || !phone || !username || !role || !cnicNumber) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    // Validate phone
+    if (await validatePhone(phone)) {
+      return res.status(400).json({ error: 'Phone number already registered' });
+    }
+
+    // Validate CNIC
+    if (await validateCnic(cnicNumber)) {
+      return res.status(400).json({ error: 'CNIC already registered' });
+    }
+
+    // Calculate trust score (placeholder; integrate ML if needed)
+    const trustScore = 0.7; // From document verification
+    const verified = trustScore >= 0.6;
+    const requiresManualReview = trustScore < 0.6;
+
+    // User document
+    const userDoc = {
+      [AppFields.uid]: uid,
+      [AppFields.phone]: phone,
+      [AppFields.username]: username,
+      [AppFields.role]: role,
+      [AppFields.createdAt]: admin.firestore.FieldValue.serverTimestamp(),
+      [AppFields.verified]: verified,
+      [AppFields.trustScore]: trustScore,
+      [AppFields.requiresManualReview]: requiresManualReview,
+      [AppFields.cnicNumber]: cnicNumber,
+      [AppFields.cnicBase64]: cnicBase64,
+      [AppFields.verifiedCnic]: verifiedCnic,
+      [AppFields.documentsUploaded]: documentsUploaded,
+      [AppFields.uploadTimestamp]: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (role === 'driver') {
+      userDoc[AppFields.carType] = carType;
+      userDoc[AppFields.carModel] = carModel;
+      userDoc[AppFields.altContact] = altContact;
+      userDoc[AppFields.licenseBase64] = licenseBase64;
+      userDoc[AppFields.verifiedLicense] = verifiedLicense;
+      userDoc[AppFields.awaitingVerification] = awaitingVerification;
+    }
+
+    // Batch write
+    const batch = db.batch();
+    batch.set(db.collection('users').doc(uid), userDoc);
+    batch.set(db.collection('phones').doc(phone.replace(/\D/g, '')), { uid, type: 'primary' });
+    if (role === 'driver' && altContact) {
+      batch.set(db.collection('phones').doc(altContact.replace(/\D/g, '')), { uid, type: 'alt' });
+    }
+    await batch.commit();
+
+    res.json({ ok: true });
+  } catch (e) {
+    // Cleanup phones on failure
+    await db.collection('phones').doc(phone.replace(/\D/g, '')).delete().catch(() => {});
+    if (role === 'driver' && altContact) {
+      await db.collection('phones').doc(altContact.replace(/\D/g, '')).delete().catch(() => {});
+    }
+    console.error('Signup error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// New: Process Payment (from payment_services.dart)
+app.post('/processPayment', async (req, res) => {
+  const { rideId, amount, paymentMethod, userId } = req.body;
+  if (!rideId || !amount || !paymentMethod || !userId) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    // Validate payment method (placeholder; integrate real gateway)
+    const validMethods = ['EasyPaisa', 'JazzCash', 'Card', 'Cash'];
+    if (!validMethods.includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Invalid payment method' });
+    }
+
+    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
+    const snap = await rideRef.get();
+    const rideData = snap.data() || {};
+    const driverId = rideData[AppFields.driverId];
+
+    const batch = db.batch();
+    batch.update(rideRef, {
+      [AppFields.paymentStatus]: paymentMethod === 'Cash' ? 'pending_driver_confirmation' : 'completed',
+      [AppFields.paymentMethod]: paymentMethod,
+      [AppFields.amount]: amount,
+      [AppFields.paymentTimestamp]: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    if (paymentMethod !== 'Cash' && driverId) {
+      const driverRef = db.collection('users').doc(driverId);
+      batch.update(driverRef, {
+        [AppFields.earnings]: admin.firestore.FieldValue.increment(amount * 0.8),
+      });
+    }
+
+    const receiptRef = db.collection('receipts').doc(rideId);
+    batch.set(receiptRef, {
+      [AppFields.rideId]: rideId,
+      userId,
+      driverId,
+      [AppFields.amount]: amount,
+      method: paymentMethod,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+
+    // Notify user
+    await fcmToUser(userId, {
+      notification: {
+        title: 'Payment Processed',
+        body: `Your payment of $${amount.toFixed(2)} via ${paymentMethod} was successful.`,
+      },
+      data: { rideId, action: 'PAYMENT_CONFIRMED' },
+    }, { androidChannelId: 'ride_payments_ch' });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Process payment error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// New: Update Location (from location_service.dart)
+app.post('/updateLocation', async (req, res) => {
+  const { role, rideId, lat, lng, driverId } = req.body;
+  if (!role || !lat || !lng) {
+    return res.status(400).json({ error: 'Missing role/lat/lng' });
+  }
+
+  try {
+    const updates = {};
+    if (rideId) {
+      updates[`rides/${rideId}/driverLat`] = lat;
+      updates[`rides/${rideId}/driverLng`] = lng;
+      updates[`rides/${rideId}/driverTs`] = admin.database.ServerValue.TIMESTAMP;
+      updates[`${AppPaths.ridesLive}/${rideId}/driverLat`] = lat;
+      updates[`${AppPaths.ridesLive}/${rideId}/driverLng`] = lng;
+      updates[`${AppPaths.ridesLive}/${rideId}/driverTs`] = admin.database.ServerValue.TIMESTAMP;
+    }
+    if (driverId) {
+      updates[`${AppPaths.driversOnline}/${driverId}/lat`] = lat;
+      updates[`${AppPaths.driversOnline}/${driverId}/lng`] = lng;
+      updates[`${AppPaths.driversOnline}/${driverId}/updatedAt`] = admin.database.ServerValue.TIMESTAMP;
+    }
+
+    await rtdb.update(updates);
+
+    // Log to Firestore (background locations)
+    if (driverId) {
+      await db.collection('drivers').doc(driverId).collection('bg_locations').add({
+        lat,
+        lng,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Update location error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Housekeeping
 async function pruneStaleDrivers() {
   const now = Date.now();
@@ -726,5 +982,83 @@ app.post('/housekeep/run', async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Triggers: On new emergency, send FCM to admins
+exports.onEmergencyCreate = functions.firestore
+  .document('emergencies/{emergencyId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const rideId = data.rideId;
+    const reportedBy = data.reportedBy;
+    const otherUid = data.otherUid;
+
+    try {
+      await rtdb.child('notifications/admin').push().set({
+        [AppFields.type]: 'emergency',
+        [AppFields.rideId]: rideId,
+        [AppFields.reportedBy]: reportedBy,
+        [AppFields.otherUid]: otherUid,
+        [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
+      });
+
+      const adminTokens = await getAdminTokens();
+      if (adminTokens.length) {
+        await fcm.sendMulticast({
+          tokens: adminTokens,
+          notification: {
+            title: '🚨 New Emergency',
+            body: `Ride ${rideId} reported by ${reportedBy}`,
+          },
+          data: { action: 'EMERGENCY', rideId, reportedBy, otherUid },
+          android: { priority: 'high', notification: { channelId: 'ride_incoming_ch', sound: 'ride_incoming_15s' } },
+          apns: { payload: { aps: { sound: 'ride_incoming_15s.wav', contentAvailable: 1 } },
+                  headers: { 'apns-priority': '10' } },
+        });
+      }
+    } catch (e) {
+      console.error('onEmergencyCreate error:', e);
+    }
+  });
+
+// Triggers: On ride status change, notify relevant parties
+exports.onRideStatusChange = functions.firestore
+  .document('rides/{rideId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    const rideId = context.params.rideId;
+
+    if (before.status === after.status) return;
+
+    try {
+      await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
+        [AppFields.status]: after.status,
+        updatedAt: admin.database.ServerValue.TIMESTAMP,
+      });
+
+      const riderId = after.riderId;
+      const driverId = after.driverId;
+
+      if (riderId && StatusTitles[after.status]) {
+        await fcmToUser(riderId, {
+          notification: StatusTitles[after.status],
+          data: { status: after.status, rideId },
+        }, { androidChannelId: 'ride_progress_ch' });
+      }
+
+      // Notify driver for rider-initiated changes
+      if (driverId && ['completed', 'cancelled'].includes(after.status)) {
+        await fcmToUser(driverId, {
+          notification: {
+            title: after.status === 'completed' ? 'Ride Completed' : 'Ride Cancelled',
+            body: after.status === 'completed' ? 'Ride marked as completed by rider.' : 'Ride cancelled by rider.',
+          },
+          data: { action: after.status === 'completed' ? 'COMPLETED' : 'CANCELLED_BY_RIDER', rideId },
+        }, { androidChannelId: 'ride_progress_ch' });
+      }
+    } catch (e) {
+      console.error('onRideStatusChange error:', e);
+    }
+  });
 
 module.exports = app;

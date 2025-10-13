@@ -467,7 +467,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     return {
-      'valid': confidence >= 0.6,
+      'valid': confidence >= 0.45,  // 45% minimum - strict on security, lenient on OCR
       'confidence': confidence,
       'issues': issues,
     };
@@ -872,7 +872,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     return {
-      'valid': confidence >= 0.6,
+      'valid': confidence >= 0.45,  // 45% minimum - strict on security, lenient on OCR
       'confidence': confidence,
       'issues': issues,
     };
@@ -1080,7 +1080,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'cnic': cnicFromCnic,
         'dlNumber': dlNumber,
         'trustScore': trustScore,
-        'requiresManualReview': trustScore < 0.7,
+        'requiresManualReview': trustScore < 0.60,  // 60% threshold for manual review
         'securityMetrics': securityCheck['metrics'],
       };
     } catch (e) {
@@ -1235,7 +1235,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': trustScore >= 0.7,
+        'verified': trustScore >= 0.60,  // 60% threshold for verified status
         'trustScore': trustScore,
         'requiresManualReview': requiresManualReview,
       };

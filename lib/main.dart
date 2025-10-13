@@ -25,7 +25,7 @@ import 'login_page.dart';
 import 'sign_up_page.dart';
 import 'driver/driver_dashboard.dart';
 import 'rider/rider_dashboard.dart';
-import 'admin.dart';
+import 'admin/admin_panel.dart';
 import 'driver/driver_ride_details_page.dart' as details;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -361,7 +361,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
         '/signup': (context) => const SignUpPage(),
         '/dashboard': (context) => const RiderDashboard(),
         '/driver-dashboard': (context) => const DriverDashboard(),
-        '/admin': (context) => const AdminDriverVerificationPage(),
+        '/admin': (context) => const AdminPanelApp(),
         '/settings': (context) => const SettingsPage(),
         '/payment': (context) => const PaymentPage(),
         '/help-center': (context) => const HelpCenterPage(),
@@ -438,7 +438,7 @@ class InitialScreen extends ConsumerWidget {
             switch (role) {
               case 'admin':
                 debugPrint("🔐 Redirecting to AdminPage");
-                return const AdminDriverVerificationPage();
+                return const AdminPanelApp();
               case 'driver':
                 if (!isVerified) {
                   debugPrint("🔐 Driver not verified, signing out");

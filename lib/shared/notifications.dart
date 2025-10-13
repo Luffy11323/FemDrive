@@ -28,6 +28,10 @@ const _chReportsNm = 'Reports & Safety';
 const _chPaymentsId = 'ride_payments_ch';
 const _chPaymentsNm = 'Payments';
 
+// New: Admin-specific channel, reusing existing sound for emergencies
+const _chAdminEmergencyId = 'admin_emergency_ch';
+const _chAdminEmergencyNm = 'Admin Emergency Alerts';
+
 /// Existing sounds you already reference
 const _androidEmergencySound = RawResourceAndroidNotificationSound(
   'ride_incoming_15s',
@@ -53,6 +57,9 @@ const _idIncoming = 9101;
 const _idAccept = 9102;
 const _idCancel = 9103;
 const _idEmergency = 9104;
+
+// New: Stable ID for admin emergency
+const _idAdminEmergency = 9105;
 
 final _fln = FlutterLocalNotificationsPlugin();
 
@@ -168,6 +175,18 @@ Future<void> initRideNotifs() async {
     ),
   );
 
+  // New: Admin emergency channel, reusing emergency sound
+  await android?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      _chAdminEmergencyId,
+      _chAdminEmergencyNm,
+      description: 'Admin-specific emergency alerts',
+      importance: Importance.max,
+      playSound: true,
+      sound: _androidEmergencySound,
+    ),
+  );
+
   // Foreground FCM
   FirebaseMessaging.onMessage.listen((m) async {
     try {
@@ -251,6 +270,9 @@ Future<void> _handleRemote({
       return;
     case 'EMERGENCY':
       await showEmergencyAlert(rideId: rideId, title: title, body: body);
+      return;
+    case 'ADMIN_EMERGENCY':
+      await showAdminEmergencyAlert(rideId: rideId, title: title, body: body);
       return;
     case 'REPORTED_AGAINST_YOU':
       await showReportedAgainstYou(rideId: rideId, title: title, body: body);
@@ -481,7 +503,7 @@ Future<void> showCounterFareAccepted({
 }) async {
   try {
     await _fln.show(
-      9207,
+      9205,
       title ?? 'Counter Fare Accepted',
       body ?? 'Your counter offer was accepted.',
       NotificationDetails(
@@ -505,7 +527,7 @@ Future<void> showCounterFareRejected({
 }) async {
   try {
     await _fln.show(
-      9208,
+      9205,
       title ?? 'Counter Fare Rejected',
       body ?? 'Your counter offer was rejected.',
       NotificationDetails(
@@ -587,6 +609,33 @@ Future<void> showEmergencyAlert({
         android: AndroidNotificationDetails(
           _chEmergencyId,
           _chEmergencyNm,
+          priority: Priority.max,
+          importance: Importance.max,
+          category: AndroidNotificationCategory.alarm,
+          ongoing: true,
+        ),
+        iOS: const DarwinNotificationDetails(sound: _iosEmergencySound),
+      ),
+      payload: rideId,
+    );
+  } catch (_) {}
+}
+
+// New: Admin-specific emergency alert (reusing sound)
+Future<void> showAdminEmergencyAlert({
+  String? rideId,
+  String? title,
+  String? body,
+}) async {
+  try {
+    await _fln.show(
+      _idAdminEmergency,
+      title ?? '🚨 New Emergency Alert',
+      body ?? 'A new emergency has been reported in a ride.',
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _chAdminEmergencyId,
+          _chAdminEmergencyNm,
           priority: Priority.max,
           importance: Importance.max,
           category: AndroidNotificationCategory.alarm,
