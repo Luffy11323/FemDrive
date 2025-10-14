@@ -97,7 +97,7 @@ class NearbyDriversService {
       final nowMs = DateTime.now().millisecondsSinceEpoch;
 
       // Progressive radius: 2km → 5km
-      double currentRadius = 2.0;
+      double currentRadius = 20.0; //Back to 2
       List<Map<String, dynamic>> candidates = [];
 
       // These counters are for logging insight
