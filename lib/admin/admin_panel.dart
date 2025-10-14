@@ -37,7 +37,9 @@ class AdminPanelHome extends StatefulWidget {
 }
 
 class AdminPanelHomeState extends State<AdminPanelHome> {
-  bool _isDrawerOpen = false;
+  // REMOVE this unused variable:
+  // bool _isDrawerOpen = false;
+  
   String _currentPage = 'dashboard';
   // ignore: unused_field
   GoogleMapController? _mapController;
@@ -46,6 +48,9 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
   DateTimeRange? _selectedDateRange;
   bool? _selectedVerificationStatus;
   final Map<String, bool> _expandedStates = {};
+  
+  // ADD: GlobalKey for Scaffold to access drawer programmatically
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -55,20 +60,12 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
     };
   }
 
+  // FIXED: Simplified drawer toggle
   void _toggleDrawer() {
-    setState(() {
-      _isDrawerOpen = !_isDrawerOpen;
-      if (_isDrawerOpen && MediaQuery.of(context).size.width <= 600) {
-        Scaffold.of(context).openDrawer();
-      }
-    });
-  }
-
-  void _closeDrawer() {
-    if (_isDrawerOpen) {
-      setState(() {
-        _isDrawerOpen = false;
-      });
+    if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+      Navigator.of(context).pop(); // Close drawer
+    } else {
+      _scaffoldKey.currentState?.openDrawer(); // Open drawer
     }
   }
 
@@ -94,9 +91,16 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
         }
       },
       child: Scaffold(
+        key: _scaffoldKey, // ADD: Attach the GlobalKey here
         appBar: AppBar(
           title: const Text('Admin Panel'),
-          leading: _buildLeadingIcon(context),
+          // FIXED: Leading icon for mobile
+          leading: MediaQuery.of(context).size.width <= 600
+              ? IconButton(
+                  icon: const Icon(Icons.menu),
+                  onPressed: _toggleDrawer,
+                )
+              : null,
           actions: [
             IconButton(
               icon: const Icon(Icons.search),
@@ -112,6 +116,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
             ),
           ],
         ),
+        // FIXED: Drawer should always be defined for mobile
         drawer: MediaQuery.of(context).size.width <= 600
             ? Drawer(
                 child: _buildSidebar(context),
@@ -133,16 +138,8 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
     );
   }
 
-  Widget? _buildLeadingIcon(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    if (screenWidth <= 600) {
-      return IconButton(
-        icon: Icon(_isDrawerOpen ? Icons.close : Icons.menu),
-        onPressed: _toggleDrawer,
-      );
-    }
-    return null;
-  }
+  // REMOVE: This method is no longer needed
+  // Widget? _buildLeadingIcon(BuildContext context) { ... }
 
   Widget _buildSidebar(BuildContext context) {
     return Container(
@@ -151,94 +148,109 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
         children: [
           const DrawerHeader(
             decoration: BoxDecoration(color: Colors.blue),
-            child: Text('Admin Panel', style: TextStyle(fontSize: 24, color: Colors.white)),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.admin_panel_settings, size: 48, color: Colors.white),
+                SizedBox(height: 8),
+                Text(
+                  'Admin Panel',
+                  style: TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
           ),
-          ListTile(
-            leading: const Icon(Icons.dashboard),
-            title: const Text('Dashboard'),
-            onTap: () {
-              setState(() => _currentPage = 'dashboard');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.dashboard,
+            title: 'Dashboard',
+            page: 'dashboard',
           ),
-          ListTile(
-            leading: const Icon(Icons.warning),
-            title: const Text('Emergencies'),
-            onTap: () {
-              setState(() => _currentPage = 'emergencies');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.warning,
+            title: 'Emergencies',
+            page: 'emergencies',
           ),
-          ListTile(
-            leading: const Icon(Icons.directions_car),
-            title: const Text('Rides'),
-            onTap: () {
-              setState(() => _currentPage = 'rides');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.directions_car,
+            title: 'Rides',
+            page: 'rides',
           ),
-          ListTile(
-            leading: const Icon(Icons.person),
-            title: const Text('Users'),
-            onTap: () {
-              setState(() => _currentPage = 'users');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.person,
+            title: 'Users',
+            page: 'users',
           ),
-          ListTile(
-            leading: const Icon(Icons.drive_eta),
-            title: const Text('Drivers'),
-            onTap: () {
-              setState(() => _currentPage = 'drivers');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.drive_eta,
+            title: 'Drivers',
+            page: 'drivers',
           ),
-          ListTile(
-            leading: const Icon(Icons.verified),
-            title: const Text('Driver Verifications'),
-            onTap: () {
-              setState(() => _currentPage = 'driver_verifications');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.verified,
+            title: 'Driver Verifications',
+            page: 'driver_verifications',
           ),
-          ListTile(
-            leading: const Icon(Icons.star),
-            title: const Text('Ratings'),
-            onTap: () {
-              setState(() => _currentPage = 'ratings');
-              if (MediaQuery.of(context).size.width <= 600) {
-                Navigator.pop(context);
-                _closeDrawer();
-              }
-            },
+          _buildDrawerItem(
+            context,
+            icon: Icons.star,
+            title: 'Ratings',
+            page: 'ratings',
           ),
+          const Divider(),
           const Padding(
             padding: EdgeInsets.all(16.0),
-            child: Text('Sidebar Content Loaded', style: TextStyle(color: Colors.grey)),
+            child: Text(
+              'v1.0.0',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),
     );
   }
 
+  // NEW: Helper method for drawer items with proper navigation
+  Widget _buildDrawerItem(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String page,
+  }) {
+    final isSelected = _currentPage == page;
+    
+    return ListTile(
+      leading: Icon(
+        icon,
+        color: isSelected ? Theme.of(context).primaryColor : null,
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          color: isSelected ? Theme.of(context).primaryColor : null,
+        ),
+      ),
+      selected: isSelected,
+      selectedTileColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
+      onTap: () {
+        setState(() => _currentPage = page);
+        // Close drawer on mobile after selection
+        if (MediaQuery.of(context).size.width <= 600) {
+          Navigator.pop(context);
+        }
+      },
+    );
+  }
+
+  // Rest of your methods remain the same...
   Widget _buildMainContent(BuildContext context) {
     switch (_currentPage) {
       case 'dashboard':
