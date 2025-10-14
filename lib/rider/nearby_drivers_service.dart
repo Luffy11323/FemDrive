@@ -65,7 +65,7 @@ class NearbyDriversService {
   ///     1) Watches Firestore for driver metadata (name, rating, type, etc.).
   ///     2) Watches RTDB /drivers_online for {lat,lng,updatedAt[,geohash]} live.
   ///     3) Merges both and filters by freshness + Haversine radius (<= 5 km),
-  ///        using a progressive sweep from 2km → 5km until drivers are found.
+  ///        using a progressive sweep from 0km → 5km in 0.5km steps until drivers are found.
   ///
   /// Usage in UI: NearbyDriversService().streamNearbyDriversFast(center)
   /// ----------------------------------------------------------------------------
@@ -96,8 +96,9 @@ class NearbyDriversService {
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-      // Progressive radius: 2km → 5km
-      double currentRadius = 2.0; //Back to 2
+      // 🚀 UPDATED: Progressive radius: 0km → 5km in 0.5km steps
+      double currentRadius = 0.0; // ← CHANGED: Start at MIN 0km
+      const double radiusStep = 0.5; // ← NEW: Smooth 0.5km steps
       List<Map<String, dynamic>> candidates = [];
 
       // These counters are for logging insight
@@ -124,7 +125,7 @@ class NearbyDriversService {
           final meta = metaById[driverId];
           if (meta == null) {
             metaMissing++;
-            // Could still show, but we’ll skip to keep labels consistent
+            // Could still show, but we'll skip to keep labels consistent
             return;
           }
 
@@ -151,8 +152,9 @@ class NearbyDriversService {
 
         if (temp.isNotEmpty) {
           candidates = temp;
+          _logger.i('✅ Found ${candidates.length} drivers at ${currentRadius}km'); // ← NEW: Log success
         } else {
-          currentRadius += 1.0; // expand search window
+          currentRadius += radiusStep; // ← CHANGED: 0.5km steps
         }
       }
 
