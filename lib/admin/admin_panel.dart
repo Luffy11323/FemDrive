@@ -6,8 +6,6 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'app_utils.dart';
 import 'analytics_and_maps.dart';
-
-// Reference to the global navigatorKey from main.dart
 import 'package:femdrive/main.dart' as global;
 
 void main() async {
@@ -75,45 +73,58 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Admin Panel'),
-        leading: MediaQuery.of(context).size.width <= 600
-            ? IconButton(
-                icon: Icon(_isSidebarOpen ? Icons.close : Icons.menu),
-                onPressed: _toggleSidebar,
+    return PopScope(
+      canPop: true, // Allow pop by default, handle custom logic in onPopInvokedWithResult
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return; // If the pop already occurred, do nothing
+        if (_currentPage != 'dashboard' && MediaQuery.of(context).size.width <= 600) {
+          setState(() {
+            _currentPage = 'dashboard';
+          });
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Admin Panel'),
+          leading: MediaQuery.of(context).size.width <= 600
+              ? IconButton(
+                  icon: Icon(_isSidebarOpen ? Icons.close : Icons.menu),
+                  onPressed: _toggleSidebar,
+                )
+              : null,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () => _showSearchDialog(context),
+            ),
+            IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: _logout,
+            ),
+            IconButton(
+              icon: const Icon(Icons.notifications),
+              onPressed: () => setState(() => _currentPage = 'emergencies'),
+            ),
+          ],
+        ),
+        drawer: MediaQuery.of(context).size.width <= 600
+            ? Drawer(
+                child: _buildSidebar(context),
               )
             : null,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => _showSearchDialog(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
-          ),
-          IconButton(
-            icon: const Icon(Icons.notifications),
-            onPressed: () => setState(() => _currentPage = 'emergencies'),
-          ),
-        ],
-      ),
-      drawer: MediaQuery.of(context).size.width <= 600
-          ? _buildSidebar(context)
-          : null,
-      body: Row(
-        children: [
-          if (_isSidebarOpen && MediaQuery.of(context).size.width > 600)
-            SizedBox(width: 250, child: _buildSidebar(context)),
-          Expanded(child: _buildMainContent(context)),
-        ],
+        body: Row(
+          children: [
+            if (_isSidebarOpen && MediaQuery.of(context).size.width > 600)
+              SizedBox(width: 250, child: _buildSidebar(context)),
+            Expanded(child: _buildMainContent(context)),
+          ],
+        ),
       ),
     );
   }
-
   Widget _buildSidebar(BuildContext context) {
-    return Drawer(
+    return Container(
+      color: Theme.of(context).cardColor,
       child: ListView(
         children: [
           const DrawerHeader(child: Text('Admin Panel', style: TextStyle(fontSize: 24))),
@@ -280,33 +291,54 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
   }
 
   Widget _buildEmergencies(BuildContext context) {
-    return StreamBuilder(
-      stream: FirebaseFirestore.instance.collection(AppPaths.emergenciesCollection).orderBy('createdAt', descending: true).snapshots(),
-      builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
-        if (snapshot.hasError) {
-          return const Center(child: Text('Error loading emergencies data'));
-        }
-        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-        if (snapshot.data!.docs.isNotEmpty && snapshot.data!.docs.first['emergencyTriggered'] == true) showAdminEmergencyAlert(rideId: snapshot.data!.docs.first['rideId'], title: 'New Emergency', body: 'A new emergency has been reported.');
-        return ListView.builder(
-          itemCount: snapshot.data!.docs.length,
-          itemBuilder: (context, index) {
-            var doc = snapshot.data!.docs[index];
-            return Card(
-              child: ListTile(
-                leading: const Icon(Icons.warning, color: Colors.red),
-                title: Text('Emergency #${doc.id} by ${doc['reportedBy']}'),
-                subtitle: Text('Ride: ${doc['rideId']} | Time: ${doc['createdAt']}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _showEditDialog(context, AppPaths.emergenciesCollection, doc),
-                ),
-                onTap: () => _showEmergencyDetails(context, doc),
-              ),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Emergencies'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => setState(() => _currentPage = 'dashboard'),
+        ),
+      ),
+      body: StreamBuilder(
+        stream: FirebaseFirestore.instance
+            .collection(AppPaths.emergenciesCollection)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text('Error loading emergencies data'));
+          }
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (snapshot.data!.docs.isEmpty) {
+            return const Center(child: Text('No emergencies found'));
+          }
+          if (snapshot.data!.docs.isNotEmpty && snapshot.data!.docs.first['emergencyTriggered'] == true) {
+            showAdminEmergencyAlert(
+              rideId: snapshot.data!.docs.first['rideId'],
+              title: 'New Emergency',
+              body: 'A new emergency has been reported.',
             );
-          },
-        );
-      },
+          }
+          return ListView.builder(
+            itemCount: snapshot.data!.docs.length,
+            itemBuilder: (context, index) {
+              var doc = snapshot.data!.docs[index];
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.warning, color: Colors.red),
+                  title: Text('Emergency #${doc.id} by ${doc['reportedBy']}'),
+                  subtitle: Text('Ride: ${doc['rideId']} | Time: ${doc['createdAt']}'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => _showEditDialog(context, AppPaths.emergenciesCollection, doc),
+                  ),
+                  onTap: () => _showEmergencyDetails(context, doc),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 

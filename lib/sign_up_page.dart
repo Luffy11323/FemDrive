@@ -84,7 +84,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   String role = 'rider';
   String selectedCarType = 'Ride X';
   final carTypeList = ['Ride X', 'Ride mini', 'Bike'];
-
+  static const bool temp = true; //Set to false when We'll have a license
   File? licenseImage, cnicImage;
   String? licenseBase64, cnicBase64;
 
@@ -860,10 +860,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     confidence = confidence.clamp(0.0, 1.0);
 
     return {
-      'valid': true, // Hardcoded true as per requirement
-      'confidence': confidence,
-      'issues': issues,
-    };
+      'valid': temp ? true : true, // Already hardcoded, keeping it
+      'confidence': temp ? 1.0 : confidence, // Force 100% confidence
+      'issues': temp ? [] : issues, // Clear issues
+      };
   }
 
   Future<Map<String, dynamic>> verifyDocuments() async {
@@ -1025,33 +1025,40 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         // License Validation
         print('Running enhanced license validation...');
         final enhancedLicenseCheck = await enhancedLicenseValidation(
-          licenseBytes,
-          dlText,
-        );
-        licenseTrust *= enhancedLicenseCheck['confidence'];
-        messages.addAll(List<String>.from(enhancedLicenseCheck['issues']));
+            licenseBytes,
+            dlText,
+          );
+  
+        // BYPASS: Force high trust score for license
+        licenseTrust = temp ? 1.0 : (licenseTrust * enhancedLicenseCheck['confidence']);
+  
+        if (!temp) {
+          messages.addAll(List<String>.from(enhancedLicenseCheck['issues']));
+        }
 
         final dlResult = validateDrivingLicense(dlText);
-        messages.addAll(dlResult['messages'] as List<String>);
-        dlValid = dlResult['valid'] as bool;
+        if (!temp) {
+          messages.addAll(dlResult['messages'] as List<String>);
+        }
+        dlValid = temp ? true : (dlResult['valid'] as bool);
         dlNumber = dlResult['dlNumber'] as String?;
 
+        // Rest of the CNIC cross-check logic...
         if (cnicFromDl != null) {
           final cnicValidDl = validateCnic(cnicFromDl);
-          if (!cnicValidDl) {
+          if (!cnicValidDl && !temp) {
             messages.add('Invalid CNIC on license document.');
             dlValid = false;
           }
 
-          if (cnicFromCnic != null && cnicFromCnic != cnicFromDl) {
+          if (cnicFromCnic != null && cnicFromCnic != cnicFromDl && !temp) {
             messages.add('CNIC mismatch between documents.');
             dlValid = false;
           }
         }
       }
 
-      final overallValid = cnicValidCnic && dlValid && livenessPassed && cnicTrust >= 0.55 && (role != 'driver' || licenseTrust >= 0.55);
-
+      final overallValid = cnicValidCnic && dlValid && livenessPassed && cnicTrust >= 0.55 && (role != 'driver' || temp || licenseTrust >= 0.55);
       setState(() {
         cnicVerification = {
           'cnic': cnicFromCnic,
@@ -1125,7 +1132,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       return;
     }
 
-    if (role == 'driver' && verificationResult['licenseTrustScore'] < 0.55) {
+    if (role == 'driver' && !temp && verificationResult['licenseTrustScore'] < 0.55) {
       showError('License verification confidence below 55%. Please retake.');
       return;
     }
