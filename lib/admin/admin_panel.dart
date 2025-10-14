@@ -7,6 +7,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'app_utils.dart';
 import 'analytics_and_maps.dart';
 
+// Reference to the global navigatorKey from main.dart
+import 'package:femdrive/main.dart' as global;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.init();
@@ -64,8 +67,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
   void _logout() async {
     try {
       await FirebaseAuth.instance.signOut();
-      // ignore: use_build_context_synchronously
-      Navigator.pushReplacementNamed(context, '/login');
+      global.navigatorKey.currentState?.pushReplacementNamed('/login');
     } catch (e) {
       Fluttertoast.showToast(msg: 'Logout failed: $e');
     }
