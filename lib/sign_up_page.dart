@@ -245,8 +245,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       for (int x = 0; x < image.width; x += 2) {
         final pixel = image.getPixel(x, y);
         final intensity =
-            ((pixel.r.toInt() + pixel.g.toInt() + pixel.b.toInt()) / 3)
-                .round();
+            ((pixel.r.toInt() + pixel.g.toInt() + pixel.b.toInt()) / 3).round();
 
         if ((intensity - prevIntensity).abs() > 30) {
           changes++;
@@ -280,7 +279,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         final bottomBrightness =
             (bottom.r.toInt() + bottom.g.toInt() + bottom.b.toInt()) / 3;
 
-        final laplacian = (centerBrightness - rightBrightness).abs() +
+        final laplacian =
+            (centerBrightness - rightBrightness).abs() +
             (centerBrightness - bottomBrightness).abs();
 
         sum += laplacian;
@@ -299,7 +299,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     if (wordLengths.isEmpty) return false;
 
     final avgLength = wordLengths.reduce((a, b) => a + b) / wordLengths.length;
-    final variance = wordLengths
+    final variance =
+        wordLengths
             .map((l) => math.pow(l - avgLength, 2))
             .reduce((a, b) => a + b) /
         wordLengths.length;
@@ -320,8 +321,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
         final currentB =
             (current.r.toInt() + current.g.toInt() + current.b.toInt()) / 3;
-        final nextB =
-            (next.r.toInt() + next.g.toInt() + next.b.toInt()) / 3;
+        final nextB = (next.r.toInt() + next.g.toInt() + next.b.toInt()) / 3;
 
         if ((currentB - nextB).abs() > 40) {
           edges++;
@@ -356,9 +356,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     if (foundKeywords < 2) {
-      issues.add(
-        'Missing official CNIC text markers ($foundKeywords/4 found)',
-      );
+      issues.add('Missing official CNIC text markers ($foundKeywords/4 found)');
       confidence *= 0.3;
     }
 
@@ -371,18 +369,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         confidence *= 0.4;
       }
 
-      // 3. Check image sharpness
-      final sharpness = _calculateSharpness(image);
-      if (sharpness < 50) {
-        issues.add('Image is too blurry - please retake in good lighting');
-        confidence *= 0.6;
-      }
+      // (Removed) Blur/sharpness check
 
-      // 4. Check for hologram features
+      // 4. Check for hologram features (relaxed)
       bool hasHologram = _detectHologramFeatures(image);
       if (!hasHologram) {
-        issues.add('Security hologram not clearly visible');
-        confidence *= 0.7;
+        issues.add(
+          'Security hologram not clearly visible — may still be acceptable',
+        );
+        confidence *= 0.9; // relaxed penalty (was 0.7 before)
       }
     }
 
@@ -398,7 +393,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final provinceCode = int.parse(parts[0][0]);
       if (provinceCode < 1 || provinceCode > 7) {
         issues.add('Invalid province code in CNIC');
-        confidence *= 0.5;
+        confidence *= 0.9;
       }
 
       // Gender validation (even = female)
@@ -411,7 +406,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       // Check for sequential patterns
       if (_hasSequentialPattern(cnicNumber.replaceAll('-', ''))) {
         issues.add('CNIC contains suspicious sequential pattern');
-        confidence *= 0.3;
+        confidence *= 0.4;
       }
     }
 
@@ -442,7 +437,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
     } else {
       issues.add('Date of Birth not clearly visible');
-      confidence *= 0.8;
+      confidence *= 0.9;
     }
 
     // 7. Check for parent/spouse field
@@ -466,8 +461,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.2;
     }
 
+    // Clamp confidence to a sane range
+    if (confidence.isNaN) confidence = 0.0;
+    confidence = confidence.clamp(0.0, 1.0);
+
     return {
-      'valid': confidence >= 0.45,  // 45% minimum - strict on security, lenient on OCR
+      'valid': confidence >= 0.45,
       'confidence': confidence,
       'issues': issues,
     };
@@ -545,7 +544,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final avgArea = areas.reduce((a, b) => a + b) / areas.length;
       final variance =
           areas.map((a) => math.pow(a - avgArea, 2)).reduce((a, b) => a + b) /
-              areas.length;
+          areas.length;
       final sizeChange = math.sqrt(variance) / avgArea;
 
       bool sizeTestPassed = sizeChange >= 0.05;
@@ -729,11 +728,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     double confidence = 1.0;
 
     // 1. Check for license keywords
-    final requiredKeywords = [
-      'DRIVING',
-      'LICENSE',
-      'PAKISTAN',
-    ];
+    final requiredKeywords = ['DRIVING', 'LICENSE', 'PAKISTAN'];
 
     int foundKeywords = 0;
     for (var keyword in requiredKeywords) {
@@ -792,7 +787,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.4;
     } else {
       final dlNumber = dlMatch.group(0)!;
-      
+
       // Check for sequential patterns in license number
       final digits = dlNumber.replaceAll(RegExp(r'\D'), '');
       if (digits.length >= 4 && _hasSequentialPattern(digits)) {
@@ -872,7 +867,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     return {
-      'valid': confidence >= 0.45,  // 45% minimum - strict on security, lenient on OCR
+      'valid':
+          confidence >=
+          0.45, // 45% minimum - strict on security, lenient on OCR
       'confidence': confidence,
       'issues': issues,
     };
@@ -889,8 +886,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     try {
       final cnicBytes = base64Decode(cnicBase64!);
-      final licenseBytes =
-          licenseBase64 != null ? base64Decode(licenseBase64!) : null;
+      final licenseBytes = licenseBase64 != null
+          ? base64Decode(licenseBase64!)
+          : null;
 
       List<String> messages = [];
       double trustScore = 1.0;
@@ -922,6 +920,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
       } else if (trustScore < 0.7) {
         setState(() => requiresLivenessCheck = true);
+
         return {
           'valid': false,
           'messages': ['Please capture with liveness verification.'],
@@ -931,8 +930,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       final cnicText = await extractTextFromImage(cnicBytes);
-      final dlText =
-          licenseBytes != null ? await extractTextFromImage(licenseBytes) : '';
+      final dlText = licenseBytes != null
+          ? await extractTextFromImage(licenseBytes)
+          : '';
 
       // ===== ENHANCED CNIC VALIDATION =====
       print('Running enhanced CNIC validation...');
@@ -941,11 +941,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       messages.addAll(List<String>.from(enhancedCheck['issues']));
 
       if (!enhancedCheck['valid']) {
-        return {
-          'valid': false,
-          'messages': messages,
-          'trustScore': trustScore,
-        };
+        return {'valid': false, 'messages': messages, 'trustScore': trustScore};
       }
       // ===== END ENHANCED VALIDATION =====
 
@@ -1080,7 +1076,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'cnic': cnicFromCnic,
         'dlNumber': dlNumber,
         'trustScore': trustScore,
-        'requiresManualReview': trustScore < 0.60,  // 60% threshold for manual review
+        'requiresManualReview':
+            trustScore < 0.60, // 60% threshold for manual review
         'securityMetrics': securityCheck['metrics'],
       };
     } catch (e) {
@@ -1164,14 +1161,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      final credential = autoCredential ??
+      final credential =
+          autoCredential ??
           PhoneAuthProvider.credential(
             verificationId: verificationId!,
             smsCode: enteredOtp,
           );
 
-      final userCred =
-          await FirebaseAuth.instance.signInWithCredential(credential);
+      final userCred = await FirebaseAuth.instance.signInWithCredential(
+        credential,
+      );
       final user = userCred.user;
 
       if (user == null) {
@@ -1235,7 +1234,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': trustScore >= 0.60,  // 60% threshold for verified status
+        'verified': trustScore >= 0.60, // 60% threshold for verified status
         'trustScore': trustScore,
         'requiresManualReview': requiresManualReview,
       };
@@ -1285,8 +1284,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final message = requiresManualReview
           ? 'Registration successful! Your account is pending manual review for security.'
           : (role == 'driver'
-              ? 'Driver registration successful! Redirecting...'
-              : 'Registration successful! Redirecting...');
+                ? 'Driver registration successful! Redirecting...'
+                : 'Registration successful! Redirecting...');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1384,13 +1383,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           _showLivenessDialog();
         } else if (result['valid']) {
           final trustScore = result['trustScore'] as double;
-          if (trustScore >= 0.7) {
-            showSuccess('Documents verified! High confidence.');
+          if (trustScore >= 0.57) {
+            showSuccess('Documents verified!');
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Documents verified with ${(trustScore * 100).toStringAsFixed(0)}% confidence. May require manual review.',
+                  'Documents verified with ${(trustScore * 100).toStringAsFixed(0)}% confidence.',
                 ),
                 backgroundColor: Colors.orange,
                 behavior: SnackBarBehavior.floating,
@@ -1516,34 +1515,33 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
               'Tilt card right',
               'Move card closer',
             ].asMap().entries.map(
-                  (entry) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.check_circle,
-                          size: 18,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${entry.key + 1}. ${entry.value}',
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                        ),
-                      ],
+              (entry) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${entry.key + 1}. ${entry.value}',
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+            ),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .primary
-                    .withValues(alpha: 0.1),
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Text(
@@ -1677,14 +1675,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                               style: TextStyle(
                                 color: canResend
                                     ? Theme.of(context).colorScheme.primary
-                                    : Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                             TextButton(
-                              onPressed:
-                                  (!isSubmitting && canResend) ? sendOtp : null,
+                              onPressed: (!isSubmitting && canResend)
+                                  ? sendOtp
+                                  : null,
                               child: const Text('Resend OTP'),
                             ),
                           ],
@@ -1709,11 +1708,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                             ? null
                             : (v) => setState(() => role = v!),
                       ).animate().slideX(
-                            begin: -0.1,
-                            end: 0,
-                            duration: 400.ms,
-                            delay: 100.ms,
-                          ),
+                        begin: -0.1,
+                        end: 0,
+                        duration: 400.ms,
+                        delay: 100.ms,
+                      ),
                       if (role == 'rider') ...[
                         const SizedBox(height: 16),
                         _buildImageButton(false),
@@ -1740,11 +1739,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                               ? null
                               : (v) => setState(() => selectedCarType = v!),
                         ).animate().slideX(
-                              begin: 0.1,
-                              end: 0,
-                              duration: 400.ms,
-                              delay: 200.ms,
-                            ),
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 200.ms,
+                        ),
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: carModelController,
@@ -1756,11 +1755,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           validator: (v) =>
                               v == null || v.isEmpty ? 'Required' : null,
                         ).animate().slideX(
-                              begin: -0.1,
-                              end: 0,
-                              duration: 400.ms,
-                              delay: 300.ms,
-                            ),
+                          begin: -0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 300.ms,
+                        ),
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: altContactController,
@@ -1780,11 +1779,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                             }
                           },
                         ).animate().slideX(
-                              begin: 0.1,
-                              end: 0,
-                              duration: 400.ms,
-                              delay: 400.ms,
-                            ),
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 400.ms,
+                        ),
                         const SizedBox(height: 16),
                         _buildImageButton(true),
                         const SizedBox(height: 16),
@@ -1798,7 +1797,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       ElevatedButton(
                         onPressed: isSubmitting
                             ? null
-                            : (isOtpSent ? () => confirmOtp() : () => sendOtp()),
+                            : (isOtpSent
+                                  ? () => confirmOtp()
+                                  : () => sendOtp()),
                         child: AnimatedSwitcher(
                           duration: 250.ms,
                           transitionBuilder: (child, anim) =>
@@ -1810,8 +1811,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                                   ),
                                   label: isSubmitting
                                       ? (isOtpSent
-                                          ? 'Verifying & Registering...'
-                                          : 'Sending OTP...')
+                                            ? 'Verifying & Registering...'
+                                            : 'Sending OTP...')
                                       : 'Enter OTP to register',
                                 )
                               : const Text('Send OTP', key: ValueKey('idle')),
@@ -1829,8 +1830,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 right: 0,
                 child: LinearProgressIndicator(
                   minHeight: 4,
-                  backgroundColor:
-                      Theme.of(context).colorScheme.surfaceContainer,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainer,
                   valueColor: AlwaysStoppedAnimation<Color>(
                     Theme.of(context).colorScheme.primary,
                   ),
@@ -1854,20 +1856,20 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     final color = documentTrustScore >= 0.7
         ? Colors.green
         : documentTrustScore >= 0.5
-            ? Colors.orange
-            : Colors.red;
+        ? Colors.orange
+        : Colors.red;
 
     final icon = documentTrustScore >= 0.7
         ? Icons.verified_user
         : documentTrustScore >= 0.5
-            ? Icons.warning
-            : Icons.error;
+        ? Icons.warning
+        : Icons.error;
 
     final message = documentTrustScore >= 0.7
         ? 'Documents verified with high confidence'
         : documentTrustScore >= 0.5
-            ? 'Documents verified - may require manual review'
-            : 'Low confidence - additional verification needed';
+        ? 'Documents verified - may require manual review'
+        : 'Low confidence - additional verification needed';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -2302,109 +2304,112 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
         backgroundColor: Colors.black,
         body: _isCameraReady
             ? _capturedFile == null
-                ? Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CameraPreview(_controller!)
-                            .animate()
-                            .fadeIn(duration: 400.ms),
-                      ),
-                      Positioned(
-                        top: MediaQuery.of(context).size.height * 0.25,
-                        left: MediaQuery.of(context).size.width * 0.15,
-                        right: MediaQuery.of(context).size.width * 0.15,
-                        height: MediaQuery.of(context).size.width * 0.7 / 1.585,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.white, width: 4),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'Align Card Here',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                  ? Stack(
+                      children: [
+                        Positioned.fill(
+                          child: CameraPreview(
+                            _controller!,
+                          ).animate().fadeIn(duration: 400.ms),
+                        ),
+                        Positioned(
+                          top: MediaQuery.of(context).size.height * 0.25,
+                          left: MediaQuery.of(context).size.width * 0.15,
+                          right: MediaQuery.of(context).size.width * 0.15,
+                          height:
+                              MediaQuery.of(context).size.width * 0.7 / 1.585,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.white, width: 4),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Center(
+                              child: Text(
+                                'Align Card Here',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        top: MediaQuery.of(context).padding.top + 12,
-                        left: 12,
-                        child: IconButton(
-                          color: Colors.white,
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                          tooltip: 'Close',
+                        Positioned(
+                          top: MediaQuery.of(context).padding.top + 12,
+                          left: 12,
+                          child: IconButton(
+                            color: Colors.white,
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                            tooltip: 'Close',
+                          ),
                         ),
-                      ),
-                    ],
-                  )
-                : Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.file(
-                        File(_capturedFile!.path),
-                        fit: BoxFit.cover,
-                      ).animate().fadeIn(duration: 400.ms),
-                      Positioned(
-                        top: MediaQuery.of(context).padding.top + 12,
-                        left: 12,
-                        child: IconButton(
-                          color: Colors.white,
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                          tooltip: 'Close',
+                      ],
+                    )
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(_capturedFile!.path),
+                          fit: BoxFit.cover,
+                        ).animate().fadeIn(duration: 400.ms),
+                        Positioned(
+                          top: MediaQuery.of(context).padding.top + 12,
+                          left: 12,
+                          child: IconButton(
+                            color: Colors.white,
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                            tooltip: 'Close',
+                          ),
                         ),
-                      ),
-                      Positioned(
-                        bottom: 30,
-                        left: 16,
-                        right: 16,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.error,
-                              ),
-                              onPressed: () =>
-                                  setState(() => _capturedFile = null),
-                              child: const Text("Retake"),
-                            ).animate().slideY(
-                                  begin: 0.2,
-                                  end: 0,
-                                  duration: 400.ms,
-                                  delay: 100.ms,
+                        Positioned(
+                          bottom: 30,
+                          left: 16,
+                          right: 16,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.error,
                                 ),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primary,
+                                onPressed: () =>
+                                    setState(() => _capturedFile = null),
+                                child: const Text("Retake"),
+                              ).animate().slideY(
+                                begin: 0.2,
+                                end: 0,
+                                duration: 400.ms,
+                                delay: 100.ms,
                               ),
-                              onPressed: () => Navigator.pop(
-                                context,
-                                File(_capturedFile!.path),
-                              ),
-                              child: const Text("Use Photo"),
-                            ).animate().slideY(
-                                  begin: 0.2,
-                                  end: 0,
-                                  duration: 400.ms,
-                                  delay: 200.ms,
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
                                 ),
-                          ],
+                                onPressed: () => Navigator.pop(
+                                  context,
+                                  File(_capturedFile!.path),
+                                ),
+                                child: const Text("Use Photo"),
+                              ).animate().slideY(
+                                begin: 0.2,
+                                end: 0,
+                                duration: 400.ms,
+                                delay: 200.ms,
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  )
-            : const Center(child: CircularProgressIndicator())
-                .animate()
-                .fadeIn(duration: 400.ms),
+                      ],
+                    )
+            : const Center(
+                child: CircularProgressIndicator(),
+              ).animate().fadeIn(duration: 400.ms),
         floatingActionButton: _capturedFile == null && _isCameraReady
             ? FloatingActionButton(
                 backgroundColor: Colors.white,

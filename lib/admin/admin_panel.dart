@@ -59,6 +59,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
     });
   }
 
+  void _logout() {
+    Navigator.pushReplacementNamed(context, '/login');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -74,6 +78,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: () => _showSearchDialog(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _logout,
           ),
           IconButton(
             icon: const Icon(Icons.notifications),
@@ -169,7 +177,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
       case 'rides':
         return _buildDataTable(context, 'rides');
       case 'users':
-        return _buildDataTable(context, 'users');
+        return _buildUsersPage(context);
       case 'drivers':
         return _buildDataTable(context, 'drivers');
       case 'driver_verifications':
@@ -360,6 +368,199 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildUsersPage(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: TextField(
+            controller: _searchController,
+            decoration: const InputDecoration(
+              hintText: 'Search by UID, Username, Phone, or Ride ID',
+              prefixIcon: Icon(Icons.search),
+            ),
+            onChanged: (value) => setState(() {}),
+          ),
+        ),
+        Expanded(
+          child: StreamBuilder(
+            stream: FirebaseFirestore.instance
+                .collection(AppPaths.usersCollection)
+                .orderBy(AppFields.createdAt, descending: true)
+                .snapshots(),
+            builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
+              if (snapshot.hasError) {
+                return const Center(child: Text('Error loading users data'));
+              }
+              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              final users = snapshot.data!.docs.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                final search = _searchController.text.toLowerCase();
+                return (data[AppFields.uid]?.toString().toLowerCase().contains(search) ?? false) ||
+                    (data[AppFields.username]?.toString().toLowerCase().contains(search) ?? false) ||
+                    (data[AppFields.phone]?.toString().toLowerCase().contains(search) ?? false);
+              }).toList();
+
+              return ListView.builder(
+                itemCount: users.length,
+                itemBuilder: (context, index) {
+                  final doc = users[index];
+                  final data = doc.data() as Map<String, dynamic>;
+                  return FutureBuilder<bool>(
+                    future: _checkRideIdMatch(data[AppFields.uid], _searchController.text.toLowerCase()),
+                    builder: (context, rideSnapshot) {
+                      if (rideSnapshot.connectionState == ConnectionState.waiting) {
+                        return const ListTile(title: Text('Loading...'));
+                      }
+                      if (rideSnapshot.hasError || !rideSnapshot.hasData) {
+                        return const ListTile(title: Text('Error loading ride data'));
+                      }
+                      final showUser = rideSnapshot.data! || 
+                          (data[AppFields.uid]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false) ||
+                          (data[AppFields.username]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false) ||
+                          (data[AppFields.phone]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false);
+                      if (!showUser) return const SizedBox.shrink();
+                      return _buildUserExpansionPanel(data, doc.id);
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<bool> _checkRideIdMatch(String? uid, String search) async {
+    if (uid == null) return false;
+    final rideSnapshot = await FirebaseFirestore.instance
+        .collection(AppPaths.ridesCollection)
+        .where(AppFields.riderId, isEqualTo: uid)
+        .limit(1)
+        .get();
+    return rideSnapshot.docs.any((doc) => doc.id.toLowerCase().contains(search));
+  }
+
+  Widget _buildUserExpansionPanel(Map<String, dynamic> data, String uid) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+      child: ExpansionPanelList(
+        elevation: 1,
+        expansionCallback: (int index, bool isExpanded) {},
+        children: [
+          ExpansionPanel(
+            headerBuilder: (context, isExpanded) => ListTile(
+              title: Text(data[AppFields.username] ?? 'Unknown User'),
+              subtitle: Text('UID: ${data[AppFields.uid] ?? 'N/A'}'),
+            ),
+            body: Column(
+              children: [
+                _buildInfoPanel(data, uid),
+                _buildRidePanel(data[AppFields.uid]),
+              ],
+            ),
+            isExpanded: true, // Default expanded; can be toggled with state management
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoPanel(Map<String, dynamic> data, String uid) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Info', style: Theme.of(context).textTheme.headlineSmall),
+          _buildEditableField('Phone', AppFields.phone, data[AppFields.phone] ?? 'N/A', data, uid),
+          _buildEditableField('Role', AppFields.role, data[AppFields.role] ?? 'N/A', data, uid),
+          _buildEditableField('Verified', AppFields.verified, data[AppFields.verified]?.toString() ?? 'false', data, uid),
+          _buildEditableField('Trust Score', AppFields.trustScore, data[AppFields.trustScore]?.toString() ?? '0.0', data, uid),
+          _buildEditableField('CNIC', AppFields.cnicNumber, data[AppFields.cnicNumber] ?? 'N/A', data, uid),
+          _buildEditableField('Documents Uploaded', AppFields.documentsUploaded, data[AppFields.documentsUploaded]?.toString() ?? 'false', data, uid),
+          if (data[AppFields.role] == 'driver') ...[
+            _buildEditableField('Car Type', AppFields.carType, data[AppFields.carType] ?? 'N/A', data, uid),
+            _buildEditableField('Car Model', AppFields.carModel, data[AppFields.carModel] ?? 'N/A', data, uid),
+            _buildEditableField('Alt Contact', AppFields.altContact, data[AppFields.altContact] ?? 'N/A', data, uid),
+            _buildEditableField('License Verified', AppFields.verifiedLicense, data[AppFields.verifiedLicense]?.toString() ?? 'false', data, uid),
+            _buildEditableField('Awaiting Verification', AppFields.awaitingVerification, data[AppFields.awaitingVerification]?.toString() ?? 'false', data, uid),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRidePanel(String? uid) {
+    return StreamBuilder(
+      stream: uid != null
+          ? FirebaseFirestore.instance
+              .collection(AppPaths.ridesCollection)
+              .where(AppFields.riderId, isEqualTo: uid)
+              .orderBy(AppFields.createdAt, descending: true)
+              .snapshots()
+          : null,
+      builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
+        if (snapshot.hasError) {
+          return const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Text('Error loading ride data'),
+          );
+        }
+        if (!snapshot.hasData) return const Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator());
+        final rides = snapshot.data!.docs;
+        return Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ride History', style: Theme.of(context).textTheme.headlineSmall),
+              if (rides.isEmpty)
+                const Text('No ride history available')
+              else
+                Column(
+                  children: rides.map((doc) {
+                    final rideData = doc.data() as Map<String, dynamic>;
+                    return ListTile(
+                      title: Text('Ride #${doc.id}'),
+                      subtitle: Text(
+                        'Status: ${rideData[AppFields.status] ?? 'N/A'}, '
+                        'Fare: ${rideData[AppFields.fare] ?? '0.0'}, '
+                        'Emergency: ${rideData[AppFields.emergencyTriggered]?.toString() ?? 'No'}',
+                      ),
+                      trailing: Text(rideData[AppFields.createdAt]?.toDate().toString() ?? 'N/A'),
+                    );
+                  }).toList(),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEditableField(String label, String fieldKey, String value, Map<String, dynamic> data, String uid) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        children: [
+          Text('$label: ', style: TextStyle(fontWeight: FontWeight.bold)),
+          Expanded(
+            child: TextField(
+              controller: TextEditingController(text: value),
+              onChanged: (newValue) {
+                data[fieldKey] = _parseField(fieldKey, newValue);
+                AdminService.updateData(AppPaths.usersCollection, uid, data);
+              },
+              decoration: InputDecoration(border: InputBorder.none),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -585,14 +786,14 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             children: [
               Text('Ride ID: ${doc['rideId']}'),
               Text('Reported By: ${doc['reportedBy']}'),
-              Text('Location: ${doc['rideSnapshot']['pickup']}'),
+              Text('Location: ${doc['rideSnapshot'][AppFields.pickup]}'),
               SizedBox(
                 height: 200,
                 child: GoogleMap(
                   initialCameraPosition: CameraPosition(
                     target: LatLng(
-                      doc['rideSnapshot']['pickupLat'] ?? 37.7749,
-                      doc['rideSnapshot']['pickupLng'] ?? -122.4194,
+                      doc['rideSnapshot'][AppFields.pickupLat] ?? 37.7749,
+                      doc['rideSnapshot'][AppFields.pickupLng] ?? -122.4194,
                     ),
                     zoom: 15,
                   ),
@@ -600,8 +801,8 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                     Marker(
                       markerId: MarkerId(doc.id),
                       position: LatLng(
-                        doc['rideSnapshot']['pickupLat'] ?? 37.7749,
-                        doc['rideSnapshot']['pickupLng'] ?? -122.4194,
+                        doc['rideSnapshot'][AppFields.pickupLat] ?? 37.7749,
+                        doc['rideSnapshot'][AppFields.pickupLng] ?? -122.4194,
                       ),
                     ),
                   },

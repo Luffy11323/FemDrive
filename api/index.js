@@ -631,6 +631,7 @@ app.post('/emergency', async (req, res) => {
       [AppFields.rideId]: rideId,
       [AppFields.reportedBy]: reportedBy,
       [AppFields.otherUid]: otherUid,
+      emergencyTriggered: true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       rideSnapshot: {
         [AppFields.pickup]: rideData[AppFields.pickup],
