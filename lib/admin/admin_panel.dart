@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:fluttertoast/fluttertoast.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'app_utils.dart';
 import 'analytics_and_maps.dart';
 
@@ -43,6 +44,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
   String? _selectedStatus;
   DateTimeRange? _selectedDateRange;
   bool? _selectedVerificationStatus;
+  final Map<String, bool> _expandedStates = {}; // State for collapsible panels
 
   @override
   void initState() {
@@ -59,8 +61,14 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
     });
   }
 
-  void _logout() {
-    Navigator.pushReplacementNamed(context, '/login');
+  void _logout() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      // ignore: use_build_context_synchronously
+      Navigator.pushReplacementNamed(context, '/login');
+    } catch (e) {
+      Fluttertoast.showToast(msg: 'Logout failed: $e');
+    }
   }
 
   @override
@@ -354,10 +362,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                       cells: [
                         DataCell(Text(doc.id)),
                         DataCell(Text(doc['username'] ?? '')),
-                        DataCell(Text(doc['verified']?.toString() ?? 'false')),
-                        DataCell(Text(doc['verifiedCnic']?.toString() ?? 'false')),
-                        DataCell(Text(doc['verifiedLicense']?.toString() ?? 'false')),
-                        DataCell(Text(doc['trustScore']?.toString() ?? '0.0')),
+                        DataCell(Text(doc['verified']?.toString() ?? '')),
+                        DataCell(Text(doc['verifiedCnic']?.toString() ?? '')),
+                        DataCell(Text(doc['verifiedLicense']?.toString() ?? '')),
+                        DataCell(Text(doc['trustScore']?.toString() ?? '')),
                       ],
                       onSelectChanged: (selected) => _showEditDialog(context, AppPaths.usersCollection, doc),
                     );
@@ -396,35 +404,34 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                 return const Center(child: Text('Error loading users data'));
               }
               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-              final users = snapshot.data!.docs.where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final search = _searchController.text.toLowerCase();
-                return (data[AppFields.uid]?.toString().toLowerCase().contains(search) ?? false) ||
-                    (data[AppFields.username]?.toString().toLowerCase().contains(search) ?? false) ||
-                    (data[AppFields.phone]?.toString().toLowerCase().contains(search) ?? false);
-              }).toList();
+              final users = snapshot.data!.docs.toList(); // Show all users by default
 
               return ListView.builder(
                 itemCount: users.length,
                 itemBuilder: (context, index) {
                   final doc = users[index];
                   final data = doc.data() as Map<String, dynamic>;
-                  return FutureBuilder<bool>(
-                    future: _checkRideIdMatch(data[AppFields.uid], _searchController.text.toLowerCase()),
-                    builder: (context, rideSnapshot) {
-                      if (rideSnapshot.connectionState == ConnectionState.waiting) {
-                        return const ListTile(title: Text('Loading...'));
-                      }
-                      if (rideSnapshot.hasError || !rideSnapshot.hasData) {
-                        return const ListTile(title: Text('Error loading ride data'));
-                      }
-                      final showUser = rideSnapshot.data! || 
-                          (data[AppFields.uid]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false) ||
-                          (data[AppFields.username]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false) ||
-                          (data[AppFields.phone]?.toString().toLowerCase().contains(_searchController.text.toLowerCase()) ?? false);
-                      if (!showUser) return const SizedBox.shrink();
-                      return _buildUserExpansionPanel(data, doc.id);
-                    },
+                  final uid = doc.id;
+                  _expandedStates.putIfAbsent(uid, () => false); // Initialize as collapsed by default
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+                    child: ExpansionPanelList(
+                      elevation: 1,
+                      expansionCallback: (int panelIndex, bool isExpanded) {
+                        setState(() {
+                          _expandedStates[uid] = !isExpanded;
+                        });
+                      },
+                      children: [
+                        ExpansionPanel(
+                          headerBuilder: (context, isExpanded) => ListTile(
+                            title: Text(data[AppFields.username] ?? ''),
+                          ),
+                          body: _buildInfoPanel(data, uid),
+                          isExpanded: _expandedStates[uid] ?? false,
+                        ),
+                      ],
+                    ),
                   );
                 },
               );
@@ -435,61 +442,26 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
     );
   }
 
-  Future<bool> _checkRideIdMatch(String? uid, String search) async {
-    if (uid == null) return false;
-    final rideSnapshot = await FirebaseFirestore.instance
-        .collection(AppPaths.ridesCollection)
-        .where(AppFields.riderId, isEqualTo: uid)
-        .limit(1)
-        .get();
-    return rideSnapshot.docs.any((doc) => doc.id.toLowerCase().contains(search));
-  }
-
-  Widget _buildUserExpansionPanel(Map<String, dynamic> data, String uid) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
-      child: ExpansionPanelList(
-        elevation: 1,
-        expansionCallback: (int index, bool isExpanded) {},
-        children: [
-          ExpansionPanel(
-            headerBuilder: (context, isExpanded) => ListTile(
-              title: Text(data[AppFields.username] ?? 'Unknown User'),
-              subtitle: Text('UID: ${data[AppFields.uid] ?? 'N/A'}'),
-            ),
-            body: Column(
-              children: [
-                _buildInfoPanel(data, uid),
-                _buildRidePanel(data[AppFields.uid]),
-              ],
-            ),
-            isExpanded: true, // Default expanded; can be toggled with state management
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildInfoPanel(Map<String, dynamic> data, String uid) {
     return Padding(
       padding: const EdgeInsets.all(8.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Info', style: Theme.of(context).textTheme.headlineSmall),
-          _buildEditableField('Phone', AppFields.phone, data[AppFields.phone] ?? 'N/A', data, uid),
-          _buildEditableField('Role', AppFields.role, data[AppFields.role] ?? 'N/A', data, uid),
-          _buildEditableField('Verified', AppFields.verified, data[AppFields.verified]?.toString() ?? 'false', data, uid),
-          _buildEditableField('Trust Score', AppFields.trustScore, data[AppFields.trustScore]?.toString() ?? '0.0', data, uid),
-          _buildEditableField('CNIC', AppFields.cnicNumber, data[AppFields.cnicNumber] ?? 'N/A', data, uid),
-          _buildEditableField('Documents Uploaded', AppFields.documentsUploaded, data[AppFields.documentsUploaded]?.toString() ?? 'false', data, uid),
+          if (data[AppFields.phone] != null) _buildEditableField('Phone', AppFields.phone, data[AppFields.phone].toString(), data, uid),
+          if (data[AppFields.role] != null) _buildEditableField('Role', AppFields.role, data[AppFields.role].toString(), data, uid),
+          if (data[AppFields.verified] != null) _buildEditableField('Verified', AppFields.verified, data[AppFields.verified].toString(), data, uid),
+          if (data[AppFields.trustScore] != null) _buildEditableField('Trust Score', AppFields.trustScore, data[AppFields.trustScore].toString(), data, uid),
+          if (data[AppFields.cnicNumber] != null) _buildEditableField('CNIC', AppFields.cnicNumber, data[AppFields.cnicNumber].toString(), data, uid),
+          if (data[AppFields.documentsUploaded] != null) _buildEditableField('Documents Uploaded', AppFields.documentsUploaded, data[AppFields.documentsUploaded].toString(), data, uid),
           if (data[AppFields.role] == 'driver') ...[
-            _buildEditableField('Car Type', AppFields.carType, data[AppFields.carType] ?? 'N/A', data, uid),
-            _buildEditableField('Car Model', AppFields.carModel, data[AppFields.carModel] ?? 'N/A', data, uid),
-            _buildEditableField('Alt Contact', AppFields.altContact, data[AppFields.altContact] ?? 'N/A', data, uid),
-            _buildEditableField('License Verified', AppFields.verifiedLicense, data[AppFields.verifiedLicense]?.toString() ?? 'false', data, uid),
-            _buildEditableField('Awaiting Verification', AppFields.awaitingVerification, data[AppFields.awaitingVerification]?.toString() ?? 'false', data, uid),
+            if (data[AppFields.carType] != null) _buildEditableField('Car Type', AppFields.carType, data[AppFields.carType].toString(), data, uid),
+            if (data[AppFields.carModel] != null) _buildEditableField('Car Model', AppFields.carModel, data[AppFields.carModel].toString(), data, uid),
+            if (data[AppFields.altContact] != null) _buildEditableField('Alt Contact', AppFields.altContact, data[AppFields.altContact].toString(), data, uid),
+            if (data[AppFields.verifiedLicense] != null) _buildEditableField('License Verified', AppFields.verifiedLicense, data[AppFields.verifiedLicense].toString(), data, uid),
+            if (data[AppFields.awaitingVerification] != null) _buildEditableField('Awaiting Verification', AppFields.awaitingVerification, data[AppFields.awaitingVerification].toString(), data, uid),
           ],
+          _buildRidePanel(data[AppFields.uid]),
         ],
       ),
     );
@@ -506,36 +478,31 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
           : null,
       builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
         if (snapshot.hasError) {
-          return const Padding(
-            padding: EdgeInsets.all(8.0),
-            child: Text('Error loading ride data'),
-          );
+          return const SizedBox.shrink(); // No fallback text
         }
-        if (!snapshot.hasData) return const Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator());
+        if (!snapshot.hasData) return const SizedBox.shrink();
         final rides = snapshot.data!.docs;
+        if (rides.isEmpty) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.all(8.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Ride History', style: Theme.of(context).textTheme.headlineSmall),
-              if (rides.isEmpty)
-                const Text('No ride history available')
-              else
-                Column(
-                  children: rides.map((doc) {
-                    final rideData = doc.data() as Map<String, dynamic>;
-                    return ListTile(
-                      title: Text('Ride #${doc.id}'),
-                      subtitle: Text(
-                        'Status: ${rideData[AppFields.status] ?? 'N/A'}, '
-                        'Fare: ${rideData[AppFields.fare] ?? '0.0'}, '
-                        'Emergency: ${rideData[AppFields.emergencyTriggered]?.toString() ?? 'No'}',
-                      ),
-                      trailing: Text(rideData[AppFields.createdAt]?.toDate().toString() ?? 'N/A'),
-                    );
-                  }).toList(),
-                ),
+              Column(
+                children: rides.map((doc) {
+                  final rideData = doc.data() as Map<String, dynamic>;
+                  return ListTile(
+                    title: Text('Ride #${doc.id}'),
+                    subtitle: Text(
+                      'Status: ${rideData[AppFields.status] ?? ''}, '
+                      'Fare: ${rideData[AppFields.fare] ?? ''}, '
+                      'Emergency: ${rideData[AppFields.emergencyTriggered] ?? ''}',
+                    ),
+                    trailing: Text(rideData[AppFields.createdAt]?.toDate().toString() ?? ''),
+                  );
+                }).toList(),
+              ),
             ],
           ),
         );
