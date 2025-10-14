@@ -93,7 +93,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Map<String, dynamic>? cnicVerification;
   Map<String, dynamic>? licenseVerification;
   bool documentsValid = false;
-  double documentTrustScore = 0.0;
+  double cnicTrustScore = 0.0;
+  double licenseTrustScore = 0.0;
   bool requiresLivenessCheck = false;
 
   bool isOtpSent = false;
@@ -362,26 +363,22 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     final image = img.decodeImage(imageBytes);
     if (image != null) {
-      // 2. Detect moiré patterns (photo of screen/paper)
+      // 2. Detect moiré patterns
       bool hasMoirePattern = _detectMoirePattern(image);
       if (hasMoirePattern) {
         issues.add('Image appears to be a photo of screen/printed paper');
         confidence *= 0.4;
       }
 
-      // (Removed) Blur/sharpness check
-
-      // 4. Check for hologram features (relaxed)
+      // 3. Check for hologram features
       bool hasHologram = _detectHologramFeatures(image);
       if (!hasHologram) {
-        issues.add(
-          'Security hologram not clearly visible — may still be acceptable',
-        );
-        confidence *= 0.9; // relaxed penalty (was 0.7 before)
+        issues.add('Security hologram not clearly visible');
+        confidence *= 0.9;
       }
     }
 
-    // 5. Validate CNIC number format and patterns
+    // 4. Validate CNIC number format
     final cnicPattern = RegExp(r'\d{5}-\d{7}-\d{1}');
     final cnicMatch = cnicPattern.firstMatch(extractedText);
 
@@ -396,21 +393,21 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         confidence *= 0.9;
       }
 
-      // Gender validation (even = female)
+      // Gender validation
       final lastDigit = int.parse(parts[2]);
       if (lastDigit % 2 != 0) {
         issues.add('CNIC indicates male holder (odd last digit)');
         confidence *= 0.4;
       }
 
-      // Check for sequential patterns
+      // Sequential patterns
       if (_hasSequentialPattern(cnicNumber.replaceAll('-', ''))) {
         issues.add('CNIC contains suspicious sequential pattern');
         confidence *= 0.4;
       }
     }
 
-    // 6. Check for Date of Birth and validate age
+    // 5. Check for Date of Birth
     final dobPattern = RegExp(r'(\d{2})[./](\d{2})[./](\d{4})');
     final dobMatch = dobPattern.firstMatch(extractedText);
 
@@ -440,39 +437,37 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.9;
     }
 
-    // 7. Check for parent/spouse field
+    // 6. Check for parent/spouse field
     if (!extractedText.toUpperCase().contains('FATHER') &&
         !extractedText.toUpperCase().contains('HUSBAND')) {
       issues.add('Missing parent/spouse name field');
       confidence *= 0.7;
     }
 
-    // 8. Validate card serial number
+    // 7. Validate card serial number
     final cardNumberPattern = RegExp(r'[0-9]{10,15}');
     if (!cardNumberPattern.hasMatch(extractedText)) {
       issues.add('Card serial number not detected');
       confidence *= 0.8;
     }
 
-    // 10. Detect handwritten text
+    // 8. Detect handwritten text
     bool looksHandwritten = _detectHandwriting(extractedText);
     if (looksHandwritten) {
       issues.add('Document appears to contain handwritten text');
       confidence *= 0.2;
     }
 
-    // Clamp confidence to a sane range
+    // Clamp confidence
     if (confidence.isNaN) confidence = 0.0;
     confidence = confidence.clamp(0.0, 1.0);
 
     return {
-      'valid': confidence >= 0.45,
+      'valid': confidence >= 0.55,
       'confidence': confidence,
       'issues': issues,
     };
   }
-
-  // ============= END ENHANCED VALIDATION =============
 
   Future<Map<String, dynamic>> detectSecurityFeatures(
     Uint8List imageBytes,
@@ -676,14 +671,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     List<String> messages = [];
 
     if (dlNumMatch == null) {
-      messages.add(
-        'No driving license number found. Please capture a valid license.',
-      );
+      messages.add('No driving license number found.');
       isValid = false;
     }
 
     if (expiryMatch == null) {
-      messages.add('No expiry date found. Please capture a valid license.');
+      messages.add('No expiry date found.');
       isValid = false;
     } else {
       try {
@@ -738,15 +731,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     if (foundKeywords < 2) {
-      issues.add(
-        'Missing official license text markers ($foundKeywords/3 found)',
-      );
+      issues.add('Missing official license text markers ($foundKeywords/3 found)');
       confidence *= 0.3;
     }
 
     final image = img.decodeImage(imageBytes);
     if (image != null) {
-      // 2. Detect moiré patterns (photo of screen/paper)
+      // 2. Detect moiré patterns
       bool hasMoirePattern = _detectMoirePattern(image);
       if (hasMoirePattern) {
         issues.add('Image appears to be a photo of screen/printed paper');
@@ -756,7 +747,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       // 3. Check image sharpness
       final sharpness = _calculateSharpness(image);
       if (sharpness < 50) {
-        issues.add('Image is too blurry - please retake in good lighting');
+        issues.add('Image is too blurry');
         confidence *= 0.6;
       }
 
@@ -787,8 +778,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.4;
     } else {
       final dlNumber = dlMatch.group(0)!;
-
-      // Check for sequential patterns in license number
       final digits = dlNumber.replaceAll(RegExp(r'\D'), '');
       if (digits.length >= 4 && _hasSequentialPattern(digits)) {
         issues.add('License contains suspicious sequential pattern');
@@ -849,7 +838,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.8;
     }
 
-    // 9. Validate license categories (A, B, C, etc.)
+    // 9. Validate license categories
     final categoryPattern = RegExp(
       r'(CATEGORY|CLASS|TYPE)[^\n]*([A-E])',
       caseSensitive: false,
@@ -866,10 +855,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       confidence *= 0.2;
     }
 
+    // Clamp confidence
+    if (confidence.isNaN) confidence = 0.0;
+    confidence = confidence.clamp(0.0, 1.0);
+
     return {
-      'valid':
-          confidence >=
-          0.45, // 45% minimum - strict on security, lenient on OCR
+      'valid': true, // Hardcoded true as per requirement
       'confidence': confidence,
       'issues': issues,
     };
@@ -880,7 +871,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       return {
         'valid': false,
         'messages': ['Missing CNIC.'],
-        'trustScore': 0.0,
+        'cnicTrustScore': 0.0,
+        'licenseTrustScore': 0.0,
       };
     }
 
@@ -891,11 +883,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           : null;
 
       List<String> messages = [];
-      double trustScore = 1.0;
+      double cnicTrust = 1.0;
+      double licenseTrust = 1.0;
 
       print('Running security features detection...');
       final securityCheck = await detectSecurityFeatures(cnicBytes);
-      trustScore *= securityCheck['confidence'];
+      cnicTrust *= securityCheck['confidence'];
 
       if (!securityCheck['secure']) {
         messages.add(
@@ -904,27 +897,28 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       bool livenessPassed = true;
-      if (trustScore < 0.7 && cnicLivenessFrames.length >= 3) {
+      if (cnicTrust < 0.7 && cnicLivenessFrames.length >= 3) {
         print('Running liveness detection...');
         final livenessCheck = await detectLiveness(cnicLivenessFrames);
 
         if (livenessCheck['live']) {
-          trustScore = math.max(trustScore, 0.8);
+          cnicTrust = math.max(cnicTrust, 0.8);
           messages.add('✓ At least one tilt test passed');
         } else {
           livenessPassed = false;
-          trustScore *= 0.5;
+          cnicTrust *= 0.5;
           messages.add(
             '⚠️ Liveness verification failed: ${livenessCheck['reason']}',
           );
         }
-      } else if (trustScore < 0.7) {
+      } else if (cnicTrust < 0.7) {
         setState(() => requiresLivenessCheck = true);
 
         return {
           'valid': false,
           'messages': ['Please capture with liveness verification.'],
-          'trustScore': trustScore,
+          'cnicTrustScore': cnicTrust,
+          'licenseTrustScore': licenseTrust,
           'requiresLiveness': true,
         };
       }
@@ -934,16 +928,20 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           ? await extractTextFromImage(licenseBytes)
           : '';
 
-      // ===== ENHANCED CNIC VALIDATION =====
+      // CNIC Validation
       print('Running enhanced CNIC validation...');
-      final enhancedCheck = await enhancedCnicValidation(cnicBytes, cnicText);
-      trustScore *= enhancedCheck['confidence'];
-      messages.addAll(List<String>.from(enhancedCheck['issues']));
+      final enhancedCnicCheck = await enhancedCnicValidation(cnicBytes, cnicText);
+      cnicTrust *= enhancedCnicCheck['confidence'];
+      messages.addAll(List<String>.from(enhancedCnicCheck['issues']));
 
-      if (!enhancedCheck['valid']) {
-        return {'valid': false, 'messages': messages, 'trustScore': trustScore};
+      if (!enhancedCnicCheck['valid']) {
+        return {
+          'valid': false,
+          'messages': messages,
+          'cnicTrustScore': cnicTrust,
+          'licenseTrustScore': licenseTrust,
+        };
       }
-      // ===== END ENHANCED VALIDATION =====
 
       final cnicFromCnic = extractCnic(cnicText);
       final cnicFromDl = licenseBytes != null ? extractCnic(dlText) : null;
@@ -961,12 +959,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (expiryMatch == null) {
         if (!RegExp(r'\d{4}').hasMatch(cnicText)) {
           messages.add(
-            'Expiry date not detected. Please upload the original CNIC card (not a printed or handwritten version).',
+            'Expiry date not detected. Please upload the original CNIC card.',
           );
-          return {'valid': false, 'messages': messages, 'trustScore': 0.0};
+          return {
+            'valid': false,
+            'messages': messages,
+            'cnicTrustScore': 0.0,
+            'licenseTrustScore': licenseTrust,
+          };
         } else {
           messages.add(
-            'Could not clearly detect expiry date — make sure the CNIC image is bright and sharp.',
+            'Could not clearly detect expiry date.',
           );
         }
       } else {
@@ -987,13 +990,18 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             final expiryDate = DateTime(year, month, day);
 
             if (expiryDate.isBefore(DateTime.now())) {
-              messages.add('CNIC has expired. Please upload a valid CNIC.');
-              return {'valid': false, 'messages': messages, 'trustScore': 0.0};
+              messages.add('CNIC has expired.');
+              return {
+                'valid': false,
+                'messages': messages,
+                'cnicTrustScore': 0.0,
+                'licenseTrustScore': licenseTrust,
+              };
             }
           }
         } catch (e) {
           messages.add(
-            'Could not process expiry date properly. Please retake the CNIC photo clearly.',
+            'Could not process expiry date.',
           );
         }
       }
@@ -1001,36 +1009,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (!cnicValidCnic) {
         if (cnicFromCnic == null) {
           messages.add(
-            'Could not read CNIC number. Please retake with better lighting.',
+            'Could not read CNIC number.',
           );
         } else {
           messages.add(
-            'Invalid CNIC: Last digit must be even (0, 2, 4, 6, 8).',
+            'Invalid CNIC: Last digit must be even.',
           );
         }
-        trustScore *= 0.3;
+        cnicTrust *= 0.3;
       }
 
       bool dlValid = true;
       String? dlNumber;
       if (role == 'driver' && licenseBytes != null) {
-        // ===== ENHANCED LICENSE VALIDATION =====
+        // License Validation
         print('Running enhanced license validation...');
         final enhancedLicenseCheck = await enhancedLicenseValidation(
           licenseBytes,
           dlText,
         );
-        trustScore *= enhancedLicenseCheck['confidence'];
+        licenseTrust *= enhancedLicenseCheck['confidence'];
         messages.addAll(List<String>.from(enhancedLicenseCheck['issues']));
-
-        if (!enhancedLicenseCheck['valid']) {
-          return {
-            'valid': false,
-            'messages': messages,
-            'trustScore': trustScore,
-          };
-        }
-        // ===== END ENHANCED LICENSE VALIDATION =====
 
         final dlResult = validateDrivingLicense(dlText);
         messages.addAll(dlResult['messages'] as List<String>);
@@ -1051,23 +1050,26 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
       }
 
-      final overallValid = cnicValidCnic && dlValid && livenessPassed;
+      final overallValid = cnicValidCnic && dlValid && livenessPassed && cnicTrust >= 0.55 && (role != 'driver' || licenseTrust >= 0.55);
 
       setState(() {
         cnicVerification = {
           'cnic': cnicFromCnic,
-          'valid': cnicValidCnic,
+          'valid': cnicValidCnic && cnicTrust >= 0.55,
           'text': cnicText,
+          'confidence': cnicTrust,
         };
         licenseVerification = role == 'driver' && licenseBytes != null
             ? {
                 ...validateDrivingLicense(dlText),
                 'cnicFromDl': cnicFromDl,
                 'text': dlText,
+                'confidence': licenseTrust,
               }
             : null;
         documentsValid = overallValid;
-        documentTrustScore = trustScore;
+        cnicTrustScore = cnicTrust;
+        licenseTrustScore = role == 'driver' ? licenseTrust : 1.0;
       });
 
       return {
@@ -1075,9 +1077,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'messages': messages,
         'cnic': cnicFromCnic,
         'dlNumber': dlNumber,
-        'trustScore': trustScore,
-        'requiresManualReview':
-            trustScore < 0.60, // 60% threshold for manual review
+        'cnicTrustScore': cnicTrust,
+        'licenseTrustScore': licenseTrust,
+        'requiresManualReview': cnicTrust < 0.60 || (role == 'driver' && licenseTrust < 0.60),
         'securityMetrics': securityCheck['metrics'],
       };
     } catch (e) {
@@ -1085,7 +1087,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       return {
         'valid': false,
         'messages': ['Error processing documents: $e'],
-        'trustScore': 0.0,
+        'cnicTrustScore': 0.0,
+        'licenseTrustScore': 0.0,
       };
     }
   }
@@ -1105,6 +1108,26 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           cnicBase64 == null) {
         return showError('Please fill all driver details and capture images.');
       }
+    }
+
+    // Verify documents and check trust scores
+    final verificationResult = await verifyDocuments();
+    if (!verificationResult['valid']) {
+      final messages = List<String>.from(verificationResult['messages']);
+      showError(
+        messages.isNotEmpty ? messages.first : 'Documents invalid.',
+      );
+      return;
+    }
+
+    if (verificationResult['cnicTrustScore'] < 0.55) {
+      showError('CNIC verification confidence below 55%. Please retake.');
+      return;
+    }
+
+    if (role == 'driver' && verificationResult['licenseTrustScore'] < 0.55) {
+      showError('License verification confidence below 55%. Please retake.');
+      return;
     }
 
     try {
@@ -1194,7 +1217,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       String? extractedCnic;
-      double trustScore = 0.0;
       bool requiresManualReview = false;
 
       if (role == 'rider' || role == 'driver') {
@@ -1210,20 +1232,19 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
 
         extractedCnic = verificationResult['cnic'] as String?;
-        trustScore = verificationResult['trustScore'] as double;
         requiresManualReview =
             verificationResult['requiresManualReview'] as bool;
 
         if (extractedCnic != null && await cnicExists(extractedCnic)) {
           showError(
-            'This CNIC is already registered. Each person can only have one account.',
+            'This CNIC is already registered.',
           );
           await FirebaseAuth.instance.signOut();
           return;
         }
 
         showSuccess(
-          'Documents verified! Trust score: ${(trustScore * 100).toStringAsFixed(0)}%',
+          'Documents verified! CNIC Trust: ${(cnicTrustScore * 100).toStringAsFixed(0)}%, License Trust: ${(licenseTrustScore * 100).toStringAsFixed(0)}%',
         );
       }
 
@@ -1234,8 +1255,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': trustScore >= 0.60, // 60% threshold for verified status
-        'trustScore': trustScore,
+        'verified': cnicTrustScore >= 0.60 && (role != 'driver' || licenseTrustScore >= 0.60),
+        'cnicTrustScore': cnicTrustScore,
+        'licenseTrustScore': role == 'driver' ? licenseTrustScore : null,
         'requiresManualReview': requiresManualReview,
       };
 
@@ -1266,7 +1288,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           .set(doc);
       print('User document created for UID: ${user.uid}');
 
-      // Only store phone numbers in 'phones' collection after successful user creation
+      // Store phone numbers
       await FirebaseFirestore.instance
           .collection('phones')
           .doc(primaryDigits)
@@ -1282,10 +1304,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       final message = requiresManualReview
-          ? 'Registration successful! Your account is pending manual review for security.'
+          ? 'Registration successful! Pending manual review.'
           : (role == 'driver'
-                ? 'Driver registration successful! Redirecting...'
-                : 'Registration successful! Redirecting...');
+                ? 'Driver registration successful!'
+                : 'Registration successful!');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1307,7 +1329,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     } catch (e) {
       showError('Registration failed: $e');
 
-      // Clean up phones collection if signup fails
+      // Clean up phones collection
       try {
         if (primaryDigits != null) {
           await FirebaseFirestore.instance
@@ -1382,23 +1404,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         if (result['requiresLiveness'] == true) {
           _showLivenessDialog();
         } else if (result['valid']) {
-          final trustScore = result['trustScore'] as double;
-          if (trustScore >= 0.57) {
+          final cnicTrust = result['cnicTrustScore'] as double;
+          final licenseTrust = result['licenseTrustScore'] as double;
+          if (cnicTrust >= 0.55 && (role != 'driver' || licenseTrust >= 0.55)) {
             showSuccess('Documents verified!');
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Documents verified with ${(trustScore * 100).toStringAsFixed(0)}% confidence.',
-                ),
-                backgroundColor: Colors.orange,
-                behavior: SnackBarBehavior.floating,
-                duration: const Duration(seconds: 3),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            );
+            showError('Document trust score below 55%. Please retake.');
           }
         } else {
           final messages = List<String>.from(result['messages']);
@@ -1462,9 +1473,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final result = await verifyDocuments();
 
       if (result['valid']) {
-        final trustScore = result['trustScore'] as double;
         showSuccess(
-          'Liveness verified! Trust score: ${(trustScore * 100).toStringAsFixed(0)}%',
+          'Liveness verified! CNIC Trust: ${(cnicTrustScore * 100).toStringAsFixed(0)}%, License Trust: ${(licenseTrustScore * 100).toStringAsFixed(0)}%',
         );
         setState(() => requiresLivenessCheck = false);
       } else {
@@ -1716,7 +1726,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                       if (role == 'rider') ...[
                         const SizedBox(height: 16),
                         _buildImageButton(false),
-                        if (documentTrustScore > 0) ...[
+                        if (cnicTrustScore > 0) ...[
                           const SizedBox(height: 8),
                           _buildTrustScoreIndicator(),
                         ],
@@ -1788,7 +1798,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                         _buildImageButton(true),
                         const SizedBox(height: 16),
                         _buildImageButton(false),
-                        if (documentTrustScore > 0) ...[
+                        if (cnicTrustScore > 0 || licenseTrustScore > 0) ...[
                           const SizedBox(height: 8),
                           _buildTrustScoreIndicator(),
                         ],
@@ -1853,23 +1863,45 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Widget _buildTrustScoreIndicator() {
-    final color = documentTrustScore >= 0.7
+    return Column(
+      children: [
+        if (cnicTrustScore > 0)
+          _buildDocumentTrustIndicator(
+            'CNIC',
+            cnicTrustScore,
+            cnicVerification?['valid'] ?? false,
+          ),
+        if (role == 'driver' && licenseTrustScore > 0) ...[
+          const SizedBox(height: 8),
+          _buildDocumentTrustIndicator(
+            'License',
+            licenseTrustScore,
+            licenseVerification?['valid'] ?? false,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildDocumentTrustIndicator(
+      String document, double trustScore, bool isValid) {
+    final color = trustScore >= 0.7
         ? Colors.green
-        : documentTrustScore >= 0.5
-        ? Colors.orange
-        : Colors.red;
+        : trustScore >= 0.55
+            ? Colors.orange
+            : Colors.red;
 
-    final icon = documentTrustScore >= 0.7
+    final icon = trustScore >= 0.7
         ? Icons.verified_user
-        : documentTrustScore >= 0.5
-        ? Icons.warning
-        : Icons.error;
+        : trustScore >= 0.55
+            ? Icons.warning
+            : Icons.error;
 
-    final message = documentTrustScore >= 0.7
-        ? 'Documents verified with high confidence'
-        : documentTrustScore >= 0.5
-        ? 'Documents verified - may require manual review'
-        : 'Low confidence - additional verification needed';
+    final message = trustScore >= 0.7
+        ? '$document verified with high confidence'
+        : trustScore >= 0.55
+            ? '$document verified - may require manual review'
+            : '$document - low confidence, retake required';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1896,13 +1928,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 ),
                 const SizedBox(height: 4),
                 LinearProgressIndicator(
-                  value: documentTrustScore,
+                  value: trustScore,
                   backgroundColor: color.withValues(alpha: 0.2),
                   valueColor: AlwaysStoppedAnimation<Color>(color),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Trust Score: ${(documentTrustScore * 100).toStringAsFixed(0)}%',
+                  'Trust Score: ${(trustScore * 100).toStringAsFixed(0)}%',
                   style: TextStyle(color: color, fontSize: 12),
                 ),
               ],
@@ -1916,7 +1948,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Widget _buildImageButton(bool isLicense) {
     final file = isLicense ? licenseImage : cnicImage;
     final status = isLicense ? licenseVerification : cnicVerification;
-    final isValid = status?['valid'] ?? false;
+    final trustScore = isLicense ? licenseTrustScore : cnicTrustScore;
+    // ignore: unused_local_variable
+    final isValid = status != null && trustScore >= 0.55;
     final label = isLicense ? "License" : "CNIC";
 
     return Column(
@@ -1932,11 +1966,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             Row(
               children: [
                 Icon(
-                  isValid ? Icons.check : Icons.warning,
-                  color: isValid ? Colors.green : Colors.orange,
+                  trustScore >= 0.55 ? Icons.check : Icons.error,
+                  color: trustScore >= 0.55 ? Colors.green : Colors.red,
                 ),
                 const SizedBox(width: 4),
-                Text(isValid ? 'Valid' : 'Invalid - Retake'),
+                Text(trustScore >= 0.55 ? 'Valid' : 'Invalid - Retake'),
               ],
             ),
           const SizedBox(height: 8),
@@ -1954,10 +1988,12 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                             licenseImage = null;
                             licenseBase64 = null;
                             licenseVerification = null;
+                            licenseTrustScore = 0.0;
                           } else {
                             cnicImage = null;
                             cnicBase64 = null;
                             cnicVerification = null;
+                            cnicTrustScore = 0.0;
                             cnicLivenessFrames.clear();
                             requiresLivenessCheck = false;
                           }
@@ -2229,7 +2265,6 @@ class _LivenessCameraState extends State<LivenessCamera> {
     );
   }
 }
-
 class FullScreenCamera extends StatefulWidget {
   const FullScreenCamera({super.key});
 
@@ -2239,7 +2274,6 @@ class FullScreenCamera extends StatefulWidget {
 
 class _FullScreenCameraState extends State<FullScreenCamera> {
   CameraController? _controller;
-  XFile? _capturedFile;
   bool _isCameraReady = false;
 
   @override
@@ -2266,10 +2300,6 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
         SnackBar(
           content: Text('Camera error: $e'),
           backgroundColor: Theme.of(context).colorScheme.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
         ),
       );
       Navigator.pop(context);
@@ -2282,162 +2312,107 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
     super.dispose();
   }
 
-  Future<void> _takePicture() async {
-    if (!(_controller?.value.isInitialized ?? false)) return;
-    await _controller!.setFocusMode(FocusMode.auto);
-    await Future.delayed(const Duration(milliseconds: 500));
-    final file = await _controller!.takePicture();
-    setState(() => _capturedFile = file);
+  Future<void> _captureImage() async {
+    if (!_controller!.value.isInitialized) return;
+
+    try {
+      await _controller!.setFocusMode(FocusMode.auto);
+      await Future.delayed(const Duration(milliseconds: 500));
+      final xFile = await _controller!.takePicture();
+      final file = File(xFile.path);
+
+      final bytes = await file.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null || image.width < 300 || image.height < 300) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Image too small. Please retake.'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      Navigator.pop(context, file);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Capture error: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Theme.of(context).brightness,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: _isCameraReady
-            ? _capturedFile == null
-                  ? Stack(
-                      children: [
-                        Positioned.fill(
-                          child: CameraPreview(
-                            _controller!,
-                          ).animate().fadeIn(duration: 400.ms),
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _isCameraReady
+          ? Stack(
+              children: [
+                Positioned.fill(child: CameraPreview(_controller!)),
+                Positioned(
+                  top: MediaQuery.of(context).size.height * 0.25,
+                  left: MediaQuery.of(context).size.width * 0.15,
+                  right: MediaQuery.of(context).size.width * 0.15,
+                  height: MediaQuery.of(context).size.width * 0.7 / 1.585,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.greenAccent, width: 3),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'Align Document Here',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
-                        Positioned(
-                          top: MediaQuery.of(context).size.height * 0.25,
-                          left: MediaQuery.of(context).size.width * 0.15,
-                          right: MediaQuery.of(context).size.width * 0.15,
-                          height:
-                              MediaQuery.of(context).size.width * 0.7 / 1.585,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.white, width: 4),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Center(
-                              child: Text(
-                                'Align Card Here',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          top: MediaQuery.of(context).padding.top + 12,
-                          left: 12,
-                          child: IconButton(
-                            color: Colors.white,
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(context),
-                            tooltip: 'Close',
-                          ),
-                        ),
-                      ],
-                    )
-                  : Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.file(
-                          File(_capturedFile!.path),
-                          fit: BoxFit.cover,
-                        ).animate().fadeIn(duration: 400.ms),
-                        Positioned(
-                          top: MediaQuery.of(context).padding.top + 12,
-                          left: 12,
-                          child: IconButton(
-                            color: Colors.white,
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(context),
-                            tooltip: 'Close',
-                          ),
-                        ),
-                        Positioned(
-                          bottom: 30,
-                          left: 16,
-                          right: 16,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.error,
-                                ),
-                                onPressed: () =>
-                                    setState(() => _capturedFile = null),
-                                child: const Text("Retake"),
-                              ).animate().slideY(
-                                begin: 0.2,
-                                end: 0,
-                                duration: 400.ms,
-                                delay: 100.ms,
-                              ),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.primary,
-                                ),
-                                onPressed: () => Navigator.pop(
-                                  context,
-                                  File(_capturedFile!.path),
-                                ),
-                                child: const Text("Use Photo"),
-                              ).animate().slideY(
-                                begin: 0.2,
-                                end: 0,
-                                duration: 400.ms,
-                                delay: 200.ms,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    )
-            : const Center(
-                child: CircularProgressIndicator(),
-              ).animate().fadeIn(duration: 400.ms),
-        floatingActionButton: _capturedFile == null && _isCameraReady
-            ? FloatingActionButton(
-                backgroundColor: Colors.white,
-                onPressed: _takePicture,
-                tooltip: 'Capture Photo',
-                child: const Icon(Icons.camera_alt, color: Colors.black),
-              ).animate().scale(duration: 300.ms)
-            : null,
-        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 12,
+                  right: 12,
+                  child: IconButton(
+                    color: Colors.white,
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ],
+            )
+          : const Center(child: CircularProgressIndicator(color: Colors.white)),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.white,
+        onPressed: _captureImage,
+        tooltip: 'Capture Image',
+        child: const Icon(Icons.camera_alt, color: Colors.black),
+      ).animate().scale(duration: 300.ms),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 }
 
 class _LoadingCar extends StatelessWidget {
   final String label;
-  const _LoadingCar({super.key, required this.label});
+
+  const _LoadingCar({required this.label, super.key});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Animate(
-          onPlay: (controller) => controller.repeat(reverse: true),
-          child: const Icon(Icons.directions_car),
-        ).moveX(begin: -12, end: 12, duration: 1000.ms),
+        const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
         const SizedBox(width: 12),
         Text(label),
       ],
