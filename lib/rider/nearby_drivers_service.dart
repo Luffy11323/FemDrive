@@ -14,7 +14,7 @@ class NearbyDriversService {
   final _logger = Logger();
 
   // === Config ===
-  static const double _searchRadiusKm = 50.0; //Back to 5
+  static const double _searchRadiusKm = 5.0; //Back to 5
   static const int _freshMs =
       60 * 1000; // consider driver "online" if updated within last 60s
 
@@ -97,7 +97,7 @@ class NearbyDriversService {
       final nowMs = DateTime.now().millisecondsSinceEpoch;
 
       // Progressive radius: 2km → 5km
-      double currentRadius = 20.0; //Back to 2
+      double currentRadius = 2.0; //Back to 2
       List<Map<String, dynamic>> candidates = [];
 
       // These counters are for logging insight
