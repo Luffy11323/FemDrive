@@ -79,43 +79,53 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
   ];
   int _zoomIndex = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _ctl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
+@override
+void initState() {
+  super.initState();
+  _ctl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 3),
+  )..repeat();
 
-    // Kick off gradual zoom-out, self-contained
-    if (widget.mapController != null) {
-      // Center immediately at the first step, then expand every 1.5s
+  if (widget.mapController != null) {
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted || widget.mapController == null) return;
       _animateToStep(0);
-      _zoomTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      _zoomTimer = Timer.periodic(const Duration(seconds: 3), (_) {
         if (!mounted || widget.mapController == null) return;
         _zoomIndex = (_zoomIndex + 1).clamp(0, _zoomSteps.length - 1);
         _animateToStep(_zoomIndex);
-
-        // stop when we reach last step (~5km view)
         if (_zoomIndex >= _zoomSteps.length - 1) {
           _zoomTimer?.cancel();
           _zoomTimer = null;
         }
       });
-    }
+    });
   }
+}
 
-  Future<void> _animateToStep(int idx) async {
-    try {
-      final zoom = _zoomSteps[idx];
+Future<void> _animateToStep(int idx) async {
+  try {
+    final startZoom = await widget.mapController!.getZoomLevel();
+    final targetZoom = _zoomSteps[idx];
+    const steps = 20;
+    const durationMs = 1000;
+    // ignore: unused_local_variable
+    final stepSize = (targetZoom - startZoom) / steps;
+
+    for (var i = 1; i <= steps; i++) {
+      final t = i / steps;
+      final easedT = Curves.easeInOut.transform(t); // Apply easing
+      final newZoom = startZoom + (targetZoom - startZoom) * easedT;
       await widget.mapController!.animateCamera(
-        CameraUpdate.newLatLngZoom(widget.pickup, zoom),
+        CameraUpdate.newLatLngZoom(widget.pickup, newZoom),
       );
-    } catch (_) {
-      /* ignore animate errors */
+      await Future.delayed(Duration(milliseconds: durationMs ~/ steps));
     }
+  } catch (_) {
+    /* ignore animate errors */
   }
-
+}
   @override
   void dispose() {
     _ctl.dispose();

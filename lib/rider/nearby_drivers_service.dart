@@ -14,7 +14,7 @@ class NearbyDriversService {
   final _logger = Logger();
 
   // === Config ===
-  static const double _searchRadiusKm = 5.0;
+  static const double _searchRadiusKm = 50.0;
   static const int _freshMs =
       60 * 1000; // consider driver "online" if updated within last 60s
 
