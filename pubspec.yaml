@@ -68,6 +68,7 @@ dependencies:
   timezone: ^0.10.1
   fluttertoast: ^9.0.0
   fl_chart: ^0.68.0
+  responsive_framework: ^1.5.1
 
 dev_dependencies:
   flutter_test:

@@ -23,6 +23,7 @@ class AdminPanelApp extends StatelessWidget {
       theme: ThemeData.light(),
       darkTheme: ThemeData.dark(),
       themeMode: ThemeMode.system,
+      debugShowCheckedModeBanner: false,
       home: const AdminPanelHome(),
     );
   }
@@ -32,12 +33,11 @@ class AdminPanelHome extends StatefulWidget {
   const AdminPanelHome({super.key});
 
   @override
-  // ignore: library_private_types_in_public_api
-  _AdminPanelHomeState createState() => _AdminPanelHomeState();
+  AdminPanelHomeState createState() => AdminPanelHomeState();
 }
 
-class _AdminPanelHomeState extends State<AdminPanelHome> {
-  bool _isSidebarOpen = true; // Changed to non-final for toggling
+class AdminPanelHomeState extends State<AdminPanelHome> {
+  bool _isDrawerOpen = false;
   String _currentPage = 'dashboard';
   // ignore: unused_field
   GoogleMapController? _mapController;
@@ -45,7 +45,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
   String? _selectedStatus;
   DateTimeRange? _selectedDateRange;
   bool? _selectedVerificationStatus;
-  final Map<String, bool> _expandedStates = {}; // State for collapsible panels
+  final Map<String, bool> _expandedStates = {};
 
   @override
   void initState() {
@@ -55,11 +55,21 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
     };
   }
 
-  // Toggle sidebar visibility
-  void _toggleSidebar() {
+  void _toggleDrawer() {
     setState(() {
-      _isSidebarOpen = !_isSidebarOpen;
+      _isDrawerOpen = !_isDrawerOpen;
+      if (_isDrawerOpen && MediaQuery.of(context).size.width <= 600) {
+        Scaffold.of(context).openDrawer();
+      }
     });
+  }
+
+  void _closeDrawer() {
+    if (_isDrawerOpen) {
+      setState(() {
+        _isDrawerOpen = false;
+      });
+    }
   }
 
   void _logout() async {
@@ -74,9 +84,9 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: true, // Allow pop by default, handle custom logic in onPopInvokedWithResult
+      canPop: true,
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return; // If the pop already occurred, do nothing
+        if (didPop) return;
         if (_currentPage != 'dashboard' && MediaQuery.of(context).size.width <= 600) {
           setState(() {
             _currentPage = 'dashboard';
@@ -86,12 +96,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Admin Panel'),
-          leading: MediaQuery.of(context).size.width <= 600
-              ? IconButton(
-                  icon: Icon(_isSidebarOpen ? Icons.close : Icons.menu),
-                  onPressed: _toggleSidebar,
-                )
-              : null,
+          leading: _buildLeadingIcon(context),
           actions: [
             IconButton(
               icon: const Icon(Icons.search),
@@ -112,28 +117,51 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                 child: _buildSidebar(context),
               )
             : null,
-        body: Row(
-          children: [
-            if (_isSidebarOpen && MediaQuery.of(context).size.width > 600)
-              SizedBox(width: 250, child: _buildSidebar(context)),
-            Expanded(child: _buildMainContent(context)),
-          ],
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final screenWidth = constraints.maxWidth;
+            if (screenWidth <= 600) {
+              return _buildMobileLayout(context);
+            } else if (screenWidth <= 1200) {
+              return _buildTabletLayout(context);
+            } else {
+              return _buildDesktopLayout(context);
+            }
+          },
         ),
       ),
     );
   }
+
+  Widget? _buildLeadingIcon(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    if (screenWidth <= 600) {
+      return IconButton(
+        icon: Icon(_isDrawerOpen ? Icons.close : Icons.menu),
+        onPressed: _toggleDrawer,
+      );
+    }
+    return null;
+  }
+
   Widget _buildSidebar(BuildContext context) {
     return Container(
       color: Theme.of(context).cardColor,
       child: ListView(
         children: [
-          const DrawerHeader(child: Text('Admin Panel', style: TextStyle(fontSize: 24))),
+          const DrawerHeader(
+            decoration: BoxDecoration(color: Colors.blue),
+            child: Text('Admin Panel', style: TextStyle(fontSize: 24, color: Colors.white)),
+          ),
           ListTile(
             leading: const Icon(Icons.dashboard),
             title: const Text('Dashboard'),
             onTap: () {
               setState(() => _currentPage = 'dashboard');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -141,7 +169,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Emergencies'),
             onTap: () {
               setState(() => _currentPage = 'emergencies');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -149,7 +180,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Rides'),
             onTap: () {
               setState(() => _currentPage = 'rides');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -157,7 +191,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Users'),
             onTap: () {
               setState(() => _currentPage = 'users');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -165,7 +202,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Drivers'),
             onTap: () {
               setState(() => _currentPage = 'drivers');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -173,7 +213,10 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Driver Verifications'),
             onTap: () {
               setState(() => _currentPage = 'driver_verifications');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
           ),
           ListTile(
@@ -181,8 +224,15 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
             title: const Text('Ratings'),
             onTap: () {
               setState(() => _currentPage = 'ratings');
-              if (MediaQuery.of(context).size.width <= 600) Navigator.pop(context);
+              if (MediaQuery.of(context).size.width <= 600) {
+                Navigator.pop(context);
+                _closeDrawer();
+              }
             },
+          ),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text('Sidebar Content Loaded', style: TextStyle(color: Colors.grey)),
           ),
         ],
       ),
@@ -208,6 +258,44 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
       default:
         return const Center(child: Text('Select a page'));
     }
+  }
+
+  Widget _buildMobileLayout(BuildContext context) {
+    return _buildMainContent(context);
+  }
+
+  Widget _buildTabletLayout(BuildContext context) {
+    return Row(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final sidebarWidth = constraints.maxWidth * 0.2;
+            return SizedBox(
+              width: sidebarWidth.clamp(200, 250),
+              child: _buildSidebar(context),
+            );
+          },
+        ),
+        Expanded(child: _buildMainContent(context)),
+      ],
+    );
+  }
+
+  Widget _buildDesktopLayout(BuildContext context) {
+    return Row(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final sidebarWidth = constraints.maxWidth * 0.25;
+            return SizedBox(
+              width: sidebarWidth.clamp(250, 300),
+              child: _buildSidebar(context),
+            );
+          },
+        ),
+        Expanded(child: _buildMainContent(context)),
+      ],
+    );
   }
 
   Widget _buildDashboard(BuildContext context) {
@@ -359,16 +447,17 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                   onChanged: (value) => setState(() {}),
                 ),
               ),
-              DropdownButton<bool?>(
-                hint: const Text('Verification Status'),
-                value: _selectedVerificationStatus,
-                items: const [
-                  DropdownMenuItem(value: null, child: Text('All')),
-                  DropdownMenuItem(value: true, child: Text('Verified')),
-                  DropdownMenuItem(value: false, child: Text('Unverified')),
-                ],
-                onChanged: (value) => setState(() => _selectedVerificationStatus = value),
-              ),
+              if (MediaQuery.of(context).size.width > 300)
+                DropdownButton<bool?>(
+                  hint: const Text('Verification Status'),
+                  value: _selectedVerificationStatus,
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('All')),
+                    DropdownMenuItem(value: true, child: Text('Verified')),
+                    DropdownMenuItem(value: false, child: Text('Unverified')),
+                  ],
+                  onChanged: (value) => setState(() => _selectedVerificationStatus = value),
+                ),
             ],
           ),
         ),
@@ -383,6 +472,9 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
               return SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
+                  columnSpacing: 16.0,
+                  dataRowMinHeight: 48.0,
+                  dataRowMaxHeight: 48.0,
                   columns: const [
                     DataColumn(label: Text('Driver ID')),
                     DataColumn(label: Text('Name')),
@@ -438,15 +530,16 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                 return const Center(child: Text('Error loading users data'));
               }
               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-              final users = snapshot.data!.docs.toList(); // Show all users by default
-
+              final users = snapshot.data!.docs.toList();
+              if (users.isEmpty) return const Center(child: Text('No users found'));
               return ListView.builder(
                 itemCount: users.length,
+                itemExtent: 60,
                 itemBuilder: (context, index) {
                   final doc = users[index];
                   final data = doc.data() as Map<String, dynamic>;
                   final uid = doc.id;
-                  _expandedStates.putIfAbsent(uid, () => false); // Initialize as collapsed by default
+                  _expandedStates.putIfAbsent(uid, () => false);
                   return Card(
                     margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
                     child: ExpansionPanelList(
@@ -459,7 +552,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                       children: [
                         ExpansionPanel(
                           headerBuilder: (context, isExpanded) => ListTile(
-                            title: Text(data[AppFields.username] ?? ''),
+                            title: Text(data[AppFields.username] ?? 'Unnamed User'),
                           ),
                           body: _buildInfoPanel(data, uid),
                           isExpanded: _expandedStates[uid] ?? false,
@@ -482,18 +575,32 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (data[AppFields.phone] != null) _buildEditableField('Phone', AppFields.phone, data[AppFields.phone].toString(), data, uid),
-          if (data[AppFields.role] != null) _buildEditableField('Role', AppFields.role, data[AppFields.role].toString(), data, uid),
-          if (data[AppFields.verified] != null) _buildEditableField('Verified', AppFields.verified, data[AppFields.verified].toString(), data, uid),
-          if (data[AppFields.trustScore] != null) _buildEditableField('Trust Score', AppFields.trustScore, data[AppFields.trustScore].toString(), data, uid),
-          if (data[AppFields.cnicNumber] != null) _buildEditableField('CNIC', AppFields.cnicNumber, data[AppFields.cnicNumber].toString(), data, uid),
-          if (data[AppFields.documentsUploaded] != null) _buildEditableField('Documents Uploaded', AppFields.documentsUploaded, data[AppFields.documentsUploaded].toString(), data, uid),
+          if (data[AppFields.phone] != null)
+            _buildEditableField('Phone', AppFields.phone, data[AppFields.phone].toString(), data, uid),
+          if (data[AppFields.role] != null)
+            _buildEditableField('Role', AppFields.role, data[AppFields.role].toString(), data, uid),
+          if (data[AppFields.verified] != null)
+            _buildEditableField('Verified', AppFields.verified, data[AppFields.verified].toString(), data, uid),
+          if (data[AppFields.trustScore] != null)
+            _buildEditableField('Trust Score', AppFields.trustScore, data[AppFields.trustScore].toString(), data, uid),
+          if (data[AppFields.cnicNumber] != null)
+            _buildEditableField('CNIC', AppFields.cnicNumber, data[AppFields.cnicNumber].toString(), data, uid),
+          if (data[AppFields.documentsUploaded] != null)
+            _buildEditableField(
+                'Documents Uploaded', AppFields.documentsUploaded, data[AppFields.documentsUploaded].toString(), data, uid),
           if (data[AppFields.role] == 'driver') ...[
-            if (data[AppFields.carType] != null) _buildEditableField('Car Type', AppFields.carType, data[AppFields.carType].toString(), data, uid),
-            if (data[AppFields.carModel] != null) _buildEditableField('Car Model', AppFields.carModel, data[AppFields.carModel].toString(), data, uid),
-            if (data[AppFields.altContact] != null) _buildEditableField('Alt Contact', AppFields.altContact, data[AppFields.altContact].toString(), data, uid),
-            if (data[AppFields.verifiedLicense] != null) _buildEditableField('License Verified', AppFields.verifiedLicense, data[AppFields.verifiedLicense].toString(), data, uid),
-            if (data[AppFields.awaitingVerification] != null) _buildEditableField('Awaiting Verification', AppFields.awaitingVerification, data[AppFields.awaitingVerification].toString(), data, uid),
+            if (data[AppFields.carType] != null)
+              _buildEditableField('Car Type', AppFields.carType, data[AppFields.carType].toString(), data, uid),
+            if (data[AppFields.carModel] != null)
+              _buildEditableField('Car Model', AppFields.carModel, data[AppFields.carModel].toString(), data, uid),
+            if (data[AppFields.altContact] != null)
+              _buildEditableField('Alt Contact', AppFields.altContact, data[AppFields.altContact].toString(), data, uid),
+            if (data[AppFields.verifiedLicense] != null)
+              _buildEditableField(
+                  'License Verified', AppFields.verifiedLicense, data[AppFields.verifiedLicense].toString(), data, uid),
+            if (data[AppFields.awaitingVerification] != null)
+              _buildEditableField('Awaiting Verification', AppFields.awaitingVerification,
+                  data[AppFields.awaitingVerification].toString(), data, uid),
           ],
           _buildRidePanel(data[AppFields.uid]),
         ],
@@ -512,7 +619,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
           : null,
       builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
         if (snapshot.hasError) {
-          return const SizedBox.shrink(); // No fallback text
+          return const SizedBox.shrink();
         }
         if (!snapshot.hasData) return const SizedBox.shrink();
         final rides = snapshot.data!.docs;
@@ -549,7 +656,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: Row(
         children: [
-          Text('$label: ', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
           Expanded(
             child: TextField(
               controller: TextEditingController(text: value),
@@ -557,7 +664,7 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                 data[fieldKey] = _parseField(fieldKey, newValue);
                 AdminService.updateData(AppPaths.usersCollection, uid, data);
               },
-              decoration: InputDecoration(border: InputBorder.none),
+              decoration: const InputDecoration(border: InputBorder.none),
             ),
           ),
         ],
@@ -582,15 +689,16 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                   onChanged: (value) => setState(() {}),
                 ),
               ),
-              DropdownButton<String>(
-                hint: const Text('Status'),
-                value: _selectedStatus,
-                items: [
-                  const DropdownMenuItem(value: null, child: Text('All')),
-                  ...RideStatus.values.map((status) => DropdownMenuItem(value: status, child: Text(status))),
-                ],
-                onChanged: (value) => setState(() => _selectedStatus = value),
-              ),
+              if (MediaQuery.of(context).size.width > 300)
+                DropdownButton<String>(
+                  hint: const Text('Status'),
+                  value: _selectedStatus,
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('All')),
+                    ...RideStatus.values.map((status) => DropdownMenuItem(value: status, child: Text(status))),
+                  ],
+                  onChanged: (value) => setState(() => _selectedStatus = value),
+                ),
               IconButton(
                 icon: const Icon(Icons.date_range),
                 onPressed: () async {
@@ -613,9 +721,13 @@ class _AdminPanelHomeState extends State<AdminPanelHome> {
                 return const Center(child: Text('Error loading data'));
               }
               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              if (snapshot.data!.docs.isEmpty) return const Center(child: Text('No data found'));
               return SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
+                  columnSpacing: 16.0,
+                  dataRowMinHeight: 48.0,
+                  dataRowMaxHeight: 48.0,
                   columns: _getColumns(collection),
                   rows: snapshot.data!.docs.map((doc) {
                     return DataRow(
