@@ -115,6 +115,8 @@ class AdminService {
       }
       if (searchQuery.isNotEmpty) {
         query = query.where(FieldPath.documentId, isEqualTo: searchQuery);
+      } else {
+        query = query.orderBy(AppFields.createdAt, descending: true); // Ensure all data is fetched without search
       }
       return query.snapshots();
     } catch (e) {
@@ -130,6 +132,8 @@ class AdminService {
       }
       if (searchQuery.isNotEmpty) {
         query = query.where(FieldPath.documentId, isEqualTo: searchQuery);
+      } else {
+        query = query.orderBy(AppFields.createdAt, descending: true); // Fetch all drivers without search
       }
       return query.snapshots();
     } catch (e) {
@@ -195,6 +199,23 @@ class AdminService {
       NotificationService.showNotification('New Emergency', 'Emergency reported for ride #$rideId by $reportedBy');
     } catch (e) {
       throw Exception('Failed to send emergency notification: $e');
+    }
+  }
+
+  static Future<String?> getDriverIdFromUser(String uid) async {
+    try {
+      final querySnapshot = await _fire
+          .collection(AppPaths.usersCollection)
+          .where(AppFields.uid, isEqualTo: uid)
+          .where(AppFields.role, isEqualTo: 'driver')
+          .limit(1)
+          .get();
+      if (querySnapshot.docs.isNotEmpty) {
+        return uid; // uid serves as driverId for drivers
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
   }
 }

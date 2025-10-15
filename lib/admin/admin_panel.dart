@@ -352,7 +352,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
             ),
             Expanded(
               child: GoogleMap(
-                initialCameraPosition: const CameraPosition(target: LatLng(37.7749, -122.4194), zoom: 10),
+                initialCameraPosition: const CameraPosition(target: LatLng(31.5204, 74.3587), zoom: 10),
                 onMapCreated: (controller) => _mapController = controller,
                 markers: snapshot.data!.docs
                     .where((d) => d['pickupLat'] != null && d['pickupLng'] != null)
@@ -402,6 +402,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
       body: StreamBuilder(
         stream: FirebaseFirestore.instance
             .collection(AppPaths.emergenciesCollection)
+            .where('type', isEqualTo: 'driver_emergency')
             .orderBy('createdAt', descending: true)
             .snapshots(),
         builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
@@ -412,7 +413,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
           if (snapshot.data!.docs.isEmpty) {
             return const Center(child: Text('No emergencies found'));
           }
-          if (snapshot.data!.docs.isNotEmpty && snapshot.data!.docs.first['emergencyTriggered'] == true) {
+          if (snapshot.data!.docs.isNotEmpty) {
             showAdminEmergencyAlert(
               rideId: snapshot.data!.docs.first['rideId'],
               title: 'New Emergency',
@@ -423,11 +424,13 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
             itemCount: snapshot.data!.docs.length,
             itemBuilder: (context, index) {
               var doc = snapshot.data!.docs[index];
+              // ignore: unused_local_variable
+              final rideSnapshot = doc['rideSnapshot'] as Map?;
               return Card(
                 child: ListTile(
                   leading: const Icon(Icons.warning, color: Colors.red),
                   title: Text('Emergency #${doc.id} by ${doc['reportedBy']}'),
-                  subtitle: Text('Ride: ${doc['rideId']} | Time: ${doc['createdAt']}'),
+                  subtitle: Text('Ride: ${doc['rideId']} | Time: ${doc['createdAt']?.toDate()}'),
                   trailing: IconButton(
                     icon: const Icon(Icons.edit),
                     onPressed: () => _showEditDialog(context, AppPaths.emergenciesCollection, doc),
@@ -533,10 +536,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
         ),
         Expanded(
           child: StreamBuilder(
-            stream: FirebaseFirestore.instance
-                .collection(AppPaths.usersCollection)
-                .orderBy(AppFields.createdAt, descending: true)
-                .snapshots(),
+            stream: AdminService.getFilteredStream(AppPaths.usersCollection, _searchController.text, null, null),
             builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
               if (snapshot.hasError) {
                 return const Center(child: Text('Error loading users data'));
@@ -649,8 +649,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
                     title: Text('Ride #${doc.id}'),
                     subtitle: Text(
                       'Status: ${rideData[AppFields.status] ?? ''}, '
-                      'Fare: ${rideData[AppFields.fare] ?? ''}, '
-                      'Emergency: ${rideData[AppFields.emergencyTriggered] ?? ''}',
+                      'Fare: ${rideData[AppFields.fare] ?? ''}',
                     ),
                     trailing: Text(rideData[AppFields.createdAt]?.toDate().toString() ?? ''),
                   );
@@ -788,12 +787,15 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
   List<DataCell> _getCells(String collection, DocumentSnapshot doc) {
     switch (collection) {
       case 'rides':
+        final rideData = doc.data() as Map<String, dynamic>;
+        final rideSnapshot = rideData['rideSnapshot'] as Map?;
+        final driverId = rideSnapshot?['driverId'] ?? '';
         return [
           DataCell(Text(doc.id)),
-          DataCell(Text(doc['status'] ?? '')),
-          DataCell(Text(doc['fare']?.toString() ?? '')),
-          DataCell(Text(doc['driverId'] ?? '')),
-          DataCell(Text(doc['riderId'] ?? '')),
+          DataCell(Text(rideData['status'] ?? '')),
+          DataCell(Text(rideData['fare']?.toString() ?? '')),
+          DataCell(Text(driverId)),
+          DataCell(Text(rideData['riderId'] ?? '')),
         ];
       case 'users':
       case 'drivers':
@@ -904,6 +906,26 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
     showDialog(
       context: context,
       builder: (context) {
+        final rideSnapshot = doc['rideSnapshot'] as Map?;
+        String driverId = rideSnapshot?['driverId'] ?? '';
+        if (driverId.isEmpty) {
+          // Fetch driverId from users if necessary
+          final reportedBy = doc['reportedBy'];
+          if (reportedBy != null) {
+            FirebaseFirestore.instance
+                .collection(AppPaths.usersCollection)
+                .where('uid', isEqualTo: reportedBy)
+                .where('role', isEqualTo: 'driver')
+                .limit(1)
+                .get()
+                .then((querySnapshot) {
+              if (querySnapshot.docs.isNotEmpty) {
+                driverId = reportedBy;
+                setState(() {});
+              }
+            });
+          }
+        }
         return AlertDialog(
           title: Text('Emergency #${doc.id}'),
           content: Column(
@@ -911,14 +933,15 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
             children: [
               Text('Ride ID: ${doc['rideId']}'),
               Text('Reported By: ${doc['reportedBy']}'),
-              Text('Location: ${doc['rideSnapshot'][AppFields.pickup]}'),
+              Text('Driver ID: $driverId'),
+              Text('Location: ${rideSnapshot?[AppFields.pickup] ?? 'Unknown'}'),
               SizedBox(
                 height: 200,
                 child: GoogleMap(
                   initialCameraPosition: CameraPosition(
                     target: LatLng(
-                      doc['rideSnapshot'][AppFields.pickupLat] ?? 37.7749,
-                      doc['rideSnapshot'][AppFields.pickupLng] ?? -122.4194,
+                      (rideSnapshot?[AppFields.pickupLat] as num?)?.toDouble() ?? 31.5204,
+                      (rideSnapshot?[AppFields.pickupLng] as num?)?.toDouble() ?? 74.3587,
                     ),
                     zoom: 15,
                   ),
@@ -926,8 +949,8 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
                     Marker(
                       markerId: MarkerId(doc.id),
                       position: LatLng(
-                        doc['rideSnapshot'][AppFields.pickupLat] ?? 37.7749,
-                        doc['rideSnapshot'][AppFields.pickupLng] ?? -122.4194,
+                        (rideSnapshot?[AppFields.pickupLat] as num?)?.toDouble() ?? 31.5204,
+                        (rideSnapshot?[AppFields.pickupLng] as num?)?.toDouble() ?? 74.3587,
                       ),
                     ),
                   },
