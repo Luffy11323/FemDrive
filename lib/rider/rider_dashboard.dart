@@ -2376,7 +2376,7 @@ class _CounterFareCard extends StatelessWidget {
             child: Column(
               children: [
                 Text(
-                  '\$${counterFare.toStringAsFixed(2)}',
+                  '₨ ${counterFare.toStringAsFixed(2)}',
                   style: const TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.w800,
@@ -2384,7 +2384,7 @@ class _CounterFareCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Your fare: \$${baseFare.toStringAsFixed(2)}',
+                  'Your fare: ₨ ${baseFare.toStringAsFixed(2)}',
                   style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
                 ),
               ],
