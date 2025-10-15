@@ -1686,7 +1686,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Emergency'),
+                              : const Text('SOS'),
                         ),
                       ),
                       const SizedBox(width: 8),
