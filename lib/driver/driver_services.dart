@@ -721,13 +721,19 @@ class DriverService {
   }
 
   // COUNTER
+  // COUNTER
   Future<void> proposeCounterFare(String rideId, double newFare) async {
     final fire = FirebaseFirestore.instance;
     final rtdb = FirebaseDatabase.instance.ref();
     final rideRef = fire.collection('rides').doc(rideId);
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Not logged in');
 
     String riderId = '';
+    final driverId = user.uid;
+    final now = ServerValue.timestamp;
 
+    // 1) Transaction to validate and get riderId (unchanged)
     await fire.runTransaction((txn) async {
       final snap = await txn.get(rideRef);
       if (!snap.exists) throw Exception('Ride not found');
@@ -739,26 +745,25 @@ class DriverService {
         throw Exception('Ride is no longer active');
       }
 
-      final me = FirebaseAuth.instance.currentUser!.uid;
+      // Update Firestore with counter offer (existing logic)
       txn.update(rideRef, {
         'counterFare': newFare,
         'counterProposedAt': FieldValue.serverTimestamp(),
-        'counterDriverId': me,
+        'counterDriverId': driverId,
       });
     });
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    final now = ServerValue.timestamp;
 
+    // 2) Mirror to RTDB live node and rider node (existing logic)
     await rtdb.child('ridesLive/$rideId').update({
       'counterFare': newFare,
-      'counterDriverId': me,
+      'counterDriverId': driverId,
       'updatedAt': now,
     });
 
     if (riderId.isNotEmpty) {
       await rtdb.child('rides/$riderId/$rideId').update({
         'counterFare': newFare,
-        'counterDriverId': me,
+        'counterDriverId': driverId,
         'updatedAt': now,
       });
 
@@ -769,8 +774,59 @@ class DriverService {
         'timestamp': now,
       });
     }
-  }
 
+    // 3) Call Vercel endpoint for additional server-side processing
+    try {
+      final response = await http.post(
+        Uri.parse('https://fem-drive.vercel.app/ride/counter-fare'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'rideId': rideId,
+          'driverUid': driverId,
+          'counterFare': newFare,
+          'riderId': riderId,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint('Vercel counter fare call failed: ${response.body}');
+        // Continue with existing logic as fallback
+      } else {
+        // Optional: Sync with server response if needed (e.g., updated fare)
+        final responseData = jsonDecode(response.body);
+        if (responseData['ok'] == true && responseData['counterFare'] != null) {
+          await rtdb.child('ridesLive/$rideId').update({
+            'counterFare': responseData['counterFare'],
+            'updatedAt': now,
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error calling Vercel for counter fare: $e');
+      // Fallback to existing RTDB logic is already in place
+    }
+  }
+  // NEW: Sync counter offer with server (optional periodic sync)
+  Future<void> syncCounterWithServer(String rideId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://fem-drive.vercel.app/ride/counter-fare/$rideId'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['ok'] == true && data['counterFare'] != null) {
+          final rtdb = FirebaseDatabase.instance.ref();
+          await rtdb.child('ridesLive/$rideId').update({
+            'counterFare': data['counterFare'],
+            'updatedAt': ServerValue.timestamp,
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error syncing counter with server: $e');
+    }
+  }
   // STATUS (accepted -> driver_arrived -> in_progress -> completed)
   Future<void> updateRideStatus(String rideId, String newStatus) async {
     await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({

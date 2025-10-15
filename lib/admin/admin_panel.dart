@@ -769,7 +769,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
       case 'drivers':
         return const [
           DataColumn(label: Text('UID')),
-          DataColumn(label: Text('Name')),
+          DataColumn(label: Text('Username')),
           DataColumn(label: Text('Phone')),
           DataColumn(label: Text('Verified')),
         ];
@@ -801,7 +801,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
       case 'drivers':
         return [
           DataCell(Text(doc.id)),
-          DataCell(Text(doc['name'] ?? '')),
+          DataCell(Text(doc['username'] ?? '')),
           DataCell(Text(doc['phone'] ?? '')),
           DataCell(Text(doc['verified']?.toString() ?? '')),
         ];

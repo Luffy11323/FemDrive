@@ -120,6 +120,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   void initState() {
     super.initState();
     listenForCode();
+    // Add listeners for real-time validation
+    usernameController.addListener(() => _validateUsernameDebounced(usernameController.text));
+    phoneController.addListener(() => _validatePhoneDebounced(phoneController.text));
+    altContactController.addListener(() => _validateAltPhoneDebounced(altContactController.text));
   }
 
   // SINGLE dispose() method - remove the duplicate
@@ -175,29 +179,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     return '+92${digits.substring(1)}';
   }
 
-  // KEEP ONLY ONE SET OF VALIDATION METHODS
-  Future<bool> usernameExists(String username) async {
-    try {
-      final cleanUsername = username.trim().toLowerCase();
-      final snap = await FirebaseFirestore.instance
-          .collection('users')
-          .where('username', isEqualTo: cleanUsername)
-          .limit(1)
-          .get();
-      return snap.docs.isNotEmpty;
-    } catch (e) {
-      print('Error checking username: $e');
-      return false;
-    }
-  }
-
   Future<bool> phoneNumberExists(String phone) async {
     final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
     final snap = await FirebaseFirestore.instance
-        .collection('phones')
-        .doc(digitsOnly)
+        .collection('users')
+        .where('phone', isEqualTo: digitsOnly)
+        .limit(1)
         .get();
-    return snap.exists;
+    if (snap.docs.isEmpty) return false;
+    final userDoc = snap.docs.first.data();
+    return userDoc['role'] != null;
   }
 
   Future<bool> cnicExists(String cnicNumber) async {
@@ -217,10 +208,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Future<bool> altPhoneExists(String phone) async {
     final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
     final snap = await FirebaseFirestore.instance
-        .collection('phones')
-        .doc(digitsOnly)
+        .collection('users')
+        .where('altContact', isEqualTo: digitsOnly)
+        .limit(1)
         .get();
-    return snap.exists;
+    if (snap.docs.isEmpty) return false;
+    final userDoc = snap.docs.first.data();
+    return userDoc['role'] != null;
   }
 
   void showError(String msg) {
@@ -252,8 +246,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     if (usernameController.text.trim().isEmpty) {
       errors.add('Username is required');
-    } else if (await usernameExists(usernameController.text)) {
-      errors.add('Username "${usernameController.text.trim()}" is already taken');
     }
 
     if (phoneController.text.trim().isEmpty) {
@@ -337,13 +329,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       return;
     }
 
-    _usernameDebounceTimer = Timer(const Duration(milliseconds: 800), () async {
-      if (await usernameExists(value)) {
-        setState(() => _usernameError = 'Username already taken');
-        showError('Username "${value.trim()}" is already taken. Please choose another.');
-      } else {
-        setState(() => _usernameError = null);
-      }
+    _usernameDebounceTimer = Timer(const Duration(milliseconds: 800), () {
+      setState(() => _usernameError = null);
     });
   }
 
@@ -360,7 +347,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         final formatted = formatPhoneNumber(value);
         if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
           setState(() => _phoneError = 'Phone already registered');
-          showError('Phone number $value is already registered. Please try logging in.');
+          showError('Phone number $value is already registered with a complete account. Please try logging in.');
         } else {
           setState(() => _phoneError = null);
         }
@@ -389,7 +376,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           showError('Alternate number cannot be the same as primary number.');
         } else if (await altPhoneExists(altDigits)) {
           setState(() => _altPhoneError = 'Already registered');
-          showError('Alternate number $value is already registered.');
+          showError('Alternate number $value is already registered with a complete account.');
         } else {
           setState(() => _altPhoneError = null);
         }
@@ -1440,7 +1427,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final formatted = formatPhoneNumber(phoneController.text);
 
       if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
-        return showError('This phone number is already registered.');
+        return showError('This phone number is already registered with a complete account.');
       }
 
       setState(() => isSubmitting = true);
@@ -1478,6 +1465,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     String? primaryDigits;
     String? altDigits;
+    UserCredential? userCred;
 
     try {
       if (autoCredential == null && enteredOtp.length != otpLength) {
@@ -1490,16 +1478,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      final credential =
-          autoCredential ??
+      final credential = autoCredential ??
           PhoneAuthProvider.credential(
             verificationId: verificationId!,
             smsCode: enteredOtp,
           );
 
-      final userCred = await FirebaseAuth.instance.signInWithCredential(
-        credential,
-      );
+      userCred = await FirebaseAuth.instance.signInWithCredential(credential);
       final user = userCred.user;
 
       if (user == null) {
@@ -1516,9 +1501,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           .doc(user.uid)
           .get();
 
-      if (existingDoc.exists) {
+      if (existingDoc.exists && existingDoc.data()?['role'] != null) {
         await FirebaseAuth.instance.signOut();
-        showError('Account already exists. Please try logging in.');
+        showError('A complete account already exists. Please try logging in.');
         return;
       }
 
@@ -1538,13 +1523,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
 
         extractedCnic = verificationResult['cnic'] as String?;
-        requiresManualReview =
-            verificationResult['requiresManualReview'] as bool;
+        requiresManualReview = verificationResult['requiresManualReview'] as bool;
 
         if (extractedCnic != null && await cnicExists(extractedCnic)) {
-          showError(
-            'This CNIC is already registered.',
-          );
+          showError('This CNIC is already registered with a complete account.');
           await FirebaseAuth.instance.signOut();
           return;
         }
@@ -1554,7 +1536,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         );
       }
 
-      // Prepare user document
       final doc = <String, dynamic>{
         'uid': user.uid,
         'phone': primaryDigits,
@@ -1587,33 +1568,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         });
       }
 
-      // Write user document to Firestore
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
-          .set(doc);
-      print('User document created for UID: ${user.uid}');
-
-      // Store phone numbers
-      await FirebaseFirestore.instance
-          .collection('phones')
-          .doc(primaryDigits)
-          .set({'uid': user.uid, 'type': 'primary'});
-      print('Stored primary phone: $primaryDigits in phones collection');
-
-      if (role == 'driver' && altDigits != null) {
-        await FirebaseFirestore.instance
-            .collection('phones')
-            .doc(altDigits)
-            .set({'uid': user.uid, 'type': 'alt'});
-        print('Stored alternate phone: $altDigits in phones collection');
-      }
+          .set(doc, SetOptions(merge: true));
+      print('User document created/updated for UID: ${user.uid}');
 
       final message = requiresManualReview
           ? 'Registration successful! Pending manual review.'
           : (role == 'driver'
-                ? 'Driver registration successful!'
-                : 'Registration successful!');
+              ? 'Driver registration successful!'
+              : 'Registration successful!');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1635,27 +1600,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     } catch (e) {
       showError('Registration failed: $e');
 
-      // Clean up phones collection
       try {
-        if (primaryDigits != null) {
+        if (primaryDigits != null && userCred != null && userCred.user != null) {
           await FirebaseFirestore.instance
-              .collection('phones')
-              .doc(primaryDigits)
+              .collection('users')
+              .doc(userCred.user!.uid)
               .delete();
-          print(
-            'Cleaned up primary phone: $primaryDigits from phones collection',
-          );
+          print('Cleaned up incomplete user document for phone: $primaryDigits');
         }
-        if (altDigits != null) {
-          await FirebaseFirestore.instance
-              .collection('phones')
-              .doc(altDigits)
-              .delete();
-          print(
-            'Cleaned up alternate phone: $altDigits from phones collection',
-          );
-        }
-        await FirebaseAuth.instance.signOut();
       } catch (cleanupError) {
         print('Cleanup error: $cleanupError');
       }
@@ -1954,7 +1906,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 												controller: usernameController,
 												enabled: !isSubmitting,
 												decoration: InputDecoration(
-													labelText: 'Username',
+													labelText: 'Username (Your Real Name)',
+													helperText: 'Enter your full name as it appears on your ID',
 													prefixIcon: const Icon(Icons.person),
 													suffixIcon: _usernameError != null
 														? Icon(Icons.error, color: Theme.of(context).colorScheme.error)
@@ -2275,98 +2228,195 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Widget _buildImageButton(bool isLicense) {
-    final file = isLicense ? licenseImage : cnicImage;
-    final status = isLicense ? licenseVerification : cnicVerification;
-    final trustScore = isLicense ? licenseTrustScore : cnicTrustScore;
-    // ignore: unused_local_variable
-    final isValid = status != null && trustScore >= 0.55;
-    final label = isLicense ? "License" : "CNIC";
+    final image = isLicense ? licenseImage : cnicImage;
+    final label = isLicense ? 'Driving License' : 'CNIC';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (file != null) ...[
+        ElevatedButton.icon(
+          onPressed: isSubmitting ? null : () => _captureDocument(isLicense),
+          icon: const Icon(Icons.camera_alt),
+          label: Text(image == null ? 'Capture $label' : 'Retake $label'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: image == null
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.secondary,
+            foregroundColor: image == null
+                ? Theme.of(context).colorScheme.onPrimary
+                : Theme.of(context).colorScheme.onSecondary,
+          ),
+        ).animate().slideX(
+              begin: isLicense ? 0.1 : -0.1,
+              end: 0,
+              duration: 400.ms,
+              delay: isLicense ? 300.ms : 200.ms,
+            ),
+        if (image != null) ...[
+          const SizedBox(height: 8),
           ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.file(file, height: 160, fit: BoxFit.cover),
+            borderRadius: BorderRadius.circular(8),
+            child: Image.file(
+              image,
+              height: 100,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
           ).animate().fadeIn(duration: 400.ms),
-          const SizedBox(height: 8),
-          if (status != null)
-            Row(
-              children: [
-                Icon(
-                  trustScore >= 0.55 ? Icons.check : Icons.error,
-                  color: trustScore >= 0.55 ? Colors.green : Colors.red,
-                ),
-                const SizedBox(width: 4),
-                Text(trustScore >= 0.55 ? 'Valid' : 'Invalid - Retake'),
-              ],
-            ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              TextButton(
-                onPressed: isSubmitting
-                    ? null
-                    : () {
-                        print(
-                          'Retake button pressed for ${isLicense ? 'License' : 'CNIC'}',
-                        );
-                        setState(() {
-                          if (isLicense) {
-                            licenseImage = null;
-                            licenseBase64 = null;
-                            licenseVerification = null;
-                            licenseTrustScore = 0.0;
-                          } else {
-                            cnicImage = null;
-                            cnicBase64 = null;
-                            cnicVerification = null;
-                            cnicTrustScore = 0.0;
-                            cnicLivenessFrames.clear();
-                            requiresLivenessCheck = false;
-                          }
-                        });
-                        _captureDocument(isLicense);
-                      },
-                child: const Text("Retake"),
-              ),
-              if (!isLicense && requiresLivenessCheck) ...[
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: isSubmitting ? null : _captureLiveness,
-                  icon: const Icon(Icons.security, size: 18),
-                  label: const Text("Verify Liveness"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "$label captured",
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
-        ] else
-          ElevatedButton.icon(
-            onPressed: isSubmitting ? null : () => _captureDocument(isLicense),
-            icon: const Icon(Icons.camera_alt),
-            label: Text("Capture $label"),
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 48),
-            ),
-          ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+        ],
       ],
+    );
+  }
+}
+
+class _LoadingCar extends StatelessWidget {
+  final String label;
+
+  const _LoadingCar({required this.label, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
+  }
+}
+
+class FullScreenCamera extends StatefulWidget {
+  const FullScreenCamera({super.key});
+
+  @override
+  State<FullScreenCamera> createState() => _FullScreenCameraState();
+}
+
+class _FullScreenCameraState extends State<FullScreenCamera> {
+  CameraController? _controller;
+  List<CameraDescription>? _cameras;
+  bool _isInitialized = false;
+  bool _isTakingPicture = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No cameras available')),
+          );
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      _controller = CameraController(
+        _cameras!.first,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() => _isInitialized = true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Camera error: $e')),
+        );
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _takePicture() async {
+    if (_isTakingPicture || !_isInitialized || _controller == null) return;
+
+    setState(() => _isTakingPicture = true);
+    try {
+      final XFile photo = await _controller!.takePicture();
+      final File file = File(photo.path);
+      if (mounted) {
+        Navigator.pop(context, file);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error capturing photo: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isTakingPicture = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized || _controller == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            top: 40,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 30),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: FloatingActionButton(
+                onPressed: _isTakingPicture ? null : _takePicture,
+                child: _isTakingPicture
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Icon(Icons.camera),
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              height: MediaQuery.of(context).size.height * 0.4,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2380,371 +2430,167 @@ class LivenessCamera extends StatefulWidget {
 
 class _LivenessCameraState extends State<LivenessCamera> {
   CameraController? _controller;
-  bool _isCameraReady = false;
-  bool _isManualMode = false;
-  int _step = 0;
-  final List<File> _capturedFrames = [];
-
-  final List<String> _instructions = [
-    'Hold card flat in frame',
-    'Tilt card LEFT slowly',
-    'Tilt card RIGHT slowly',
-    'Move card CLOSER',
+  List<CameraDescription>? _cameras;
+  bool _isInitialized = false;
+  bool _isCapturing = false;
+  final List<File> _frames = [];
+  int _currentStep = 0;
+  final _instructions = [
+    'Hold card flat',
+    'Tilt card left',
+    'Tilt card right',
+    'Move card closer',
   ];
+  Timer? _captureTimer;
 
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    _initializeCamera();
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _initializeCamera() async {
     try {
-      final cameras = await availableCameras();
-      final camera = cameras.first;
-      _controller = CameraController(
-        camera,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-      await _controller!.initialize();
-      if (!mounted) return;
-      setState(() => _isCameraReady = true);
-
-      if (!_isManualMode) {
-        Future.delayed(const Duration(seconds: 10), _captureFrame);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Camera error: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-      Navigator.pop(context);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _captureFrame() async {
-    if (!(_controller?.value.isInitialized ?? false)) return;
-
-    try {
-      await _controller!.setFocusMode(FocusMode.auto);
-      await Future.delayed(const Duration(milliseconds: 500));
-      final xFile = await _controller!.takePicture();
-      final file = File(xFile.path);
-
-      final bytes = await file.readAsBytes();
-      final image = img.decodeImage(bytes);
-      if (image == null || image.width < 300 || image.height < 300) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Image too small. Please retake.'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No cameras available')),
+          );
+          Navigator.pop(context);
+        }
         return;
       }
 
-      setState(() {
-        _capturedFrames.add(file);
-        _step++;
-      });
+      _controller = CameraController(
+        _cameras!.first,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
 
-      if (_step >= _instructions.length) {
-        await Future.delayed(const Duration(milliseconds: 500));
-        if (!mounted) return;
-        Navigator.pop(context, _capturedFrames);
-      } else if (!_isManualMode) {
-        await Future.delayed(const Duration(seconds: 10));
-        if (mounted) _captureFrame();
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() => _isInitialized = true);
+        _startCaptureSequence();
       }
     } catch (e) {
-      print('Capture error: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Capture error: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Camera error: $e')),
+        );
+        Navigator.pop(context);
+      }
     }
   }
 
-  void _toggleCaptureMode() {
-    setState(() {
-      _isManualMode = !_isManualMode;
-      if (!_isManualMode && _step < _instructions.length) {
-        Future.delayed(const Duration(seconds: 10), _captureFrame);
+  void _startCaptureSequence() {
+    _captureTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      if (_currentStep >= _instructions.length || !mounted) {
+        timer.cancel();
+        if (_frames.isNotEmpty) {
+          Navigator.pop(context, _frames);
+        }
+        return;
+      }
+
+      setState(() => _isCapturing = true);
+      try {
+        final XFile photo = await _controller!.takePicture();
+        _frames.add(File(photo.path));
+        setState(() => _currentStep++);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error capturing frame: $e')),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isCapturing = false);
+        }
       }
     });
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: _isCameraReady
-          ? Stack(
-              children: [
-                Positioned.fill(child: CameraPreview(_controller!)),
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 20,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 20),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Step ${_step + 1} of ${_instructions.length}',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _step < _instructions.length
-                              ? _instructions[_step]
-                              : 'Complete!',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        LinearProgressIndicator(
-                          value: _step / _instructions.length,
-                          backgroundColor: Colors.white24,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            Colors.green,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextButton(
-                          onPressed: _toggleCaptureMode,
-                          child: Text(
-                            _isManualMode
-                                ? 'Switch to Auto Capture'
-                                : 'Switch to Manual Capture',
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ).animate().fadeIn(duration: 300.ms),
-                ),
-                Positioned(
-                  top: MediaQuery.of(context).size.height * 0.25,
-                  left: MediaQuery.of(context).size.width * 0.15,
-                  right: MediaQuery.of(context).size.width * 0.15,
-                  height: MediaQuery.of(context).size.width * 0.7 / 1.585,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.greenAccent, width: 3),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'Align CNIC Here',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 12,
-                  right: 12,
-                  child: IconButton(
-                    color: Colors.white,
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-              ],
-            )
-          : const Center(child: CircularProgressIndicator(color: Colors.white)),
-      floatingActionButton: _isManualMode && _step < _instructions.length
-          ? FloatingActionButton(
-              backgroundColor: Colors.white,
-              onPressed: _captureFrame,
-              tooltip: 'Capture Frame',
-              child: const Icon(Icons.camera_alt, color: Colors.black),
-            ).animate().scale(duration: 300.ms)
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-    );
-  }
-}
-class FullScreenCamera extends StatefulWidget {
-  const FullScreenCamera({super.key});
-
-  @override
-  State<FullScreenCamera> createState() => _FullScreenCameraState();
-}
-
-class _FullScreenCameraState extends State<FullScreenCamera> {
-  CameraController? _controller;
-  bool _isCameraReady = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initCamera();
-  }
-
-  Future<void> _initCamera() async {
-    try {
-      final cameras = await availableCameras();
-      final camera = cameras.first;
-      _controller = CameraController(
-        camera,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-      await _controller!.initialize();
-      if (!mounted) return;
-      setState(() => _isCameraReady = true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Camera error: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-      Navigator.pop(context);
-    }
-  }
-
-  @override
   void dispose() {
+    _captureTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
-  Future<void> _captureImage() async {
-    if (!_controller!.value.isInitialized) return;
-
-    try {
-      await _controller!.setFocusMode(FocusMode.auto);
-      await Future.delayed(const Duration(milliseconds: 500));
-      final xFile = await _controller!.takePicture();
-      final file = File(xFile.path);
-
-      final bytes = await file.readAsBytes();
-      final image = img.decodeImage(bytes);
-      if (image == null || image.width < 300 || image.height < 300) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Image too small. Please retake.'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-        return;
-      }
-
-      if (!mounted) return;
-      Navigator.pop(context, file);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Capture error: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized || _controller == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
       );
     }
-  }
 
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: _isCameraReady
-          ? Stack(
-              children: [
-                Positioned.fill(child: CameraPreview(_controller!)),
-                Positioned(
-                  top: MediaQuery.of(context).size.height * 0.25,
-                  left: MediaQuery.of(context).size.width * 0.15,
-                  right: MediaQuery.of(context).size.width * 0.15,
-                  height: MediaQuery.of(context).size.width * 0.7 / 1.585,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.greenAccent, width: 3),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'Align Document Here',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            top: 40,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 30),
+              onPressed: () {
+                _captureTimer?.cancel();
+                Navigator.pop(context);
+              },
+            ),
+          ),
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.black54,
+              child: Text(
+                _currentStep < _instructions.length
+                    ? _instructions[_currentStep]
+                    : 'Processing...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              height: MediaQuery.of(context).size.height * 0.4,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          if (_isCapturing)
+            Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.black54,
+                  child: const Text(
+                    'Capturing...',
+                    style: TextStyle(color: Colors.white),
                   ),
                 ),
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 12,
-                  right: 12,
-                  child: IconButton(
-                    color: Colors.white,
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-              ],
-            )
-          : const Center(child: CircularProgressIndicator(color: Colors.white)),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.white,
-        onPressed: _captureImage,
-        tooltip: 'Capture Image',
-        child: const Icon(Icons.camera_alt, color: Colors.black),
-      ).animate().scale(duration: 300.ms),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-    );
-  }
-}
-
-class _LoadingCar extends StatelessWidget {
-  final String label;
-
-  const _LoadingCar({required this.label, super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-        const SizedBox(width: 12),
-        Text(label),
-      ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

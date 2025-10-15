@@ -959,6 +959,58 @@ app.post('/rides/:rideId/messages', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// NEW: Handle counter fare proposal
+app.post('/ride/counter-fare', async (req, res) => {
+  const { rideId, driverUid, counterFare, riderId } = req.body;
+
+  if (!rideId || !driverUid || !counterFare || !riderId) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const rideRef = db.collection('rides').doc(rideId);
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const rideData = rideSnap.data();
+    if (rideData.status === 'cancelled' || rideData.status === 'completed') {
+      return res.status(400).json({ error: 'Ride is no longer active' });
+    }
+
+    // Update ride with counter offer
+    await rideRef.update({
+      counterFare: counterFare,
+      counterProposedAt: admin.firestore.FieldValue.serverTimestamp(),
+      counterDriverId: driverUid,
+    });
+
+    // Notify rider via FCM
+    const userRef = db.collection('users').doc(riderId);
+    const userSnap = await userRef.get();
+    const fcmToken = userSnap.data()?.fcmToken;
+
+    if (fcmToken) {
+      await fcm.send({
+        token: fcmToken,
+        notification: {
+          title: 'Counter Offer Received',
+          body: `Driver proposed $${counterFare} for ride ${rideId}`,
+          sound: 'ride_cancel_2s',
+        },
+        data: { action: 'COUNTER_OFFER', rideId, counterFare },
+        android: { priority: 'high', notification: { channelId: 'ride_progress_ch' } },
+        apns: { payload: { aps: { sound: 'ride_cancel_2s.wav', contentAvailable: 1 } }, headers: { 'apns-priority': '10' } },
+      });
+    }
+
+    res.json({ ok: true, counterFare });
+  } catch (error) {
+    console.error('Error processing counter fare:', error);
+    res.status(500).json({ error: 'Failed to process counter fare' });
+  }
+});
 // New: Update Location (from location_service.dart)
 app.post('/updateLocation', async (req, res) => {
   const { role, rideId, lat, lng, driverId } = req.body;

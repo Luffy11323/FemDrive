@@ -30,9 +30,7 @@ final LocationSettings locationSettings = LocationSettings(
   distanceFilter: 0,
 );
 
-final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
-  ref,
-) {
+final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((ref) {
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid == null) return const Stream<List<PendingRequest>>.empty();
 
@@ -51,11 +49,17 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
       final ts = (payload['timestamp'] as num?)?.toInt();
       if (ts != null && (nowMs - ts) > ttlMs) return;
 
-      list.add(
-        PendingRequest.fromMap(
-          rideId.toString(),
-          Map<String, dynamic>.from(payload),
-        ),
+      final request = PendingRequest.fromMap(
+        rideId.toString(),
+        Map<String, dynamic>.from(payload),
+      );
+      list.add(request);
+
+      // NEW: Trigger notification for new incoming ride
+      showIncomingRide(
+        rideId: request.rideId,
+        title: 'New Ride Offer',
+        body: 'Pickup: ${request.pickupLabel ?? 'Unknown'}, Fare: ${request.fare?.toStringAsFixed(2) ?? 'N/A'}',
       );
     });
 
@@ -86,6 +90,25 @@ class RideStatus {
   };
 
   static const terminalSet = <String>{completed, cancelled};
+}
+
+// NEW: Handle expiration of offers
+Future<void> handleOfferExpiration(String rideId) async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+
+  final ref = FirebaseDatabase.instance.ref('driver_notifications/$uid/$rideId');
+  final snapshot = await ref.get();
+  if (snapshot.exists) {
+    final ts = (snapshot.value as Map?)?['timestamp'] as num?;
+    if (ts != null) {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      const ttlMs = 15 * 1000;
+      if (nowMs - ts.toInt() > ttlMs) {
+        await ref.remove();
+      }
+    }
+  }
 }
 
 final _rtdb = FirebaseDatabase.instance.ref();
