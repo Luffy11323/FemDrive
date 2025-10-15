@@ -289,6 +289,13 @@ Future<void> _handleRemote({
     case 'PAYMENT_FAILED':
       await showPaymentFailed(rideId: rideId, title: title, body: body);
       return;
+    case 'NEW_MESSAGE':
+      await showMessageNotification(
+        rideId: rideId,
+        title: title ?? 'New Message',
+        body: body ?? data['message'] ?? 'You have a new message.',
+      );
+      return;
   }
 
   // ── Status (generic) ───────────────────────────────────────────
@@ -715,6 +722,31 @@ Future<void> showPaymentFailed({
           priority: Priority.high,
         ),
         iOS: const DarwinNotificationDetails(),
+      ),
+      payload: rideId,
+    );
+  } catch (_) {}
+}
+/// ── Message Notification (2s sound)
+Future<void> showMessageNotification({
+  String? rideId,
+  String? title,
+  String? body,
+}) async {
+  try {
+    await _fln.show(
+      9401, // Unique ID for message notifications
+      title ?? 'New Message',
+      body ?? 'You have a new message.',
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _chProgressId,
+          _chProgressNm,
+          importance: Importance.high,
+          priority: Priority.high,
+          sound: _androidCancelSound, // Reusing 2-second cancel sound
+        ),
+        iOS: const DarwinNotificationDetails(sound: _iosCancelSound), // Reusing 2-second sound
       ),
       payload: rideId,
     );

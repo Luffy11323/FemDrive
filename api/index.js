@@ -904,7 +904,61 @@ app.post('/processPayment', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// 9) Send Message → Store and notify recipient
+app.post('/rides/:rideId/messages', async (req, res) => {
+  const rideId = req.params.rideId;
+  const { senderId, text } = req.body;
+  
+  if (!rideId || !senderId || !text) {
+    return res.status(400).json({ error: 'Missing rideId/senderId/text' });
+  }
+  
+  try {
+    // 1. Store message in Realtime Database
+    const messageRef = await rtdb.child(`rides/${rideId}/messages`).push();
+    await messageRef.set({
+      [AppFields.senderId]: senderId,
+      [AppFields.text]: text,
+      [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
+    });
 
+    // 2. Determine recipient (rider or driver)
+    const rideSnap = await db.collection(AppPaths.ridesCollection).doc(rideId).get();
+    const rideData = rideSnap.data() || {};
+    const recipientId = senderId === rideData[AppFields.driverId] ? rideData[AppFields.riderId] : rideData[AppFields.driverId];
+    
+    if (!recipientId) {
+      return res.status(400).json({ error: 'Recipient not found' });
+    }
+
+    // 3. Fetch sender's username for notification
+    const senderSnap = await db.collection('users').doc(senderId).get();
+    const senderName = senderSnap.data()?.[AppFields.username] || 'User';
+
+    // 4. Send FCM notification with formatted message
+    const notificationBody = `${senderName}: ${text.length > 50 ? `${text.substring(0, 47)}...` : text}`;
+    const ok = await fcmToUser(recipientId, {
+      notification: {
+        title: 'New Message',
+        body: notificationBody,
+      },
+      data: { 
+        rideId, 
+        action: 'NEW_MESSAGE', 
+        message: text 
+      },
+    }, {
+      androidChannelId: 'ride_progress_ch',
+      androidSound: 'ride_cancel_2s',
+      iosSound: 'ride_cancel_2s.wav',
+    });
+
+    res.json({ ok: ok, messageId: messageRef.key });
+  } catch (e) {
+    console.error('message/send error', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 // New: Update Location (from location_service.dart)
 app.post('/updateLocation', async (req, res) => {
   const { role, rideId, lat, lng, driverId } = req.body;

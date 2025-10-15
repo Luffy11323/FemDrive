@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -899,19 +900,31 @@ class DriverService {
     String message,
     String senderId,
   ) async {
-    await _rtdb
-        .child('${AppPaths.ridesCollection}/$rideId/${AppPaths.messages}')
-        .push()
-        .set({
-          AppFields.senderId: senderId,
-          AppFields.text: message,
-          AppFields.timestamp: ServerValue.timestamp,
-        });
+    if (rideId.isEmpty || message.trim().isEmpty) return;
+
+    try {
+      final response = await http.post(
+        Uri.parse('https://fem-drive.vercel.app/rides/$rideId/messages'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'senderId': senderId,
+          'text': message.trim(),
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to send message: ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('Error sending message: $e');
+      rethrow;
+    }
   }
 
+  // Stream of messages (unchanged)
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
     return _rtdb
-        .child('${AppPaths.ridesCollection}/$rideId/${AppPaths.messages}')
+        .child('rides/$rideId/messages')
         .onValue
         .map((event) {
           final v = event.snapshot.value as Map?;

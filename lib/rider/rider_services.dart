@@ -801,11 +801,6 @@ final riderCurrentUserIdProvider = Provider<String?>(
   (_) => FirebaseAuth.instance.currentUser?.uid,
 );
 
-class ChatPaths {
-  static const rides = 'rides';
-  static const messages = 'messages';
-}
-
 class ChatFields {
   static const senderId = 'senderId';
   static const text = 'text';
@@ -816,25 +811,34 @@ extension RiderChat on RideService {
   DatabaseReference get _db => FirebaseDatabase.instance.ref();
   FirebaseAuth get _auth => FirebaseAuth.instance;
 
-  /// Send a chat message to /rides/{rideId}/messages/{autoKey}
+  /// Send a chat message to /rides/{rideId}/messages via server endpoint
   Future<void> sendMessage(String rideId, String message) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw Exception('Not logged in');
     if (rideId.isEmpty || message.trim().isEmpty) return;
 
-    await _db
-        .child('${ChatPaths.rides}/$rideId/${ChatPaths.messages}')
-        .push()
-        .set({
-          ChatFields.senderId: uid,
-          ChatFields.text: message.trim(),
-          ChatFields.timestamp: ServerValue.timestamp,
-        });
+    try {
+      final response = await http.post(
+        Uri.parse('https://fem-drive.vercel.app/rides/$rideId/messages'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'senderId': uid,
+          'text': message.trim(),
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to send message: ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('Error sending message: $e');
+      rethrow;
+    }
   }
 
-  /// Live stream of messages sorted by timestamp ASC
+  /// Live stream of messages sorted by timestamp ASC (unchanged)
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
-    final ref = _db.child('${ChatPaths.rides}/$rideId/${ChatPaths.messages}');
+    final ref = _db.child('rides/$rideId/messages');
     return ref.onValue.map((event) {
       final raw = event.snapshot.value as Map?;
       if (raw == null) return <Map<String, dynamic>>[];
@@ -854,7 +858,6 @@ extension RiderChat on RideService {
     });
   }
 }
-
 class RiderChatController extends StateNotifier<AsyncValue<void>> {
   RiderChatController(this.ref) : super(const AsyncData(null));
   final Ref ref;
