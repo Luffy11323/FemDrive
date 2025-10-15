@@ -5,7 +5,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'app_utils.dart';
+import 'package:flutter/foundation.dart';
 import 'analytics_and_maps.dart';
+
 import 'package:femdrive/main.dart' as global;
 
 void main() async {
@@ -456,7 +458,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
                 child: TextField(
                   controller: _searchController,
                   decoration: const InputDecoration(
-                    hintText: 'Search by Driver ID',
+                    hintText: 'Search by Driver ID or Username',
                     prefixIcon: Icon(Icons.search),
                   ),
                   onChanged: (value) => setState(() {}),
@@ -481,9 +483,13 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
             stream: AdminService.getDriverVerificationStream(_searchController.text, _selectedVerificationStatus),
             builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
               if (snapshot.hasError) {
-                return const Center(child: Text('Error loading driver verification data'));
+                if (kDebugMode) {
+                  print('StreamBuilder error: ${snapshot.error}');
+                } // Log for debugging
+                return Center(child: Text('Error loading driver verification data: ${snapshot.error}'));
               }
               if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              if (snapshot.data!.docs.isEmpty) return const Center(child: Text('No drivers found'));
               return SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
@@ -492,21 +498,22 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
                   dataRowMaxHeight: 48.0,
                   columns: const [
                     DataColumn(label: Text('Driver ID')),
-                    DataColumn(label: Text('Name')),
+                    DataColumn(label: Text('Username')),
                     DataColumn(label: Text('Verified')),
                     DataColumn(label: Text('CNIC Verified')),
                     DataColumn(label: Text('License Verified')),
-                    DataColumn(label: Text('Trust Score')),
+                    DataColumn(label: Text('CNIC Trust Score')),
                   ],
                   rows: snapshot.data!.docs.map((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
                     return DataRow(
                       cells: [
                         DataCell(Text(doc.id)),
-                        DataCell(Text(doc['username'] ?? '')),
-                        DataCell(Text(doc['verified']?.toString() ?? '')),
-                        DataCell(Text(doc['verifiedCnic']?.toString() ?? '')),
-                        DataCell(Text(doc['verifiedLicense']?.toString() ?? '')),
-                        DataCell(Text(doc['trustScore']?.toString() ?? '')),
+                        DataCell(Text(data['username']?.toString() ?? 'Unknown')),
+                        DataCell(Text(data['verified']?.toString() ?? 'false')),
+                        DataCell(Text(data['verifiedCnic']?.toString() ?? 'false')),
+                        DataCell(Text(data['verifiedLicense']?.toString() ?? 'false')),
+                        DataCell(Text(data['cnicTrustScore']?.toString() ?? '0.0')),
                       ],
                       onSelectChanged: (selected) => _showEditDialog(context, AppPaths.usersCollection, doc),
                     );
@@ -520,7 +527,7 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
     );
   }
 
-  Widget _buildUsersPage(BuildContext context) {
+Widget _buildUsersPage(BuildContext context) {
     return Column(
       children: [
         Padding(
@@ -546,10 +553,9 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
               if (users.isEmpty) return const Center(child: Text('No users found'));
               return ListView.builder(
                 itemCount: users.length,
-                itemExtent: 60,
                 itemBuilder: (context, index) {
                   final doc = users[index];
-                  final data = doc.data() as Map<String, dynamic>;
+                  final data = doc.data() as Map<String, dynamic>? ?? {};
                   final uid = doc.id;
                   _expandedStates.putIfAbsent(uid, () => false);
                   return Card(
@@ -564,7 +570,8 @@ class AdminPanelHomeState extends State<AdminPanelHome> {
                       children: [
                         ExpansionPanel(
                           headerBuilder: (context, isExpanded) => ListTile(
-                            title: Text(data[AppFields.username] ?? 'Unnamed User'),
+                            title: Text(data[AppFields.username]?.toString() ?? 'Unnamed User'),
+                            subtitle: Text('UID: $uid'),
                           ),
                           body: _buildInfoPanel(data, uid),
                           isExpanded: _expandedStates[uid] ?? false,

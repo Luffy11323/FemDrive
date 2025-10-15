@@ -126,17 +126,30 @@ class AdminService {
 
   static Stream<QuerySnapshot> getDriverVerificationStream(String searchQuery, bool? verificationStatus) {
     try {
-      var query = _fire.collection(AppPaths.usersCollection).where(AppFields.role, isEqualTo: 'driver');
+      var query = FirebaseFirestore.instance
+          .collection(AppPaths.usersCollection)
+          .where(AppFields.role, isEqualTo: 'driver');
+
       if (verificationStatus != null) {
         query = query.where(AppFields.verified, isEqualTo: verificationStatus);
       }
+
       if (searchQuery.isNotEmpty) {
-        query = query.where(FieldPath.documentId, isEqualTo: searchQuery);
+        // Support search by username (case-insensitive, partial match)
+        query = query
+            .where(AppFields.username, isGreaterThanOrEqualTo: searchQuery)
+            .where(AppFields.username, isLessThanOrEqualTo: '$searchQuery\uf8ff');
+        // Optionally, add search by document ID if needed
+        // If you want to search by Driver ID (uid) as well, you can use a separate query or combine results
       } else {
-        query = query.orderBy(AppFields.createdAt, descending: true); // Fetch all drivers without search
+        query = query.orderBy(AppFields.createdAt, descending: true); // Fetch all drivers, sorted by creation time
       }
+
       return query.snapshots();
     } catch (e) {
+      if (kDebugMode) {
+        print('Error in getDriverVerificationStream: $e');
+      } // Log for debugging
       throw Exception('Failed to get driver verification stream: $e');
     }
   }

@@ -1345,6 +1345,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
 
       final overallValid = cnicValidCnic && dlValid && livenessPassed && cnicTrust >= 0.55 && (role != 'driver' || temp || licenseTrust >= 0.55);
+      
+      // Only require manual review if trust scores are below threshold
+      final requiresManualReview = cnicTrust < 0.55 || (role == 'driver' && !temp && licenseTrust < 0.55);
+      
       setState(() {
         cnicVerification = {
           'cnic': cnicFromCnic,
@@ -1372,7 +1376,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'dlNumber': dlNumber,
         'cnicTrustScore': cnicTrust,
         'licenseTrustScore': licenseTrust,
-        'requiresManualReview': cnicTrust < 0.60 || (role == 'driver' && licenseTrust < 0.60),
+        'requiresManualReview': requiresManualReview,
         'securityMetrics': securityCheck['metrics'],
       };
     } catch (e) {
