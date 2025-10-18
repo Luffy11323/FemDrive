@@ -58,7 +58,6 @@ Future<void> main() async {
 
   await _setupFcmAndToken();
 
-  // Initialize location permissions at app startup
   final logger = Logger();
   bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
   if (!serviceEnabled) {
@@ -84,27 +83,22 @@ Future<void> main() async {
 Future<void> _setupFcmAndToken() async {
   final fbm = FirebaseMessaging.instance;
 
-  // A) Ask runtime permission (Android 13+ / iOS)
   await fbm.requestPermission(alert: true, badge: true, sound: true);
 
-  // B) iOS: show alert+sound in foreground
   await fbm.setForegroundNotificationPresentationOptions(
     alert: true,
     badge: true,
     sound: true,
   );
 
-  // C) Ensure we store the token for the current user (if logged in now)
   await _storeCurrentTokenIfLoggedIn();
 
-  // D) If user logs in/out later, keep token in sync
   FirebaseAuth.instance.authStateChanges().listen((user) async {
     if (user != null) {
       await _storeCurrentTokenIfLoggedIn();
     }
   });
 
-  // E) If the token rotates, re-upload for whoever is logged in
   fbm.onTokenRefresh.listen((newToken) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
@@ -119,7 +113,6 @@ Future<void> _setupFcmAndToken() async {
     }
   });
 
-  // F) Optional: keep your SnackBar preview (or remove—your notifications.dart will show proper sounds)
   FirebaseMessaging.onMessage.listen((msg) {
     final data = msg.data;
     final action = data['action'];
@@ -139,10 +132,8 @@ Future<void> _setupFcmAndToken() async {
     }
   });
 
-  // G) Handle when user taps a notification to open app
   FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
 
-  // H) If the app was launched by a notification (cold start)
   final initial = await fbm.getInitialMessage();
   if (initial != null) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -197,14 +188,11 @@ Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
     }
   }
 }
-// Riverpod providers:
 
-/// Provides the current Firebase user (null if not logged in)
 final userProvider = StreamProvider<User?>(
   (ref) => FirebaseAuth.instance.authStateChanges(),
 );
 
-/// Provides the Firestore user document snapshot for the current user
 final userDocProvider = StreamProvider<DocumentSnapshot?>((ref) {
   final user = ref.watch(userProvider).asData?.value;
   if (user == null) return const Stream.empty();
@@ -317,33 +305,81 @@ class _FemDriveAppState extends State<FemDriveApp> {
     _lastKnownUid = null;
   }
 
-  Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
-    final data = msg.data;
-    final action = data['action'];
-    final rideId = data['rideId'];
-
-    if (action == 'NEW_REQUEST') {
-      navigatorKey.currentState?.pushNamed(
-        '/driver-ride-details',
-        arguments: rideId,
-      );
-    } else if (action == 'RIDER_STATUS') {
-      final uid = getSafeUid();
-      if (uid != null) {
-        final doc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(uid)
-            .get();
-        if (doc.exists) {
-          final role = doc['role'];
-          if (role == 'driver') {
-            navigatorKey.currentState?.pushNamed('/driver-dashboard');
-          } else {
-            navigatorKey.currentState?.pushNamed('/dashboard');
-          }
+  Route<dynamic> _generateRoute(RouteSettings settings) {
+    Widget page;
+    switch (settings.name) {
+      case '/login':
+        page = const LoginPage();
+        break;
+      case '/signup':
+        page = const SignUpPage();
+        break;
+      case '/dashboard':
+        page = const RiderDashboard();
+        break;
+      case '/driver-dashboard':
+        page = const DriverDashboard();
+        break;
+      case '/admin':
+        page = const AdminPanelApp();
+        break;
+      case '/settings':
+        page = const SettingsPage();
+        break;
+      case '/payment':
+        page = const PaymentPage();
+        break;
+      case '/help-center':
+        page = const HelpCenterPage();
+        break;
+      case '/profile':
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          page = const LoginPage();
+        } else {
+          page = FutureBuilder<DocumentSnapshot>(
+            future: FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.uid)
+                .get(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (!snapshot.hasData || !snapshot.data!.exists) {
+                return const LoginPage();
+              }
+              final role = snapshot.data!.get('role');
+              return role == 'driver' ? const ProfilePage() : const RiderProfilePage();
+            },
+          );
         }
-      }
+        break;
+      case '/past-rides':
+        page = const PastRidesPage();
+        break;
+      case '/driver-ride-details':
+        final rideId = settings.arguments as String?;
+        page = rideId != null
+            ? details.DriverRideDetailsPage(rideId: rideId)
+            : const LoginPage();
+        break;
+      default:
+        page = const LoginPage();
     }
+    return PageRouteBuilder(
+      settings: settings,
+      pageBuilder: (_, _, _) => page,
+      transitionsBuilder: (_, animation, _, child) {
+        return FadeTransition(
+          opacity: animation.drive(CurveTween(curve: Curves.easeInOut)),
+          child: child,
+        );
+      },
+      transitionDuration: const Duration(milliseconds: 400),
+    );
   }
 
   @override
@@ -355,58 +391,12 @@ class _FemDriveAppState extends State<FemDriveApp> {
       darkTheme: femDarkTheme,
       themeMode: ThemeMode.system,
       debugShowCheckedModeBanner: false,
-      home: const SplashScreen(), // Changed from Stack with InitialScreen to SplashScreen
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/signup': (context) => const SignUpPage(),
-        '/dashboard': (context) => const RiderDashboard(),
-        '/driver-dashboard': (context) => const DriverDashboard(),
-        '/admin': (context) => const AdminPanelApp(),
-        '/settings': (context) => const SettingsPage(),
-        '/payment': (context) => const PaymentPage(),
-        '/help-center': (context) => const HelpCenterPage(),
-        '/profile': (context) {
-          final user = FirebaseAuth.instance.currentUser;
-
-          if (user == null) return const LoginPage();
-
-          return FutureBuilder<DocumentSnapshot>(
-            future: FirebaseFirestore.instance
-                .collection('users')
-                .doc(user.uid)
-                .get(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()),
-                );
-              }
-
-              if (!snapshot.hasData || !snapshot.data!.exists) {
-                return const LoginPage();
-              }
-
-              final role = snapshot.data!.get('role');
-
-              if (role == 'driver') {
-                return const ProfilePage();
-              } else {
-                return const RiderProfilePage();
-              }
-            },
-          );
-        },
-        '/past-rides': (context) => const PastRidesPage(),
-        '/driver-ride-details': (context) {
-          final rideId = ModalRoute.of(context)?.settings.arguments as String?;
-          return rideId != null
-              ? details.DriverRideDetailsPage(rideId: rideId)
-              : const LoginPage();
-        },
-      },
+      home: const SplashScreen(),
+      onGenerateRoute: _generateRoute,
     );
   }
 }
+
 class InitialScreen extends ConsumerWidget {
   const InitialScreen({super.key});
 
@@ -448,7 +438,6 @@ class InitialScreen extends ConsumerWidget {
                   return const LoginPage();
                 }
 
-                // ✅ Initialize background geolocation once driver logs in
                 final driverId = user.uid;
                 WidgetsBinding.instance.addPostFrameCallback((_) async {
                   try {
@@ -476,25 +465,41 @@ class InitialScreen extends ConsumerWidget {
           loading: () {
             debugPrint("🔐 Loading user document...");
             return Scaffold(
-              body: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Theme.of(context).colorScheme.primary,
-                      ),
-                    ).animate().fadeIn(duration: 400.ms).scale(),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Loading your account...',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-                  ],
+              body: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
+                      Theme.of(context).colorScheme.surface,
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Theme.of(context).colorScheme.onPrimary,
+                        ),
+                        strokeWidth: 3.0,
+                      ).animate().fadeIn(duration: 400.ms).scaleXY(
+                            begin: 0.8,
+                            end: 1.0,
+                            curve: Curves.easeInOut,
+                          ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Loading your journey...',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onPrimary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -508,25 +513,41 @@ class InitialScreen extends ConsumerWidget {
       loading: () {
         debugPrint("🔐 Loading user authentication...");
         return Scaffold(
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    Theme.of(context).colorScheme.primary,
-                  ),
-                ).animate().fadeIn(duration: 400.ms).scale(),
-                const SizedBox(height: 16),
-                Text(
-                  'Authenticating...',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-              ],
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Theme.of(context).colorScheme.primary.withValues(alpha:0.8),
+                  Theme.of(context).colorScheme.surface,
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+            ),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Theme.of(context).colorScheme.onPrimary,
+                    ),
+                    strokeWidth: 3.0,
+                  ).animate().fadeIn(duration: 400.ms).scaleXY(
+                        begin: 0.8,
+                        end: 1.0,
+                        curve: Curves.easeInOut,
+                      ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Authenticating...',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                ],
+              ),
             ),
           ),
         );

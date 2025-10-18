@@ -13,7 +13,7 @@ import 'driver_services.dart'
         DriverMapWidget,
         FeedbackDialog,
         DriverService,
-        ridesLiveStream; // now exported by driver_services.dart
+        ridesLiveStream;
 
 class RideStrings {
   static const noRide = 'No active ride';
@@ -28,6 +28,8 @@ class RideStrings {
   static const skipRating = 'Skip Rating';
   static const rateRider = 'Rate Rider';
   static const errorGeneric = 'Something went wrong. Please try again.';
+  static const messageEmpty = 'Message cannot be empty';
+  static const messageSendFailed = 'Failed to send message';
 }
 
 final riderInfoProvider = FutureProvider.autoDispose
@@ -51,8 +53,12 @@ class DriverRideDetailsPage extends ConsumerStatefulWidget {
       _DriverRideDetailsPageState();
 }
 
-class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
+class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage>
+    with TickerProviderStateMixin {
   final _messageController = TextEditingController();
+  final _scrollController = ScrollController();
+  bool _isSending = false;
+
   void _openContactRiderSheet({
     required BuildContext context,
     required Map<String, dynamic> rideData,
@@ -61,7 +67,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -88,84 +94,217 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                     children: [
                       Text(
                         '${rideData[AppFields.pickup] ?? '-'} → ${rideData[AppFields.dropoff] ?? '-'}',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         'Fare: \$${rideData[AppFields.fare] is num ? (rideData[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
                       ),
                       const SizedBox(height: 6),
-                      Text('Rider: ${info?[AppFields.username] ?? '-'}'),
-                      Text('Phone: ${info?[AppFields.phone] ?? '-'}'),
+                      Text(
+                        'Rider: ${info?[AppFields.username] ?? '-'}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                      Text(
+                        'Phone: ${info?[AppFields.phone] ?? '-'}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                      ),
                       const Divider(height: 20),
                     ],
                   ),
                   loading: () => const LinearProgressIndicator(),
-                  error: (e, _) => Text('Rider info failed: $e'),
+                  error: (e, _) => Text(
+                    'Rider info failed: $e',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                  ),
                 ),
 
                 // Messages list
                 Expanded(
                   child: messages.when(
-                    data: (list) => ListView.builder(
-                      controller: controller,
-                      itemCount: list.length,
-                      itemBuilder: (ctx, i) {
-                        final msg = list[i];
-                        final mine =
-                            msg[AppFields.senderId] == _auth.currentUser?.uid;
-                        return Align(
-                          alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: mine
-                                  ? Theme.of(
-                                      context,
-                                    ).colorScheme.primary.withValues(alpha: 25)
-                                  : Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(10),
+                    data: (list) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_scrollController.hasClients) {
+                          _scrollController.animateTo(
+                            _scrollController.position.maxScrollExtent,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      });
+                      return ListView.builder(
+                        controller: _scrollController,
+                        itemCount: list.length,
+                        itemBuilder: (ctx, i) {
+                          final msg = list[i];
+                          final mine =
+                              msg[AppFields.senderId] == _auth.currentUser?.uid;
+                          return Align(
+                            alignment: mine
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: FadeTransition(
+                              opacity: CurvedAnimation(
+                                parent: AnimationController(
+                                  duration: const Duration(milliseconds: 300),
+                                  vsync: this,
+                                  value: 1.0,
+                                ),
+                                curve: Curves.easeIn,
+                              ),
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(
+                                    vertical: 4, horizontal: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: mine
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .primary
+                                          .withValues(alpha: 0.1)
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.05),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: mine
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      msg[AppFields.text] ?? '',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatTimestamp(
+                                          msg[AppFields.timestamp] as int?),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                                .withValues(alpha: 0.6),
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
-                            child: Text(msg[AppFields.text] ?? ''),
-                          ),
-                        );
-                      },
-                    ),
+                          );
+                        },
+                      );
+                    },
                     loading: () =>
                         const Center(child: CircularProgressIndicator()),
-                    error: (e, _) =>
-                        Center(child: Text('Failed to load messages: $e')),
+                    error: (e, _) => Center(
+                      child: Text(
+                        'Failed to load messages: $e',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                      ),
+                    ),
                   ),
                 ),
 
                 // Composer
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
                       child: TextField(
                         controller: _messageController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Write a message…',
-                          border: OutlineInputBorder(),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          filled: true,
+                          fillColor:
+                              Theme.of(context).colorScheme.surfaceContainerHighest,
                           isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
                         ),
+                        maxLines: 3,
+                        minLines: 1,
+                        enabled: !_isSending,
                       ),
                     ),
                     const SizedBox(width: 8),
                     IconButton(
-                      icon: const Icon(Icons.send),
-                      onPressed: () {
-                        final t = _messageController.text.trim();
-                        if (t.isEmpty) return;
-                        ref
-                            .read(driverDashboardProvider.notifier)
-                            .sendMessage(widget.rideId, t);
-                        _messageController.clear();
-                      },
+                      icon: _isSending
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.send,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                      onPressed: _isSending
+                          ? null
+                          : () async {
+                              final text = _messageController.text.trim();
+                              if (text.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content:
+                                          Text(RideStrings.messageEmpty)),
+                                );
+                                return;
+                              }
+
+                              setState(() => _isSending = true);
+                              try {
+                                await ref
+                                    .read(driverDashboardProvider.notifier)
+                                    .sendMessage(widget.rideId, text);
+                                _messageController.clear();
+                              } catch (e) {
+                                if (mounted) {
+                                  // ignore: use_build_context_synchronously
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text(
+                                            '${RideStrings.messageSendFailed}: $e')),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) setState(() => _isSending = false);
+                              }
+                            },
                     ),
                   ],
                 ),
@@ -177,9 +316,16 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
     );
   }
 
+  String _formatTimestamp(int? timestamp) {
+    if (timestamp == null) return '';
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    return '${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
   @override
   void dispose() {
     _messageController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -208,7 +354,6 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
 
         final riderId = data[AppFields.riderId] as String?;
 
-        // Wrap UI with RTDB live status
         return StreamBuilder<Map<String, dynamic>?>(
           stream: ridesLiveStream(widget.rideId),
           builder: (context, snap) {
@@ -221,22 +366,24 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
             final isCompleted = liveStatus == RideStatus.completed;
             final isCancelled = liveStatus == RideStatus.cancelled;
 
-            // Auto-close on terminal states (optional)
             if (isCompleted || isCancelled) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (Navigator.of(context).canPop()) Navigator.of(context).pop();
               });
             }
 
-            // --- paste-ready replacement for the whole `return Scaffold(...)` block ---
             return Scaffold(
               appBar: AppBar(
                 title: Text(
                   'Ride: ${liveStatus.toUpperCase()}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
                 ),
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                elevation: 1,
               ),
-              // 👇 Only the map page; info/chat is opened from "Contact rider"
               body: DriverMapWidget(
                 rideData: {...data, 'rideId': widget.rideId},
                 onMapCreated: (_) {},
@@ -268,15 +415,24 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text(RideStrings.rideCompleted),
-        content: const Text(RideStrings.confirmCompletion),
+        title: Text(
+          RideStrings.rideCompleted,
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        content: Text(
+          RideStrings.confirmCompletion,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
         actions: [
           TextButton(
             onPressed: () {
               Navigator.pop(context);
               Navigator.of(context).popUntil((r) => r.isFirst);
             },
-            child: const Text(RideStrings.skipRating),
+            child: Text(
+              RideStrings.skipRating,
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
           ),
           ElevatedButton(
             onPressed: () {
@@ -292,7 +448,10 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                 ),
               );
             },
-            child: const Text(RideStrings.rateRider),
+            child: Text(
+              RideStrings.rateRider,
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
           ),
         ],
       ),
@@ -338,16 +497,28 @@ class _CancelRideButton extends ConsumerWidget {
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (_) => AlertDialog(
-                  title: const Text(RideStrings.cancelTitle),
-                  content: const Text(RideStrings.cancelMessage),
+                  title: Text(
+                    RideStrings.cancelTitle,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  content: Text(
+                    RideStrings.cancelMessage,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: const Text(RideStrings.cancelNo),
+                      child: Text(
+                        RideStrings.cancelNo,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
                     ),
                     ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: const Text(RideStrings.cancelYes),
+                      child: Text(
+                        RideStrings.cancelYes,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
                     ),
                   ],
                 ),
@@ -367,7 +538,7 @@ class _CancelRideButton extends ConsumerWidget {
             )
           : const Text(RideStrings.cancelRide),
       icon: isCancelling ? null : const Icon(Icons.cancel),
-      backgroundColor: Colors.redAccent,
+      backgroundColor: Theme.of(context).colorScheme.error,
     );
   }
 }

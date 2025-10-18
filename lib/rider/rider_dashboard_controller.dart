@@ -1,4 +1,3 @@
-//rider_dashboard_controller.dart
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,12 +7,10 @@ import 'package:logger/logger.dart';
 
 import 'rider_services.dart'; // RideService, MapService etc.
 
-/// Dashboard state: latest active ride (or null)
-final riderDashboardProvider =
-    StateNotifierProvider<
-      RiderDashboardController,
-      AsyncValue<Map<String, dynamic>?>
-    >((ref) => RiderDashboardController()..fetchActiveRide());
+/// Dashboard state: latest active ride and driver contact info (or null)
+final riderDashboardProvider = StateNotifierProvider<
+    RiderDashboardController,
+    AsyncValue<Map<String, dynamic>?>>((ref) => RiderDashboardController()..fetchActiveRide());
 
 class RiderDashboardController
     extends StateNotifier<AsyncValue<Map<String, dynamic>?>> {
@@ -29,11 +26,14 @@ class RiderDashboardController
   void updateNearbyDrivers(List<Map<String, dynamic>> drivers) {
     _nearbyDrivers = drivers;
     _logger.i("Updated nearby drivers cache: ${drivers.length}");
-    // If you want to trigger rebuilds without changing the ride state:
-    // state = state;
   }
 
+  // ---- Driver contact info cache
+  Map<String, dynamic>? _driverInfo;
+  Map<String, dynamic>? get driverInfo => _driverInfo;
+
   StreamSubscription<Map<String, dynamic>?>? _rideSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _driverInfoSub;
 
   String? _lastUid;
   String? get uid {
@@ -49,24 +49,20 @@ class RiderDashboardController
         .orderByChild('createdAt')
         .limitToLast(1);
 
-    // onValue returns the last N nodes as a map; we unwrap the single child.
     return query.onValue.map((event) {
       final raw = event.snapshot.value;
       if (raw == null) return null;
 
       if (raw is Map) {
-        // keys are rideIds; pick the only/last
         final map = Map<dynamic, dynamic>.from(raw);
         if (map.isEmpty) return null;
         final latestKey = map.keys.first;
         final latest = Map<dynamic, dynamic>.from(map[latestKey]);
         final parsed = latest.map((k, v) => MapEntry(k.toString(), v));
-        // inject id for convenience if missing
         parsed['id'] ??= latestKey.toString();
         return parsed;
       }
 
-      // If a single child is returned directly (edge case)
       if (raw is List && raw.isNotEmpty) {
         final latest = Map<dynamic, dynamic>.from(raw.last);
         return latest.map((k, v) => MapEntry(k.toString(), v));
@@ -76,12 +72,63 @@ class RiderDashboardController
     });
   }
 
+  /// Stream driver contact info when driverId is available
+  void _subscribeToDriverInfo(String? driverId) {
+    _driverInfoSub?.cancel();
+    _driverInfoSub = null;
+
+    if (driverId == null || driverId.isEmpty) {  // ✅ FIXED
+      _logger.i('No driverId; clearing driver info');
+      _driverInfo = null;
+      final currentRide = state.value;
+      if (currentRide != null) {
+        state = AsyncData({
+          ...currentRide,
+          'driverInfo': null,
+        });
+      }
+      return;
+    }
+
+    _driverInfoSub = fire
+        .collection('users')
+        .doc(driverId)
+        .snapshots()
+        .listen(
+          (snap) {
+            if (snap.exists && snap.data() != null) {  // ✅ FIXED
+              _driverInfo = snap.data();
+              _logger.i('Driver info updated for driverId: $driverId');
+              
+              // ✅ FORCE state update
+              final currentRide = state.value;
+              if (currentRide != null) {
+                state = AsyncData({
+                  ...currentRide,
+                  'driverInfo': _driverInfo,
+                  'driverId': driverId,
+                });
+              }
+            } else {
+              _driverInfo = null;
+              _logger.w('Driver info not found for driverId: $driverId');
+            }
+          },
+          onError: (err, st) {
+            _logger.e('Driver info stream error', error: err, stackTrace: st);
+            _driverInfo = null;
+            // Don't set error state for driver info failures
+          },
+        );
+  }
+
   void fetchActiveRide() {
     final riderId = uid;
     if (riderId == null) {
       _logger.w('No UID; clearing state');
       state = const AsyncData(null);
       _cancelRideStream();
+      _subscribeToDriverInfo(null);
       return;
     }
 
@@ -90,11 +137,17 @@ class RiderDashboardController
 
     _rideSub = _rideStreamFor(riderId).listen(
       (ride) {
-        state = AsyncData(ride);
+        final driverId = ride?['driverId'] as String?;
+        _subscribeToDriverInfo(driverId);
+        state = AsyncData({
+          ...?ride,
+          'driverInfo': _driverInfo,
+        });
       },
       onError: (err, st) {
         _logger.e('Ride stream error', error: err, stackTrace: st);
         state = AsyncError(err, st);
+        _subscribeToDriverInfo(null);
       },
     );
   }
@@ -102,6 +155,9 @@ class RiderDashboardController
   void _cancelRideStream() {
     _rideSub?.cancel();
     _rideSub = null;
+    _driverInfoSub?.cancel();
+    _driverInfoSub = null;
+    _driverInfo = null;
   }
 
   void clearCachedUid() {
@@ -113,7 +169,6 @@ class RiderDashboardController
   Future<void> expireCounterFare(String rideId) async {
     try {
       await RideService().expireCounterFare(rideId);
-      // Streams will naturally clear the popup (counterFare becomes null).
     } catch (e, st) {
       _logger.e('expireCounterFare failed', error: e, stackTrace: st);
       state = AsyncError(e, st);
@@ -121,8 +176,6 @@ class RiderDashboardController
     }
   }
 
-  /// Creates ride via service; also seeds state with a quick optimistic value.
-  // RiderDashboardController.dart
   Future<void> createRide(
     String pickup,
     String dropoff,
@@ -148,7 +201,6 @@ class RiderDashboardController
         'note': note,
       });
 
-      // Optimistic state; RTDB/FS streams will update shortly
       state = AsyncData({
         'id': rideId,
         'pickup': pickup,
@@ -161,6 +213,7 @@ class RiderDashboardController
         'rideType': rideType,
         'note': note,
         'status': 'pending',
+        'driverInfo': null,
       });
     } catch (e, st) {
       _logger.e('createRide failed', error: e, stackTrace: st);
@@ -172,7 +225,7 @@ class RiderDashboardController
   Future<void> cancelRide(String rideId) async {
     try {
       await RideService().cancelRide(rideId);
-      // RTDB stream will emit null/updated status automatically.
+      _subscribeToDriverInfo(null);
     } catch (e, st) {
       _logger.e('cancelRide failed', error: e, stackTrace: st);
       state = AsyncError(e, st);
@@ -180,7 +233,6 @@ class RiderDashboardController
     }
   }
 
-  /// Called by your Counter-Offer dialog actions
   Future<void> handleCounterFare(
     String rideId,
     double counterFare,
@@ -192,7 +244,6 @@ class RiderDashboardController
       } else {
         await cancelRide(rideId);
       }
-      // Stream will update status; no manual state juggling required.
     } catch (e, st) {
       _logger.e('handleCounterFare failed', error: e, stackTrace: st);
       state = AsyncError(e, st);

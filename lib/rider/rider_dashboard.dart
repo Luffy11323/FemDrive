@@ -101,14 +101,14 @@ class RiderDashboard extends ConsumerStatefulWidget {
   ConsumerState<RiderDashboard> createState() => _RiderDashboardState();
 }
 
+
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
-  static const activeStatuses = {'accepted', 'driver_arrived', 'in_progress'};
+  static const activeStatuses = {'accepted', 'driver_arrived', 'in_progress', 'ontrip'};
 
   bool _chatVisible(String? raw) =>
       activeStatuses.contains((raw ?? '').trim().toLowerCase());
   bool _hasActive(String? raw) {
     final s = (raw ?? '').trim();
-    // normalize both variants
     final arrived = s == 'driverArrived' || s == 'driver_arrived';
     return const {
           'pending',
@@ -130,7 +130,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   final _pickupController = TextEditingController();
   final _dropoffController = TextEditingController();
   Set<Polyline> _polylines = {};
-  // --- live trim for driver->pickup leg ---
   List<LatLng> _driverLeg = const [];
   Set<Polyline> _trimmed = {};
   LatLng? _lastDriverTick;
@@ -158,6 +157,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   final Set<String> _startedNotified = {};
   final Set<String> _completedNotified = {};
   final Set<String> _noDriversNotified = {};
+  final Set<String> _acceptedNotified = {};
+  final Set<String> _cancelNotified = {};
 
   void _applyTrimmedRoute(
     List<LatLng> route,
@@ -173,9 +174,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     ];
     final covered = route.sublist(0, cutAt.clamp(0, route.length));
 
-    // demo palette + width
-    const baseLight = Color(0xFF90B6FF); // remaining
-    const progDark = Color(0xFF1A57E8); // covered
+    const baseLight = Color(0xFF90B6FF);
+    const progDark = Color(0xFF1A57E8);
     const w = 10;
 
     _trimmed = {
@@ -208,8 +208,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final lon2 = b.longitude * (math.pi / 180.0);
     final dLon = lon2 - lon1;
     final y = math.sin(dLon) * math.cos(lat2);
-    final x =
-        math.cos(lat1) * math.sin(lat2) -
+    final x = math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
     var brng = math.atan2(y, x) * 180.0 / math.pi;
     brng = (brng + 360.0) % 360.0;
@@ -242,10 +241,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   double? _distanceKm;
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
-  final Set<String> _acceptedNotified = {};
-  final Set<String> _cancelNotified = {};
-  //  final Set<String> _counterNotified = {};
-  //  final Set<String> _emergencyNotified = {};
 
   @override
   void initState() {
@@ -267,7 +262,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/bike_marker.png',
       );
-      // Use your car PNG path here (add it to pubspec assets):
       final car = await BitmapDescriptor.asset(
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/car_marker.png',
@@ -286,16 +280,28 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     required LatLng to,
     required String id,
     required Color color,
-    int width = 6,
+    int width = 10,
   }) async {
     try {
       final points = await MapService().getRoute(from, to);
       _logger.i(
         '[route] ${from.latitude},${from.longitude} -> ${to.latitude},${to.longitude} | pts=${points.length}',
       );
-      if (!mounted || points.isEmpty) return;
+      if (!mounted || points.isEmpty) {
+        _logger.w('No route points returned for $id');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to load route')),
+          );
+        }
+        setState(() {
+          _polylines.removeWhere((p) => p.polylineId.value == id);
+        });
+        return;
+      }
       setState(() {
         _polylines = {
+          ..._polylines.where((p) => p.polylineId.value != id),
           Polyline(
             polylineId: PolylineId(id),
             points: points,
@@ -310,66 +316,122 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       await _fitToBounds(from, to);
     } catch (e) {
       _logger.e('Failed to draw route "$id": $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load route')),
+        );
+      }
+      setState(() {
+        _polylines.removeWhere((p) => p.polylineId.value == id);
+      });
     }
   }
 
-  // same signature + store points for trimming when id == 'driver_to_pickup'
   Future<void> _drawRouteAndStore({
     required LatLng from,
     required LatLng to,
     required String id,
     required Color color,
-    int width = 6,
+    int width = 10,
   }) async {
-    final points = await MapService().getRoute(from, to);
-    if (!mounted || points.isEmpty) return;
+    try {
+      final points = await MapService().getRoute(from, to);
+      _logger.i(
+        '[route] ${from.latitude},${from.longitude} -> ${to.latitude},${to.longitude} | pts=${points.length}',
+      );
+      if (!mounted || points.isEmpty) {
+        _logger.w('No route points returned for $id');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to load route')),
+          );
+        }
+        setState(() {
+          _polylines.removeWhere((p) => p.polylineId.value == id);
+        });
+        return;
+      }
 
-    if (id == 'driver_to_pickup') {
-      _driverLeg = points;
-      _applyTrimmedRoute(_driverLeg, from, id: id); // initial cut from 'from'
+      if (id == 'driver_to_pickup') {
+        _driverLeg = points;
+        _applyTrimmedRoute(_driverLeg, from, id: id);
+        setState(() {
+          _polylines = {
+            ..._polylines
+                .where((p) => !p.polylineId.value.startsWith('driver_to_pickup')),
+            ..._trimmed,
+          };
+        });
+      } else {
+        setState(() {
+          _polylines = {
+            ..._polylines.where((p) => p.polylineId.value != id),
+            Polyline(
+              polylineId: PolylineId(id),
+              points: points,
+              color: color,
+              width: width,
+              startCap: Cap.roundCap,
+              endCap: Cap.roundCap,
+              jointType: JointType.round,
+            ),
+          };
+        });
+      }
+      await _fitToBounds(from, to);
+    } catch (e) {
+      _logger.e('Failed to draw route "$id": $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load route')),
+        );
+      }
       setState(() {
-        _polylines = {}; // clear legacy single polyline
-        _polylines = {..._trimmed}; // show covered+remaining
-      });
-    } else {
-      setState(() {
-        _polylines = {
-          Polyline(
-            polylineId: PolylineId(id),
-            points: points,
-            color: color,
-            width: width,
-            startCap: Cap.roundCap,
-            endCap: Cap.roundCap,
-            jointType: JointType.round,
-          ),
-        };
+        _polylines.removeWhere((p) => p.polylineId.value == id);
       });
     }
-    await _fitToBounds(from, to);
   }
 
   Future<void> _loadCurrentLocation() async {
+    final connectivityAsync = ref.read(connectivityProvider);
+    final isOffline = connectivityAsync.value == ConnectivityResult.none;
+    if (isOffline) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Offline: Using last known location if available')),
+        );
+      }
+      return;
+    }
+
     try {
       final loc = await MapService().currentLocation();
+      String? addr;
+      try {
+        addr = await GeocodingService.reverseGeocode(
+          lat: loc.latitude,
+          lng: loc.longitude,
+        );
+      } catch (ge) {
+        _logger.e('Reverse geocoding failed: $ge');
+      }
+      addr ??= 'My Location';
 
-      // Resolve a human-readable address for the pickup field
-      String? addr = await GeocodingService.reverseGeocode(
-        lat: loc.latitude,
-        lng: loc.longitude,
-      );
-      addr ??= 'My location'; // fallback label
-
-      setState(() {
-        _currentLocation = loc;
-        _pickupLatLng = loc;
-        _pickupController.text = addr!; // <-- real address now
-      });
-
-      // Keep nearby driver query centered around the pickup
-      ref.read(driverSearchCenterProvider.notifier).state = loc;
+      if (mounted) {
+        setState(() {
+          _currentLocation = loc;
+          _pickupLatLng = loc;
+          _pickupController.text = addr!;
+        });
+        ref.read(driverSearchCenterProvider.notifier).state = loc;
+      }
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to get location')),
+        );
+      }
     }
   }
 
@@ -384,7 +446,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       a.longitude > b.longitude ? a.longitude : b.longitude,
     );
 
-    // nudge if identical
     if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
       const d = 0.0005;
       sw = LatLng(sw.latitude - d, sw.longitude - d);
@@ -410,20 +471,20 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final rideDataa = dash.asData?.value;
     final statuss = (rideData?['status'] as String?) ?? '';
 
-    // ✅ side-effect: keep camera centered on pickup while searching
     if (_mapController != null && rideDataa != null && statuss == 'searching') {
       final pLat = (rideDataa['pickupLat'] as num?)?.toDouble();
       final pLng = (rideDataa['pickupLng'] as num?)?.toDouble();
       if (pLat != null && pLng != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _mapController!.animateCamera(
-            CameraUpdate.newLatLngZoom(LatLng(pLat, pLng), 16),
-          );
+          if (mounted && _mapController != null) {
+            _mapController!.animateCamera(
+              CameraUpdate.newLatLngZoom(LatLng(pLat, pLng), 16),
+            );
+          }
         });
       }
     }
 
-    // Pull live overlay (fast) if ride exists
     RideLive? live;
     if (rideId != null) {
       live = ref.watch(rtdbRideLiveProvider(rideId)).value;
@@ -432,12 +493,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final String? driverId = (liveDriverId != null && liveDriverId.isNotEmpty)
         ? liveDriverId
         : (rideData?['driverId'] as String?);
-    // Prefer live status if present
     final status = (live?.status.isNotEmpty == true)
         ? live!.status
         : staticStatus;
 
-    // Prefer live driver lat/lng
+    // Get driverInfo from controller's state
+    final driverInfo = rideData?['driverInfo'] as Map<String, dynamic>?;
+
     LatLng? driverLatLng = live?.driverLatLng;
     if (driverLatLng == null && driverId != null && driverId.isNotEmpty) {
       driverLatLng = ref.watch(driverLocationProvider(driverId)).value;
@@ -455,15 +517,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           : null;
     }
 
-    // Fallback to driver stream if live didn’t include coords
     final dlat = (rideData?['driverLat'] as num?)?.toDouble();
     final dlng = (rideData?['driverLng'] as num?)?.toDouble();
     if (dlat != null && dlng != null) {
       driverLatLng = LatLng(dlat, dlng);
     }
-    // live trim + follow camera while heading to pickup
+
     if (driverLatLng != null && status == 'accepted' && _driverLeg.isNotEmpty) {
-      // avoid redundant rebuild churn
       if (_lastDriverTick == null ||
           Geolocator.distanceBetween(
                 _lastDriverTick!.latitude,
@@ -474,22 +534,27 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               3) {
         _lastDriverTick = driverLatLng;
         _applyTrimmedRoute(_driverLeg, driverLatLng, id: 'driver_to_pickup');
-        // merge with any other polylines you already show
-        setState(() => _polylines = {..._trimmed});
+        setState(() => _polylines = {
+              ..._polylines.where((p) =>
+                  p.polylineId.value != 'driver_to_pickup_remaining' &&
+                  p.polylineId.value != 'driver_to_pickup_covered'),
+              ..._trimmed
+            });
         _followCamera(driverLatLng);
       }
     }
 
     final hasActive = _hasActive(status);
+    final isActiveOrDone = activeStatuses.contains(status.toLowerCase()) ||
+        status == 'completed' ||
+        status == 'cancelled';
 
-    if (!hasActive &&
-        _pickupLatLng == null &&
-        _dropoffLatLng == null &&
-        _polylines.isNotEmpty) {
+    if (!hasActive && isActiveOrDone && _polylines.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _polylines = {});
       });
     }
+
     final pLat2 = (rideData?['pickupLat'] as num?)?.toDouble();
     final pLng2 = (rideData?['pickupLng'] as num?)?.toDouble();
     final LatLng? safePickup = (pLat2 != null && pLng2 != null)
@@ -500,38 +565,37 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         rideData != null &&
         (status == 'pending' || status == 'searching') &&
         safePickup != null;
+      if (showRadar && _mapController != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _mapController?.animateCamera(
+              CameraUpdate.newLatLngZoom(safePickup, 15),
+            );
+         }
+      });
+    }
     final rideType = (rideData?['rideType'] ?? '').toString();
     final liveIcon = (rideType.toLowerCase() == 'bike')
         ? (_bikeIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
         : (_carIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueOrange,
-              ));
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange));
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rider Dashboard'),
-        surfaceTintColor: Colors.transparent,
+        surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
       ),
       drawer: _buildDrawer(context),
       body: SafeArea(
         child: Stack(
           children: [
-            // --- Map with live markers and route ---
             Consumer(
               builder: (context, ref, _) {
                 final nearbyAsync = ref.watch(nearbyDriversProvider);
                 return nearbyAsync.when(
                   data: (drivers) {
-                    final status = (rideData?['status'] ?? '').toString();
-                    final hasActive =
-                        status == 'accepted' ||
-                        status == 'in_progress' ||
-                        status == 'onTrip' ||
-                        status == 'driverArrived';
-
                     final markers = <Marker>{
-                      // Rider current location only when idle/planning
                       if (_currentLocation != null &&
                           !hasActive &&
                           (_pickupLatLng == null ||
@@ -544,8 +608,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueAzure,
                           ),
                         ),
-
-                      // Pickup shown only until trip starts
                       if (_pickupLatLng != null &&
                           status != 'completed' &&
                           status != 'cancelled')
@@ -556,8 +618,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueGreen,
                           ),
                         ),
-
-                      // Dropoff shown only during trip
                       if (_dropoffLatLng != null &&
                           status != 'completed' &&
                           status != 'cancelled')
@@ -568,8 +628,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueRed,
                           ),
                         ),
-
-                      // Live driver marker whenever we know it
                       if (driverLatLng != null)
                         Marker(
                           markerId: const MarkerId('driver_live'),
@@ -579,8 +637,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           anchor: const Offset(0.5, 0.5),
                           flat: true,
                         ),
-
-                      // Nearby drivers (hidden once one is assigned)
                       ...drivers
                           .where((d) => d['location'] != null)
                           .where(
@@ -590,8 +646,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             final dType = (d['rideType'] ?? d['carType'] ?? '')
                                 .toString()
                                 .toLowerCase();
-                            return dType ==
-                                rideType.toLowerCase(); // <-- enforce match
+                            return dType == rideType.toLowerCase();
                           })
                           .map((d) {
                             final loc = d['location'];
@@ -603,7 +658,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             } else {
                               return null;
                             }
-
                             final id =
                                 (d['id'] ?? d['uid'] ?? UniqueKey().toString())
                                     .toString();
@@ -611,7 +665,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                 .toString();
                             final rating = (d['rating'] ?? '—').toString();
                             final rideType = (d['rideType'] ?? '—').toString();
-
                             return Marker(
                               markerId: MarkerId('driver_$id'),
                               position: pos,
@@ -626,13 +679,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           })
                           .whereType<Marker>(),
                     };
-
                     return Stack(
                       children: [
                         GoogleMap(
                           initialCameraPosition: CameraPosition(
-                            target:
-                                _currentLocation ??
+                            target: _currentLocation ??
                                 const LatLng(37.7749, -122.4194),
                             zoom: 14,
                           ),
@@ -645,13 +696,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           compassEnabled: false,
                           zoomControlsEnabled: false,
                           mapToolbarEnabled: false,
-
                           trafficEnabled: _trafficEnabled,
                           mapType: _mapType,
-
                           markers: markers,
                           polylines: _polylines,
-                        ),
+                        ).animate().fadeIn(duration: 200.ms),
                         Positioned(
                           top: 16,
                           right: 12,
@@ -692,14 +741,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             child: _Frosted(
                               child: Row(
                                 children: [
-                                  const Icon(Icons.info_outline, size: 18),
+                                  Icon(
+                                    Icons.info_outline,
+                                    size: 18,
+                                    color: Theme.of(context).colorScheme.onSurface,
+                                  ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       'No nearby drivers available',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.labelLarge,
+                                      style: Theme.of(context).textTheme.labelLarge,
                                     ),
                                   ),
                                 ],
@@ -728,7 +779,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   driverIcon: liveIcon,
                 ),
               ),
-            // --- Fare/ETA/Distance pill (like route summary) ---
             if (_fare != null && _eta != null && _distanceKm != null)
               Positioned(
                 top: 72,
@@ -756,40 +806,32 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   ],
                 ),
               ),
-
-            // --- Ride state overlays (unchanged logic, polished visuals) ---
             ridesAsync.when(
               data: (rideData) {
                 if (rideData == null || rideData.isEmpty) {
                   return const SizedBox.shrink();
                 }
-
                 final ride = rideData;
                 final status = (ride['status'] ?? '').toString();
-                // --- Route switching logic ---
                 switch (status) {
                   case 'accepted':
                     if (_acceptedNotified.add(ride['id'])) {
                       showAccepted(rideId: ride['id']);
                     }
-
-                    // Replace planning polyline with driver → pickup
                     if (driverLatLng != null && _pickupLatLng != null) {
                       _drawRouteAndStore(
                         from: driverLatLng,
                         to: _pickupLatLng!,
                         id: 'driver_to_pickup',
-                        color: const ui.Color.fromARGB(255, 255, 8, 0),
+                        color: const Color.fromARGB(255, 255, 8, 0),
                       );
                     }
                     break;
-
                   case 'in_progress':
                   case 'onTrip':
                     if (_startedNotified.add(ride['id'])) {
                       showRideStarted(rideId: ride['id']);
                     }
-                    // Show current driver (live) → dropoff; fallback...
                     if (_dropoffLatLng != null) {
                       final origin =
                           driverLatLng ?? _currentLocation ?? _pickupLatLng;
@@ -798,29 +840,25 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           from: origin,
                           to: _dropoffLatLng!,
                           id: 'to_dropoff_live',
-                          color: const Color(0xFF90B6FF), // base light
+                          color: const Color(0xFF90B6FF),
                           width: 10,
                         );
                       }
                     }
                     break;
-
                   case 'searching':
                     break;
-
                   case 'completed':
                     if (_completedNotified.add(ride['id'])) {
                       showRideCompleted(rideId: ride['id']);
                     }
-                    // After a short delay, you navigate; clear line now to avoid flash
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
                       });
                     }
                     Future.delayed(const Duration(seconds: 4), () {
-                      if (mounted) {
-                        if (!context.mounted) return;
+                      if (mounted && context.mounted) {
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
@@ -835,12 +873,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       showNoDrivers(rideId: ride['id']);
                     }
                     break;
-
                   case 'cancelled':
                     if (_cancelNotified.add(ride['id'])) {
                       showCancelled(rideId: ride['id']);
                     }
-
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
@@ -852,15 +888,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     if (_arrivedNotified.add(ride['id'])) {
                       showDriverArrived(rideId: ride['id']);
                     }
-                    // keep/adjust your map logic as needed
                     break;
-
                   default:
-                    // Idle/planning state: do nothing here.
-                    // The planning polyline is drawn by RideForm.onFareUpdated (pickup+dropoff set).
                     break;
                 }
-
                 return Stack(
                   children: [
                     Align(
@@ -870,14 +901,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         child: RideStatusWidget(ride: ride),
                       ),
                     ),
-                    if (ride['driverId'] != null)
+                    if (ride['driverId'] != null && driverInfo != null)
                       Align(
                         alignment: Alignment.topRight,
                         child: Padding(
                           padding: const EdgeInsets.only(top: 8),
-                          child: DriverDetailsWidget(
-                            driverId: ride['driverId'],
-                          ),
+                          child: DriverDetailsWidget(driverInfo: driverInfo),
                         ),
                       ),
                     if (status == 'accepted' ||
@@ -888,31 +917,32 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         right: 16,
                         child: ShareTripButton(rideId: ride['id']),
                       ),
-
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
                         bottom: 110,
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
-                    // ⤵️ Always show Cancel for accepted / in_progress / onTrip
                     if (status == 'accepted' ||
                         status == 'in_progress' ||
                         status == 'onTrip')
                       Positioned(
-                        bottom: 46, // below SOS
+                        bottom: 46,
                         left: 16,
                         right: 16,
                         child: _RiderCancelButton(rideId: ride['id']),
                       ),
-
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
-                        bottom: 56, // just above SOS
+                        bottom: 56,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.cancel),
                           label: const Text('Cancel Ride'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                            foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                          ),
                           onPressed: () async {
                             try {
                               final id = (ride['id'] as String?);
@@ -920,9 +950,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
-                                      content: Text(
-                                        'Ride is not initialized yet',
-                                      ),
+                                      content: Text('Ride is not initialized yet'),
                                     ),
                                   );
                                 }
@@ -949,41 +977,33 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                               }
                             }
                           },
-                        ),
+                        ).animate().fadeIn(duration: 200.ms).slideX(
+                              begin: 0.5,
+                              end: 0,
+                              duration: 200.ms,
+                            ),
                       ),
-                    if (_chatVisible(status))
+                    if (_chatVisible(status) && rideId != null && rideId.isNotEmpty)
                       Positioned(
-                        bottom: 222,
-                        right: 16,
-                        child: FilledButton.tonalIcon(
-                          icon: const Icon(Icons.chat_bubble),
+                        bottom: 56,  // ✅ FIXED - Above cancel button
+                        left: 16,
+                        child: FloatingActionButton.extended(
+                          heroTag: 'rider_chat_fab',
+                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                          foregroundColor: Theme.of(context).colorScheme.onPrimaryContainer,
+                          icon: const Icon(Icons.chat_rounded, size: 20),
                           label: const Text('Chat'),
-                          onPressed: () async {
-                            String? driverName;
-                            try {
-                              if (driverId != null && driverId.isNotEmpty) {
-                                final doc = await FirebaseFirestore.instance
-                                    .collection('users')
-                                    .doc(driverId)
-                                    .get();
-                                driverName =
-                                    (doc.data()?['username'] as String?)
-                                        ?.trim();
-                              }
-                            } catch (_) {}
-                            if (rideId != null && rideId.isNotEmpty) {
-                              if (!context.mounted) return;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => RiderChatPage(
-                                    rideId: rideId,
-                                    otherDisplayName: driverName,
-                                  ),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => RiderChatPage(
+                                  rideId: rideId,
+                                  otherDisplayName: driverInfo?['username'] ?? 'Driver',
                                 ),
-                              );
-                            }
+                              ),
+                            );
                           },
-                        ),
+                        ).animate().fadeIn(duration: 200.ms).slideX(begin: -0.3, duration: 200.ms),
                       ),
                     if (status == 'completed')
                       Align(
@@ -996,7 +1016,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               loading: () => const SizedBox.shrink(),
               error: (e, st) => const SizedBox.shrink(),
             ),
-            // 1) Radar overlay during pending/searching
             if (showRadar)
               Positioned.fill(
                 child: RadarSearchingOverlay(
@@ -1009,18 +1028,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text(
-                                'Please wait a moment… setting up ride',
-                              ),
+                              content: Text('Please wait a moment… setting up ride'),
                             ),
                           );
                         }
                         return;
                       }
-
-                      await ref
-                          .read(riderDashboardProvider.notifier)
-                          .cancelRide(id);
+                      await ref.read(riderDashboardProvider.notifier).cancelRide(id);
                       if (context.mounted) {
                         showCancelledByRider(rideId: id);
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1035,91 +1049,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       }
                     }
                   },
-                  mapController:
-                      _mapController, // <-- added for zoom-out (Patch 2)
+                  mapController: _mapController,
                 ),
               ),
-
             if (rideData != null &&
                 rideData['counterFare'] != null &&
                 status != 'completed' &&
                 status != 'cancelled')
               CounterFareModalLauncher(ride: rideData),
-
-            // 2) Show RideForm only when no active ride
-            if (!hasActive)
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
-                    boxShadow: [
-                      BoxShadow(
-                        blurRadius: 24,
-                        color: Colors.black26,
-                        offset: Offset(0, -6),
-                      ),
-                    ],
-                  ),
-                  child: DraggableScrollableSheet(
-                    initialChildSize: 0.35,
-                    minChildSize: 0.20,
-                    maxChildSize: 0.88,
-                    builder: (_, controller) => ClipRRect(
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(16),
-                      ),
-                      child: Material(
-                        color: Theme.of(context).colorScheme.surface,
-                        child: RideForm(
-                          mapController: _mapController,
-                          scrollController: controller,
-                          currentLocation: _currentLocation,
-                          pickupController: _pickupController,
-                          dropoffController: _dropoffController,
-                          onFareUpdated:
-                              (
-                                fare,
-                                eta,
-                                distanceKm,
-                                routePoints, {
-                                pickup,
-                                dropoff,
-                              }) async {
-                                if (!mounted) return;
-                                setState(() {
-                                  _fare = fare;
-                                  _eta = eta;
-                                  _distanceKm = distanceKm;
-                                  if (pickup != null) _pickupLatLng = pickup;
-                                  if (dropoff != null) _dropoffLatLng = dropoff;
-                                  _polylines = {
-                                    Polyline(
-                                      polylineId: const PolylineId('route'),
-                                      points: routePoints,
-                                      color: const Color(
-                                        0xFF90B6FF,
-                                      ), // base light
-                                      width: 10,
-                                      startCap: Cap.roundCap,
-                                      endCap: Cap.roundCap,
-                                      jointType: JointType.round,
-                                    ),
-                                  };
-                                });
-                                if (_pickupLatLng != null &&
-                                    _dropoffLatLng != null) {
-                                  await _fitToBounds(
-                                    _pickupLatLng!,
-                                    _dropoffLatLng!,
-                                  );
-                                }
-                              },
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -1141,17 +1078,17 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
-                children: const [
+                children: [
                   Icon(
                     Icons.directions_car_filled_rounded,
-                    color: Colors.white,
+                    color: cs.onPrimary,
                   ),
-                  SizedBox(width: 12),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       'FemDrive Menu',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: cs.onPrimary,
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
                       ),
@@ -1218,7 +1155,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     );
   }
 }
-
 /// ---------------- Ride Form (restored here) ----------------
 class RideForm extends ConsumerStatefulWidget {
   final GoogleMapController? mapController;
@@ -1233,8 +1169,7 @@ class RideForm extends ConsumerStatefulWidget {
     List<LatLng> routePoints, {
     LatLng? pickup,
     LatLng? dropoff,
-  })?
-  onFareUpdated;
+  })? onFareUpdated;
 
   const RideForm({
     super.key,
@@ -1244,6 +1179,7 @@ class RideForm extends ConsumerStatefulWidget {
     this.pickupController,
     this.dropoffController,
     this.onFareUpdated,
+  
   });
 
   @override
@@ -1275,6 +1211,22 @@ class _RideFormState extends ConsumerState<RideForm> {
     _dropoffController = widget.dropoffController ?? TextEditingController();
     if (_pickupLatLng == null && widget.currentLocation != null) {
       _pickupLatLng = widget.currentLocation;
+      // Auto-fill only on init if empty
+      if (_pickupController.text.isEmpty) {
+        GeocodingService.reverseGeocode(lat: widget.currentLocation!.latitude, lng: widget.currentLocation!.longitude).then((addr) {
+          if (mounted && addr != null) {
+            setState(() {
+              _pickupController.text = addr;
+            });
+          }
+        }).catchError((_) {
+          if (mounted) {
+            setState(() {
+              _pickupController.text = 'My Location';
+            });
+          }
+        });
+      }
     }
   }
 
@@ -1325,15 +1277,17 @@ class _RideFormState extends ConsumerState<RideForm> {
         _distanceKm = (result['distanceKm'] as num?)?.toDouble();
       });
 
+      // ✅ CORRECT FIX: Call the parent's callback to draw the route
       widget.onFareUpdated?.call(
         _fare ?? 0,
         _eta ?? 0,
         _distanceKm ?? 0,
         routePoints,
-        pickup: sendMarkers ? _pickupLatLng : null,
+        pickup: sendMarkers ? _pickupLatLng : null,  // ✅ This triggers route drawing
         dropoff: sendMarkers ? _dropoffLatLng : null,
       );
 
+      // Fit map to show both markers
       if (widget.mapController != null) {
         var sw = LatLng(
           math.min(_pickupLatLng!.latitude, _dropoffLatLng!.latitude),
@@ -1345,7 +1299,7 @@ class _RideFormState extends ConsumerState<RideForm> {
         );
 
         if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
-          const d = 0.0005; // ~50m
+          const d = 0.0005;
           sw = LatLng(sw.latitude - d, sw.longitude - d);
           ne = LatLng(ne.latitude + d, ne.longitude + d);
         }
@@ -1840,50 +1794,36 @@ class SOSButton extends StatelessWidget {
 
 /// ---------------- Driver Details (live) ----------------
 class DriverDetailsWidget extends StatelessWidget {
-  final String driverId;
-  const DriverDetailsWidget({super.key, required this.driverId});
+  final Map<String, dynamic> driverInfo;
+  const DriverDetailsWidget({super.key, required this.driverInfo});
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(driverId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || !snapshot.data!.exists) {
-          return const SizedBox.shrink();
-        }
-        final d = snapshot.data!.data()! as Map<String, dynamic>;
-        final veh = (d['vehicle'] ?? {}) as Map<String, dynamic>;
-        return Card(
-          margin: const EdgeInsets.all(12),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundImage:
-                  (d['photoUrl'] != null &&
-                      (d['photoUrl'] as String).isNotEmpty)
+    final d = driverInfo;
+    final veh = (d['vehicle'] ?? {}) as Map<String, dynamic>;
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundImage:
+              (d['photoUrl'] != null && (d['photoUrl'] as String).isNotEmpty)
                   ? NetworkImage(d['photoUrl'])
                   : null,
-              radius: 24,
-              child:
-                  (d['photoUrl'] == null || (d['photoUrl'] as String).isEmpty)
-                  ? const Icon(Icons.person)
-                  : null,
-            ),
-            title: Text(d['username'] ?? 'Driver'),
-            subtitle: Text("⭐ ${(d['averageRating'] ?? 'N/A').toString()}"),
-            trailing: Text(
-              '${veh['make'] ?? '—'} ${veh['model'] ?? ''}',
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ).animate().slideX(begin: 1, duration: 250.ms);
-      },
-    );
+          radius: 24,
+          child: (d['photoUrl'] == null || (d['photoUrl'] as String).isEmpty)
+              ? const Icon(Icons.person)
+              : null,
+        ),
+        title: Text(d['username'] ?? 'Driver'),
+        subtitle: Text("⭐ ${(d['averageRating'] ?? 'N/A').toString()}"),
+        trailing: Text(
+          '${veh['make'] ?? '—'} ${veh['model'] ?? ''}',
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ).animate().slideX(begin: 1, duration: 250.ms);
   }
 }
-
 /// ---------------- Share Trip ----------------
 class ShareTripButton extends StatelessWidget {
   final String rideId;
@@ -2279,7 +2219,6 @@ class _CounterFareCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header row: avatar + name + ride type + ETA chip + countdown
           Row(
             children: [
               CircleAvatar(
@@ -2343,7 +2282,7 @@ class _CounterFareCard extends StatelessWidget {
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: cs.primary.withValues(alpha: 0.12 * 255),
+                    color: cs.primary.withAlpha((0.12 * 255).round()),
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
@@ -2369,9 +2308,7 @@ class _CounterFareCard extends StatelessWidget {
               ),
             ],
           ),
-
           const SizedBox(height: 12),
-          // Big price like Uber tile
           Center(
             child: Column(
               children: [
@@ -2390,9 +2327,7 @@ class _CounterFareCard extends StatelessWidget {
               ],
             ),
           ),
-
           const SizedBox(height: 12),
-          // Two bullet rows (pickup & dropoff), optional like the sample
           _bulletRow(
             context,
             icon: Icons.my_location_rounded,
@@ -2406,7 +2341,6 @@ class _CounterFareCard extends StatelessWidget {
             title: dropoff,
             subtitle: 'Destination',
           ),
-
           const SizedBox(height: 14),
           Row(
             children: [
@@ -2469,7 +2403,6 @@ class _CounterFareCard extends StatelessWidget {
     );
   }
 }
-
 class RideOption {
   final String key; // "Ride mini", "Ride X", etc.
   final String label; // visible label
@@ -2578,7 +2511,6 @@ class _DrawerTile extends StatelessWidget {
     );
   }
 }
-
 class _InfoPill extends StatelessWidget {
   final IconData icon;
   final String label;
