@@ -105,10 +105,17 @@ class RiderDashboard extends ConsumerStatefulWidget {
 
 
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
-  static const activeStatuses = {'accepted', 'driver_arrived', 'in_progress', 'ontrip'};
 
-  bool _chatVisible(String? raw) =>
-      activeStatuses.contains((raw ?? '').trim().toLowerCase());
+  bool _chatVisible(String? raw) {
+    final s = (raw ?? '').trim().toLowerCase();
+    return const {
+      'accepted',
+      'driver_arrived',
+      'driverarrived',
+      'in_progress',
+      'ontrip',
+    }.contains(s);
+  }
   bool _hasActive(String? raw) {
     final s = (raw ?? '').trim().toLowerCase(); // ✅ ADD .toLowerCase()
     return const {
@@ -971,18 +978,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
-                    if (status == 'accepted' ||
-                        status == 'in_progress' ||
-                        status == 'onTrip')
-                      Positioned(
-                        bottom: 46,
-                        left: 16,
-                        right: 16,
-                        child: _RiderCancelButton(rideId: ride['id']),
-                      ),
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
-                        bottom: 120,
+                        bottom: 56,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.cancel),
@@ -1841,13 +1839,14 @@ class SOSButton extends StatelessWidget {
 
 /// ---------------- Driver Details (live) ----------------
 class DriverDetailsWidget extends StatelessWidget {
-  final Map<String, dynamic> driverInfo;
+  final Map<String, dynamic> driverInfo;  // ✅ NEW: Takes the info map directly
   const DriverDetailsWidget({super.key, required this.driverInfo});
 
   @override
   Widget build(BuildContext context) {
     final d = driverInfo;
     final veh = (d['vehicle'] ?? {}) as Map<String, dynamic>;
+    
     return Card(
       margin: const EdgeInsets.all(12),
       child: ListTile(
@@ -2764,61 +2763,6 @@ class _RoundIconButton extends StatelessWidget {
   }
 }
 
-class _RiderCancelButton extends ConsumerWidget {
-  final String rideId;
-  const _RiderCancelButton({required this.rideId});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: Colors.red,
-        foregroundColor: Colors.white,
-        minimumSize: const Size.fromHeight(48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      icon: const Icon(Icons.cancel),
-      label: const Text('Cancel ride'),
-      onPressed: () async {
-        final ok = await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Cancel this ride?'),
-            content: const Text(
-              'Are you sure you want to cancel? Your driver will be notified.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('No'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Yes, cancel'),
-              ),
-            ],
-          ),
-        );
-        if (ok != true) return;
-
-        try {
-          await ref.read(riderDashboardProvider.notifier).cancelRide(rideId);
-          if (context.mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Ride cancelled')));
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('Failed to cancel: $e')));
-          }
-        }
-      },
-    );
-  }
-}
 
 class _RiderNavMap extends ConsumerStatefulWidget {
   final String rideId;
