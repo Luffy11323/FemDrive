@@ -108,7 +108,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   Timer? _usernameDebounceTimer;
   Timer? _phoneDebounceTimer;
   Timer? _altPhoneDebounceTimer;
-  
+
   String? _usernameError;
   String? _phoneError;
   String? _altPhoneError;
@@ -121,9 +121,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     super.initState();
     listenForCode();
     // Add listeners for real-time validation
-    usernameController.addListener(() => _validateUsernameDebounced(usernameController.text));
-    phoneController.addListener(() => _validatePhoneDebounced(phoneController.text));
-    altContactController.addListener(() => _validateAltPhoneDebounced(altContactController.text));
+    usernameController.addListener(
+      () => _validateUsernameDebounced(usernameController.text),
+    );
+    phoneController.addListener(
+      () => _validatePhoneDebounced(phoneController.text),
+    );
+    altContactController.addListener(
+      () => _validateAltPhoneDebounced(altContactController.text),
+    );
   }
 
   // SINGLE dispose() method - remove the duplicate
@@ -254,10 +260,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       try {
         final formatted = formatPhoneNumber(phoneController.text);
         if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
-          errors.add('Phone number ${phoneController.text} is already registered');
+          errors.add(
+            'Phone number ${phoneController.text} is already registered',
+          );
         }
       } catch (e) {
-        errors.add('Invalid phone number format (must be 11 digits starting with 03)');
+        errors.add(
+          'Invalid phone number format (must be 11 digits starting with 03)',
+        );
       }
     }
 
@@ -269,7 +279,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       } else {
         final cnicNumber = cnicVerification!['cnic'] as String;
         if (await cnicExists(cnicNumber)) {
-          errors.add('CNIC $cnicNumber is already registered with another account');
+          errors.add(
+            'CNIC $cnicNumber is already registered with another account',
+          );
         }
       }
     }
@@ -284,12 +296,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         try {
           final formatted = formatPhoneNumber(altContactController.text);
           final altDigits = formatted.replaceAll('+92', '0');
-          final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
+          final primaryDigits = phoneController.text.replaceAll(
+            RegExp(r'\D'),
+            '',
+          );
 
           if (altDigits == primaryDigits) {
             errors.add('Alternate number cannot be the same as primary number');
           } else if (await altPhoneExists(altDigits)) {
-            errors.add('Alternate number ${altContactController.text} is already registered');
+            errors.add(
+              'Alternate number ${altContactController.text} is already registered',
+            );
           }
         } catch (e) {
           errors.add('Invalid alternate phone number format');
@@ -299,7 +316,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       if (licenseBase64 == null) {
         errors.add('Driving license photo is required for drivers');
       } else if (licenseVerification == null) {
-        errors.add('License verification incomplete. Please retake license photo');
+        errors.add(
+          'License verification incomplete. Please retake license photo',
+        );
       }
 
       if (cnicBase64 == null) {
@@ -307,18 +326,22 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       }
     }
 
-    if (cnicBase64 != null && cnicTrustScore < 0.55) {
-      errors.add('CNIC verification confidence too low (${(cnicTrustScore * 100).toStringAsFixed(0)}%). Please retake with better lighting');
+    if (cnicBase64 != null && cnicTrustScore < 0.56) {
+      errors.add(
+        'CNIC verification confidence too low (${(cnicTrustScore * 100).toStringAsFixed(0)}%). Please retake with better lighting',
+      );
     }
 
-    if (role == 'driver' && licenseBase64 != null && !temp && licenseTrustScore < 0.55) {
-      errors.add('License verification confidence too low (${(licenseTrustScore * 100).toStringAsFixed(0)}%). Please retake clearly');
+    if (role == 'driver' &&
+        licenseBase64 != null &&
+        !temp &&
+        licenseTrustScore < 0.56) {
+      errors.add(
+        'License verification confidence too low (${(licenseTrustScore * 100).toStringAsFixed(0)}%). Please retake clearly',
+      );
     }
 
-    return {
-      'valid': errors.isEmpty,
-      'errors': errors,
-    };
+    return {'valid': errors.isEmpty, 'errors': errors};
   }
 
   void _validateUsernameDebounced(String value) {
@@ -347,7 +370,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         final formatted = formatPhoneNumber(value);
         if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
           setState(() => _phoneError = 'Phone already registered');
-          showError('Phone number $value is already registered with a complete account. Please try logging in.');
+          showError(
+            'Phone number $value is already registered with a complete account. Please try logging in.',
+          );
         } else {
           setState(() => _phoneError = null);
         }
@@ -369,14 +394,19 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       try {
         final formatted = formatPhoneNumber(value);
         final altDigits = formatted.replaceAll('+92', '0');
-        final primaryDigits = phoneController.text.replaceAll(RegExp(r'\D'), '');
+        final primaryDigits = phoneController.text.replaceAll(
+          RegExp(r'\D'),
+          '',
+        );
 
         if (altDigits == primaryDigits) {
           setState(() => _altPhoneError = 'Same as primary');
           showError('Alternate number cannot be the same as primary number.');
         } else if (await altPhoneExists(altDigits)) {
           setState(() => _altPhoneError = 'Already registered');
-          showError('Alternate number $value is already registered with a complete account.');
+          showError(
+            'Alternate number $value is already registered with a complete account.',
+          );
         } else {
           setState(() => _altPhoneError = null);
         }
@@ -454,16 +484,25 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
         title: Row(
           children: [
-            Icon(Icons.error_outline, color: Theme.of(context).colorScheme.error),
+            Icon(
+              Icons.error_outline,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(width: 8),
-            const Text('Multiple Issues Found', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Multiple Issues Found',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Please fix the following issues:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+            const Text(
+              'Please fix the following issues:',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
             const SizedBox(height: 12),
             ...errors.map(
               (error) => Padding(
@@ -471,10 +510,20 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.arrow_right, size: 20, color: Theme.of(context).colorScheme.error),
+                    Icon(
+                      Icons.arrow_right,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(error, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface)),
+                      child: Text(
+                        error,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -486,7 +535,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Theme.of(context).colorScheme.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             onPressed: () => Navigator.pop(context),
             child: const Text('OK, I\'ll Fix These'),
@@ -749,7 +800,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     confidence = confidence.clamp(0.0, 1.0);
 
     return {
-      'valid': confidence >= 0.55,
+      'valid': confidence >= 0.56,
       'confidence': confidence,
       'issues': issues,
     };
@@ -1017,7 +1068,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     }
 
     if (foundKeywords < 2) {
-      issues.add('Missing official license text markers ($foundKeywords/3 found)');
+      issues.add(
+        'Missing official license text markers ($foundKeywords/3 found)',
+      );
       confidence *= 0.3;
     }
 
@@ -1149,7 +1202,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       'valid': temp ? true : true, // Already hardcoded, keeping it
       'confidence': temp ? 1.0 : confidence, // Force 100% confidence
       'issues': temp ? [] : issues, // Clear issues
-      };
+    };
   }
 
   Future<Map<String, dynamic>> verifyDocuments() async {
@@ -1216,7 +1269,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       // CNIC Validation
       print('Running enhanced CNIC validation...');
-      final enhancedCnicCheck = await enhancedCnicValidation(cnicBytes, cnicText);
+      final enhancedCnicCheck = await enhancedCnicValidation(
+        cnicBytes,
+        cnicText,
+      );
       cnicTrust *= enhancedCnicCheck['confidence'];
       messages.addAll(List<String>.from(enhancedCnicCheck['issues']));
 
@@ -1254,9 +1310,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             'licenseTrustScore': licenseTrust,
           };
         } else {
-          messages.add(
-            'Could not clearly detect expiry date.',
-          );
+          messages.add('Could not clearly detect expiry date.');
         }
       } else {
         try {
@@ -1286,21 +1340,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             }
           }
         } catch (e) {
-          messages.add(
-            'Could not process expiry date.',
-          );
+          messages.add('Could not process expiry date.');
         }
       }
 
       if (!cnicValidCnic) {
         if (cnicFromCnic == null) {
-          messages.add(
-            'Could not read CNIC number.',
-          );
+          messages.add('Could not read CNIC number.');
         } else {
-          messages.add(
-            'Invalid CNIC: Last digit must be even.',
-          );
+          messages.add('Invalid CNIC: Last digit must be even.');
         }
         cnicTrust *= 0.3;
       }
@@ -1311,13 +1359,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         // License Validation
         print('Running enhanced license validation...');
         final enhancedLicenseCheck = await enhancedLicenseValidation(
-            licenseBytes,
-            dlText,
-          );
-  
+          licenseBytes,
+          dlText,
+        );
+
         // BYPASS: Force high trust score for license
-        licenseTrust = temp ? 1.0 : (licenseTrust * enhancedLicenseCheck['confidence']);
-  
+        licenseTrust = temp
+            ? 1.0
+            : (licenseTrust * enhancedLicenseCheck['confidence']);
+
         if (!temp) {
           messages.addAll(List<String>.from(enhancedLicenseCheck['issues']));
         }
@@ -1344,15 +1394,22 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
       }
 
-      final overallValid = cnicValidCnic && dlValid && livenessPassed && cnicTrust >= 0.55 && (role != 'driver' || temp || licenseTrust >= 0.55);
-      
+      final overallValid =
+          cnicValidCnic &&
+          dlValid &&
+          livenessPassed &&
+          cnicTrust >= 0.56 &&
+          (role != 'driver' || temp || licenseTrust >= 0.56);
+
       // Only require manual review if trust scores are below threshold
-      final requiresManualReview = cnicTrust < 0.55 || (role == 'driver' && !temp && licenseTrust < 0.55);
-      
+      final requiresManualReview =
+          cnicTrust < 0.56 ||
+          (role == 'driver' && !temp && licenseTrust < 0.56);
+
       setState(() {
         cnicVerification = {
           'cnic': cnicFromCnic,
-          'valid': cnicValidCnic && cnicTrust >= 0.55,
+          'valid': cnicValidCnic && cnicTrust >= 0.56,
           'text': cnicText,
           'confidence': cnicTrust,
         };
@@ -1411,19 +1468,19 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     final verificationResult = await verifyDocuments();
     if (!verificationResult['valid']) {
       final messages = List<String>.from(verificationResult['messages']);
-      showError(
-        messages.isNotEmpty ? messages.first : 'Documents invalid.',
-      );
+      showError(messages.isNotEmpty ? messages.first : 'Documents invalid.');
       return;
     }
 
-    if (verificationResult['cnicTrustScore'] < 0.55) {
-      showError('CNIC verification confidence below 55%. Please retake.');
+    if (verificationResult['cnicTrustScore'] < 0.56) {
+      showError('CNIC verification confidence below 56%. Please retake.');
       return;
     }
 
-    if (role == 'driver' && !temp && verificationResult['licenseTrustScore'] < 0.55) {
-      showError('License verification confidence below 55%. Please retake.');
+    if (role == 'driver' &&
+        !temp &&
+        verificationResult['licenseTrustScore'] < 0.56) {
+      showError('License verification confidence below 56%. Please retake.');
       return;
     }
 
@@ -1431,7 +1488,9 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final formatted = formatPhoneNumber(phoneController.text);
 
       if (await phoneNumberExists(formatted.replaceAll('+92', '0'))) {
-        return showError('This phone number is already registered with a complete account.');
+        return showError(
+          'This phone number is already registered with a complete account.',
+        );
       }
 
       setState(() => isSubmitting = true);
@@ -1482,7 +1541,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         return;
       }
 
-      final credential = autoCredential ??
+      final credential =
+          autoCredential ??
           PhoneAuthProvider.credential(
             verificationId: verificationId!,
             smsCode: enteredOtp,
@@ -1513,6 +1573,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       String? extractedCnic;
       bool requiresManualReview = false;
+      bool autoApproved = false;
 
       if (role == 'rider' || role == 'driver') {
         final verificationResult = await verifyDocuments();
@@ -1527,12 +1588,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         }
 
         extractedCnic = verificationResult['cnic'] as String?;
-        requiresManualReview = verificationResult['requiresManualReview'] as bool;
+        requiresManualReview =
+            verificationResult['requiresManualReview'] as bool;
 
         if (extractedCnic != null && await cnicExists(extractedCnic)) {
           showError('This CNIC is already registered with a complete account.');
           await FirebaseAuth.instance.signOut();
           return;
+        }
+
+        if (cnicTrustScore > 0.56) {
+          autoApproved = true;
         }
 
         showSuccess(
@@ -1546,16 +1612,17 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'username': usernameController.text.trim(),
         'role': role,
         'createdAt': FieldValue.serverTimestamp(),
-        'verified': cnicTrustScore >= 0.60 && (role != 'driver' || licenseTrustScore >= 0.60),
+        'verified': autoApproved,
         'cnicTrustScore': cnicTrustScore,
         'licenseTrustScore': role == 'driver' ? licenseTrustScore : null,
         'requiresManualReview': requiresManualReview,
+        'awaitingVerification': requiresManualReview,
       };
 
       if (extractedCnic != null) {
         doc['cnicNumber'] = extractedCnic;
         doc['cnicBase64'] = cnicBase64!;
-        doc['verifiedCnic'] = true;
+        doc['verifiedCnic'] = autoApproved;
         doc['documentsUploaded'] = true;
         doc['uploadTimestamp'] = FieldValue.serverTimestamp();
       }
@@ -1567,9 +1634,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           'carModel': carModelController.text.trim(),
           'altContact': altDigits,
           'licenseBase64': licenseBase64!,
-          'verifiedLicense': true,
-          'awaitingVerification': requiresManualReview,
+          'verifiedLicense': autoApproved,
         });
+      }
+
+      if (autoApproved) {
+        doc['fcmToken'] = '';
+        // Add any other fields that indicate full approval
       }
 
       await FirebaseFirestore.instance
@@ -1581,8 +1652,8 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       final message = requiresManualReview
           ? 'Registration successful! Pending manual review.'
           : (role == 'driver'
-              ? 'Driver registration successful!'
-              : 'Registration successful!');
+                ? 'Driver registration successful!'
+                : 'Registration successful!');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1605,12 +1676,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       showError('Registration failed: $e');
 
       try {
-        if (primaryDigits != null && userCred != null && userCred.user != null) {
+        if (primaryDigits != null &&
+            userCred != null &&
+            userCred.user != null) {
           await FirebaseFirestore.instance
               .collection('users')
               .doc(userCred.user!.uid)
               .delete();
-          print('Cleaned up incomplete user document for phone: $primaryDigits');
+          print(
+            'Cleaned up incomplete user document for phone: $primaryDigits',
+          );
         }
       } catch (cleanupError) {
         print('Cleanup error: $cleanupError');
@@ -1668,10 +1743,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         } else if (result['valid']) {
           final cnicTrust = result['cnicTrustScore'] as double;
           final licenseTrust = result['licenseTrustScore'] as double;
-          if (cnicTrust >= 0.55 && (role != 'driver' || licenseTrust >= 0.55)) {
+          if (cnicTrust >= 0.56 && (role != 'driver' || licenseTrust >= 0.56)) {
             showSuccess('Documents verified!');
           } else {
-            showError('Document trust score below 55%. Please retake.');
+            showError('Document trust score below 56%. Please retake.');
           }
         } else {
           final messages = List<String>.from(result['messages']);
@@ -1846,299 +1921,317 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     );
   }
 
-	@override
-	Widget build(BuildContext context) {
-		return Theme(
-			data: ThemeData(
-				useMaterial3: true,
-				colorScheme: ColorScheme.fromSeed(
-					seedColor: Colors.blue,
-					brightness: Theme.of(context).brightness,
-				),
-				elevatedButtonTheme: ElevatedButtonThemeData(
-					style: ElevatedButton.styleFrom(
-						shape: RoundedRectangleBorder(
-							borderRadius: BorderRadius.circular(12),
-						),
-						padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-						minimumSize: const Size(double.infinity, 48),
-					),
-				),
-				inputDecorationTheme: InputDecorationTheme(
-					border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-					filled: true,
-					fillColor: Theme.of(context).colorScheme.surfaceContainer,
-				),
-			),
-			child: Scaffold(
-				appBar: AppBar(
-					title: const Text(
-						'Sign Up - FemDrive',
-						style: TextStyle(fontWeight: FontWeight.bold),
-					),
-					centerTitle: true,
-				),
-				body: Stack(
-					children: [
-						Padding(
-							padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-							child: Form(
-								key: _formKey,
-								child: SingleChildScrollView(
-									child: Column(
-										crossAxisAlignment: CrossAxisAlignment.start,
-										children: [
-											const Text(
-												'Create your account',
-												style: TextStyle(
-													fontSize: 24,
-													fontWeight: FontWeight.bold,
-												),
-											).animate().fadeIn(duration: 400.ms),
-											const SizedBox(height: 8),
-											Text(
-												'Fill in the details to sign up.',
-												style: TextStyle(
-													fontSize: 16,
-													color: Theme.of(context).colorScheme.onSurfaceVariant,
-												),
-											).animate().fadeIn(duration: 400.ms, delay: 100.ms),
-											const SizedBox(height: 24),
-											
-											// UPDATED: Username field with real-time validation
-											TextFormField(
-												controller: usernameController,
-												enabled: !isSubmitting,
-												decoration: InputDecoration(
-													labelText: 'Username (Your Real Name)',
-													helperText: 'Enter your full name as it appears on your ID',
-													prefixIcon: const Icon(Icons.person),
-													suffixIcon: _usernameError != null
-														? Icon(Icons.error, color: Theme.of(context).colorScheme.error)
-														: null,
-													errorText: _usernameError,
-												),
-												onChanged: _validateUsernameDebounced,
-												validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-											).animate().slideX(begin: -0.1, end: 0, duration: 400.ms),
-											
-											const SizedBox(height: 16),
-											
-											// UPDATED: Phone field with real-time validation
-											TextFormField(
-												controller: phoneController,
-												enabled: !isSubmitting,
-												decoration: InputDecoration(
-													labelText: 'Phone (e.g. 0300-1234567)',
-													prefixIcon: const Icon(Icons.phone),
-													suffixIcon: _phoneError != null
-														? Icon(Icons.error, color: Theme.of(context).colorScheme.error)
-														: null,
-													errorText: _phoneError,
-												),
-												keyboardType: TextInputType.phone,
-												onChanged: _validatePhoneDebounced,
-												validator: (v) {
-													if (v == null || v.isEmpty) return 'Required';
-													try {
-														formatPhoneNumber(v);
-														return null;
-													} catch (e) {
-														return e.toString().replaceAll('Exception: ', '');
-													}
-												},
-											).animate().slideX(begin: 0.1, end: 0, duration: 400.ms),
-											
-											if (isOtpSent) ...[
-												const SizedBox(height: 16),
-												_buildOtpFields(),
-												const SizedBox(height: 16),
-												Row(
-													mainAxisAlignment: MainAxisAlignment.spaceBetween,
-													children: [
-														Text(
-															canResend
-																? 'Resend OTP'
-																: 'Resend in $resendSeconds seconds',
-															style: TextStyle(
-																color: canResend
-																	? Theme.of(context).colorScheme.primary
-																	: Theme.of(context).colorScheme.onSurfaceVariant,
-															),
-														),
-														TextButton(
-															onPressed: (!isSubmitting && canResend)
-																? sendOtpEnhanced  // CHANGED from sendOtp
-																: null,
-															child: const Text('Resend OTP'),
-														),
-													],
-												).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-											],
-											
-											const SizedBox(height: 16),
-											DropdownButtonFormField<String>(
-												initialValue: role,
-												items: ['rider', 'driver']
-													.map(
-														(r) => DropdownMenuItem(
-															value: r,
-															child: Text(r.toUpperCase()),
-														),
-													)
-													.toList(),
-												decoration: const InputDecoration(
-													labelText: 'Register as',
-													prefixIcon: Icon(Icons.person_pin),
-												),
-												onChanged: isSubmitting
-													? null
-													: (v) => setState(() => role = v!),
-											).animate().slideX(
-												begin: -0.1,
-												end: 0,
-												duration: 400.ms,
-												delay: 100.ms,
-											),
-											
-											if (role == 'rider') ...[
-												const SizedBox(height: 16),
-												_buildImageButton(false),
-												if (cnicTrustScore > 0) ...[
-													const SizedBox(height: 8),
-													_buildTrustScoreIndicator(),
-												],
-											],
-											
-											if (role == 'driver') ...[
-												const SizedBox(height: 16),
-												DropdownButtonFormField<String>(
-													initialValue: selectedCarType,
-													decoration: const InputDecoration(
-														labelText: 'Car Type',
-														prefixIcon: Icon(Icons.directions_car),
-													),
-													items: carTypeList
-														.map(
-															(t) => DropdownMenuItem(value: t, child: Text(t)),
-														)
-														.toList(),
-													onChanged: isSubmitting
-														? null
-														: (v) => setState(() => selectedCarType = v!),
-												).animate().slideX(
-													begin: 0.1,
-													end: 0,
-													duration: 400.ms,
-													delay: 200.ms,
-												),
-												
-												const SizedBox(height: 16),
-												TextFormField(
-													controller: carModelController,
-													enabled: !isSubmitting,
-													decoration: const InputDecoration(
-														labelText: 'Car Model',
-														prefixIcon: Icon(Icons.car_rental),
-													),
-													validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-												).animate().slideX(
-													begin: -0.1,
-													end: 0,
-													duration: 400.ms,
-													delay: 300.ms,
-												),
-												
-												const SizedBox(height: 16),
-												
-												// UPDATED: Alternate phone with real-time validation
-												TextFormField(
-													controller: altContactController,
-													enabled: !isSubmitting,
-													decoration: InputDecoration(
-														labelText: 'Alternate Number',
-														prefixIcon: const Icon(Icons.phone),
-														suffixIcon: _altPhoneError != null
-															? Icon(Icons.error, color: Theme.of(context).colorScheme.error)
-															: null,
-														errorText: _altPhoneError,
-													),
-													keyboardType: TextInputType.phone,
-													onChanged: _validateAltPhoneDebounced,
-													validator: (v) {
-														if (v == null || v.isEmpty) return 'Required';
-														try {
-															formatPhoneNumber(v);
-															return null;
-														} catch (e) {
-															return e.toString().replaceAll('Exception: ', '');
-														}
-													},
-												).animate().slideX(
-													begin: 0.1,
-													end: 0,
-													duration: 400.ms,
-													delay: 400.ms,
-												),
-												
-												const SizedBox(height: 16),
-												_buildImageButton(true),
-												const SizedBox(height: 16),
-												_buildImageButton(false),
-												if (cnicTrustScore > 0 || licenseTrustScore > 0) ...[
-													const SizedBox(height: 8),
-													_buildTrustScoreIndicator(),
-												],
-											],
-											
-											const SizedBox(height: 24),
-											ElevatedButton(
-												onPressed: isSubmitting
-													? null
-													: (isOtpSent
-															? () => confirmOtp()
-															: () => sendOtpEnhanced()),  // CHANGED from sendOtp
-												child: AnimatedSwitcher(
-													duration: 250.ms,
-													transitionBuilder: (child, anim) =>
-														FadeTransition(opacity: anim, child: child),
-													child: (isSubmitting || isOtpSent)
-														? _LoadingCar(
-															key: ValueKey(
-																isSubmitting ? 'sending' : 'awaiting_otp',
-															),
-															label: isSubmitting
-																? (isOtpSent
-																		? 'Verifying & Registering...'
-																		: 'Sending OTP...')
-																: 'Enter OTP to register',
-														)
-														: const Text('Send OTP', key: ValueKey('idle')),
-												),
-											).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
-										],
-									),
-								),
-							),
-						),
-						if (isSubmitting)
-							Positioned(
-								top: 0,
-								left: 0,
-								right: 0,
-								child: LinearProgressIndicator(
-									minHeight: 4,
-									backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
-									valueColor: AlwaysStoppedAnimation<Color>(
-										Theme.of(context).colorScheme.primary,
-									),
-								),
-							).animate().fadeIn(duration: 300.ms),
-					],
-				),
-			),
-		);
-	}
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Theme.of(context).brightness,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Theme.of(context).colorScheme.surfaceContainer,
+        ),
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Sign Up - FemDrive',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          centerTitle: true,
+        ),
+        body: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: Form(
+                key: _formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Create your account',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ).animate().fadeIn(duration: 400.ms),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Fill in the details to sign up.',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ).animate().fadeIn(duration: 400.ms, delay: 100.ms),
+                      const SizedBox(height: 24),
+
+                      // UPDATED: Username field with real-time validation
+                      TextFormField(
+                        controller: usernameController,
+                        enabled: !isSubmitting,
+                        decoration: InputDecoration(
+                          labelText: 'Username (Your Real Name)',
+                          helperText:
+                              'Enter your full name as it appears on your ID',
+                          prefixIcon: const Icon(Icons.person),
+                          suffixIcon: _usernameError != null
+                              ? Icon(
+                                  Icons.error,
+                                  color: Theme.of(context).colorScheme.error,
+                                )
+                              : null,
+                          errorText: _usernameError,
+                        ),
+                        onChanged: _validateUsernameDebounced,
+                        validator: (v) =>
+                            v == null || v.isEmpty ? 'Required' : null,
+                      ).animate().slideX(begin: -0.1, end: 0, duration: 400.ms),
+
+                      const SizedBox(height: 16),
+
+                      // UPDATED: Phone field with real-time validation
+                      TextFormField(
+                        controller: phoneController,
+                        enabled: !isSubmitting,
+                        decoration: InputDecoration(
+                          labelText: 'Phone (e.g. 0300-1234567)',
+                          prefixIcon: const Icon(Icons.phone),
+                          suffixIcon: _phoneError != null
+                              ? Icon(
+                                  Icons.error,
+                                  color: Theme.of(context).colorScheme.error,
+                                )
+                              : null,
+                          errorText: _phoneError,
+                        ),
+                        keyboardType: TextInputType.phone,
+                        onChanged: _validatePhoneDebounced,
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Required';
+                          try {
+                            formatPhoneNumber(v);
+                            return null;
+                          } catch (e) {
+                            return e.toString().replaceAll('Exception: ', '');
+                          }
+                        },
+                      ).animate().slideX(begin: 0.1, end: 0, duration: 400.ms),
+
+                      if (isOtpSent) ...[
+                        const SizedBox(height: 16),
+                        _buildOtpFields(),
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              canResend
+                                  ? 'Resend OTP'
+                                  : 'Resend in $resendSeconds seconds',
+                              style: TextStyle(
+                                color: canResend
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: (!isSubmitting && canResend)
+                                  ? sendOtpEnhanced // CHANGED from sendOtp
+                                  : null,
+                              child: const Text('Resend OTP'),
+                            ),
+                          ],
+                        ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+                      ],
+
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        initialValue: role,
+                        items: ['rider', 'driver']
+                            .map(
+                              (r) => DropdownMenuItem(
+                                value: r,
+                                child: Text(r.toUpperCase()),
+                              ),
+                            )
+                            .toList(),
+                        decoration: const InputDecoration(
+                          labelText: 'Register as',
+                          prefixIcon: Icon(Icons.person_pin),
+                        ),
+                        onChanged: isSubmitting
+                            ? null
+                            : (v) => setState(() => role = v!),
+                      ).animate().slideX(
+                        begin: -0.1,
+                        end: 0,
+                        duration: 400.ms,
+                        delay: 100.ms,
+                      ),
+
+                      if (role == 'rider') ...[
+                        const SizedBox(height: 16),
+                        _buildImageButton(false),
+                        if (cnicTrustScore > 0) ...[
+                          const SizedBox(height: 8),
+                          _buildTrustScoreIndicator(),
+                        ],
+                      ],
+
+                      if (role == 'driver') ...[
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedCarType,
+                          decoration: const InputDecoration(
+                            labelText: 'Car Type',
+                            prefixIcon: Icon(Icons.directions_car),
+                          ),
+                          items: carTypeList
+                              .map(
+                                (t) =>
+                                    DropdownMenuItem(value: t, child: Text(t)),
+                              )
+                              .toList(),
+                          onChanged: isSubmitting
+                              ? null
+                              : (v) => setState(() => selectedCarType = v!),
+                        ).animate().slideX(
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 200.ms,
+                        ),
+
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: carModelController,
+                          enabled: !isSubmitting,
+                          decoration: const InputDecoration(
+                            labelText: 'Car Model',
+                            prefixIcon: Icon(Icons.car_rental),
+                          ),
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Required' : null,
+                        ).animate().slideX(
+                          begin: -0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 300.ms,
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // UPDATED: Alternate phone with real-time validation
+                        TextFormField(
+                          controller: altContactController,
+                          enabled: !isSubmitting,
+                          decoration: InputDecoration(
+                            labelText: 'Alternate Number',
+                            prefixIcon: const Icon(Icons.phone),
+                            suffixIcon: _altPhoneError != null
+                                ? Icon(
+                                    Icons.error,
+                                    color: Theme.of(context).colorScheme.error,
+                                  )
+                                : null,
+                            errorText: _altPhoneError,
+                          ),
+                          keyboardType: TextInputType.phone,
+                          onChanged: _validateAltPhoneDebounced,
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'Required';
+                            try {
+                              formatPhoneNumber(v);
+                              return null;
+                            } catch (e) {
+                              return e.toString().replaceAll('Exception: ', '');
+                            }
+                          },
+                        ).animate().slideX(
+                          begin: 0.1,
+                          end: 0,
+                          duration: 400.ms,
+                          delay: 400.ms,
+                        ),
+
+                        const SizedBox(height: 16),
+                        _buildImageButton(true),
+                        const SizedBox(height: 16),
+                        _buildImageButton(false),
+                        if (cnicTrustScore > 0 || licenseTrustScore > 0) ...[
+                          const SizedBox(height: 8),
+                          _buildTrustScoreIndicator(),
+                        ],
+                      ],
+
+                      const SizedBox(height: 24),
+                      ElevatedButton(
+                        onPressed: isSubmitting
+                            ? null
+                            : (isOtpSent
+                                  ? () => confirmOtp()
+                                  : () =>
+                                        sendOtpEnhanced()), // CHANGED from sendOtp
+                        child: AnimatedSwitcher(
+                          duration: 250.ms,
+                          transitionBuilder: (child, anim) =>
+                              FadeTransition(opacity: anim, child: child),
+                          child: (isSubmitting || isOtpSent)
+                              ? _LoadingCar(
+                                  key: ValueKey(
+                                    isSubmitting ? 'sending' : 'awaiting_otp',
+                                  ),
+                                  label: isSubmitting
+                                      ? (isOtpSent
+                                            ? 'Verifying & Registering...'
+                                            : 'Sending OTP...')
+                                      : 'Enter OTP to register',
+                                )
+                              : const Text('Send OTP', key: ValueKey('idle')),
+                        ),
+                      ).animate().slideY(begin: 0.2, end: 0, duration: 400.ms),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (isSubmitting)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(
+                  minHeight: 4,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainer,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ).animate().fadeIn(duration: 300.ms),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildOtpFields() {
     return OtpInputField(
@@ -2170,24 +2263,27 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Widget _buildDocumentTrustIndicator(
-      String document, double trustScore, bool isValid) {
+    String document,
+    double trustScore,
+    bool isValid,
+  ) {
     final color = trustScore >= 0.7
         ? Colors.green
-        : trustScore >= 0.55
-            ? Colors.orange
-            : Colors.red;
+        : trustScore >= 0.56
+        ? Colors.orange
+        : Colors.red;
 
     final icon = trustScore >= 0.7
         ? Icons.verified_user
-        : trustScore >= 0.55
-            ? Icons.warning
-            : Icons.error;
+        : trustScore >= 0.56
+        ? Icons.warning
+        : Icons.error;
 
     final message = trustScore >= 0.7
         ? '$document verified with high confidence'
-        : trustScore >= 0.55
-            ? '$document verified - may require manual review'
-            : '$document - low confidence, retake required';
+        : trustScore >= 0.56
+        ? '$document verified - may require manual review'
+        : '$document - low confidence, retake required';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -2251,11 +2347,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                 : Theme.of(context).colorScheme.onSecondary,
           ),
         ).animate().slideX(
-              begin: isLicense ? 0.1 : -0.1,
-              end: 0,
-              duration: 400.ms,
-              delay: isLicense ? 300.ms : 200.ms,
-            ),
+          begin: isLicense ? 0.1 : -0.1,
+          end: 0,
+          duration: 400.ms,
+          delay: isLicense ? 300.ms : 200.ms,
+        ),
         if (image != null) ...[
           const SizedBox(height: 8),
           ClipRRect(
@@ -2319,9 +2415,9 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
       _cameras = await availableCameras();
       if (_cameras == null || _cameras!.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No cameras available')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
           Navigator.pop(context);
         }
         return;
@@ -2339,9 +2435,9 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Camera error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
         Navigator.pop(context);
       }
     }
@@ -2365,9 +2461,9 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error capturing photo: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error capturing photo: $e')));
       }
     } finally {
       if (mounted) {
@@ -2379,9 +2475,7 @@ class _FullScreenCameraState extends State<FullScreenCamera> {
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized || _controller == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
@@ -2458,9 +2552,9 @@ class _LivenessCameraState extends State<LivenessCamera> {
       _cameras = await availableCameras();
       if (_cameras == null || _cameras!.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No cameras available')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
           Navigator.pop(context);
         }
         return;
@@ -2479,9 +2573,9 @@ class _LivenessCameraState extends State<LivenessCamera> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Camera error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
         Navigator.pop(context);
       }
     }
@@ -2504,9 +2598,9 @@ class _LivenessCameraState extends State<LivenessCamera> {
         setState(() => _currentStep++);
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error capturing frame: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error capturing frame: $e')));
         }
       } finally {
         if (mounted) {
@@ -2526,9 +2620,7 @@ class _LivenessCameraState extends State<LivenessCamera> {
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized || _controller == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
