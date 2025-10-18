@@ -1,4 +1,4 @@
-// rider_services.dart
+//rider_services.dart
 // ignore_for_file: unused_import
 
 import 'dart:async';
@@ -30,6 +30,7 @@ final String googleApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
 final driverSearchCenterProvider = StateProvider<LatLng?>((ref) => null);
 
 // Nearby drivers stream reacts to the center above
+// nearby drivers (FAST RTDB) centered on driverSearchCenterProvider
 final nearbyDriversProvider =
     StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
       final center = ref.watch(driverSearchCenterProvider);
@@ -43,6 +44,8 @@ class RadarSearchingOverlay extends StatefulWidget {
   final LatLng pickup;
   final String message;
   final VoidCallback onCancel;
+
+  // NEW: to animate the map from here
   final GoogleMapController? mapController;
 
   const RadarSearchingOverlay({
@@ -60,54 +63,69 @@ class RadarSearchingOverlay extends StatefulWidget {
 class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctl;
+
+  // NEW: zoom-out timer state
   Timer? _zoomTimer;
-  final List<double> _zoomSteps = [18.0, 17.0, 16.0, 15.0, 14.0, 13.5, 13.0, 12.7];
+  // Approx zooms for ~50m, 100m, 200m, 400m, 800m, 1.6km, 3.2km, 5km-ish
+  final List<double> _zoomSteps = [
+    18.0,
+    17.0,
+    16.0,
+    15.0,
+    14.0,
+    13.5,
+    13.0,
+    12.7,
+  ];
   int _zoomIndex = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _ctl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
+@override
+void initState() {
+  super.initState();
+  _ctl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 3),
+  )..repeat();
 
-    if (widget.mapController != null) {
-      Future.delayed(const Duration(milliseconds: 500), () {
+  if (widget.mapController != null) {
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted || widget.mapController == null) return;
+      _animateToStep(0);
+      _zoomTimer = Timer.periodic(const Duration(seconds: 3), (_) {
         if (!mounted || widget.mapController == null) return;
-        _animateToStep(0);
-        _zoomTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-          if (!mounted || widget.mapController == null) return;
-          _zoomIndex = (_zoomIndex + 1).clamp(0, _zoomSteps.length - 1);
-          _animateToStep(_zoomIndex);
-          if (_zoomIndex >= _zoomSteps.length - 1) {
-            _zoomTimer?.cancel();
-          }
-        });
+        _zoomIndex = (_zoomIndex + 1).clamp(0, _zoomSteps.length - 1);
+        _animateToStep(_zoomIndex);
+        if (_zoomIndex >= _zoomSteps.length - 1) {
+          _zoomTimer?.cancel();
+          _zoomTimer = null;
+        }
       });
+    });
+  }
+}
+
+Future<void> _animateToStep(int idx) async {
+  try {
+    final startZoom = await widget.mapController!.getZoomLevel();
+    final targetZoom = _zoomSteps[idx];
+    const steps = 20;
+    const durationMs = 1000;
+    // ignore: unused_local_variable
+    final stepSize = (targetZoom - startZoom) / steps;
+
+    for (var i = 1; i <= steps; i++) {
+      final t = i / steps;
+      final easedT = Curves.easeInOut.transform(t); // Apply easing
+      final newZoom = startZoom + (targetZoom - startZoom) * easedT;
+      await widget.mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(widget.pickup, newZoom),
+      );
+      await Future.delayed(Duration(milliseconds: durationMs ~/ steps));
     }
+  } catch (_) {
+    /* ignore animate errors */
   }
-
-  Future<void> _animateToStep(int idx) async {
-    try {
-      final startZoom = await widget.mapController!.getZoomLevel();
-      final targetZoom = _zoomSteps[idx];
-      const steps = 20;
-      const durationMs = 1000;
-
-      for (var i = 1; i <= steps; i++) {
-        if (!mounted) return;
-        final t = i / steps;
-        final easedT = Curves.easeInOut.transform(t);
-        final newZoom = startZoom + (targetZoom - startZoom) * easedT;
-        await widget.mapController!.animateCamera(
-          CameraUpdate.newLatLngZoom(widget.pickup, newZoom),
-        );
-        await Future.delayed(Duration(milliseconds: durationMs ~/ steps));
-      }
-    } catch (_) {}
-  }
-
+}
   @override
   void dispose() {
     _ctl.dispose();
@@ -117,93 +135,60 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    
-    return Container(
-      color: Colors.black.withValues(alpha: 0.3),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Spacer(),
-          
-          // Radar animation
-          AnimatedBuilder(
-            animation: _ctl,
-            builder: (_, _) => CustomPaint(
-              painter: _RadarPainter(progress: _ctl.value),
-              size: const Size(240, 240),
-            ),
-          ),
-          
-          const SizedBox(height: 40),
-          
-          // Message
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface.withValues(alpha: 0.95),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                Text(
-                  widget.message,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'This may take a moment...',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-          
-          const Spacer(),
-          
-          // Cancel button
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
-            child: FilledButton.tonal(
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(double.infinity, 56),
-                backgroundColor: theme.colorScheme.errorContainer,
-                foregroundColor: theme.colorScheme.onErrorContainer,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+    // We DO want to block map gestures while searching, so keep IgnorePointer(false)?
+    // To freeze the map, we actually want to absorb pointer events:
+    return IgnorePointer(
+      ignoring: false, // allow tapping Cancel button
+      child: Container(
+        color: Colors.black.withAlpha((0.15 * 255).round()),
+        child: Stack(
+          children: [
+            // Pulses (centered on the pickup)
+            Center(
+              child: AnimatedBuilder(
+                animation: _ctl,
+                builder: (_, _) {
+                  return CustomPaint(
+                    painter: _RadarPainter(progress: _ctl.value),
+                    size: const Size(220, 220),
+                  );
+                },
               ),
-              onPressed: widget.onCancel,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.close_rounded),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Cancel Search',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+            ),
+
+            // Message
+            Positioned(
+              bottom: 140,
+              left: 24,
+              right: 24,
+              child: Column(
+                children: const [
+                  // keep styles as you had
                 ],
               ),
             ),
-          ),
-        ],
+
+            // Cancel
+            Positioned(
+              bottom: 60,
+              left: 24,
+              right: 24,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.close),
+                label: const Text('Cancel ride'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -217,43 +202,23 @@ class _RadarPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
     final maxR = math.min(size.width, size.height) / 2;
-    
-    // Background circles
-    final bgPaint = Paint()
+    final bg = Paint()..color = Colors.white.withAlpha((0.15 * 255).round());
+    final ring = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = Colors.blue.withValues(alpha: 0.2);
-    
-    for (var i = 1; i <= 3; i++) {
-      canvas.drawCircle(center, (maxR / 3) * i, bgPaint);
-    }
-    
-    // Center dot with glow
-    final glowPaint = Paint()
-      ..color = Colors.blue.withValues(alpha: 0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-    canvas.drawCircle(center, 12, glowPaint);
-    
-    final centerDot = Paint()..color = Colors.blue;
-    canvas.drawCircle(center, 8, centerDot);
+      ..strokeWidth = 3
+      ..color = Colors.white.withAlpha((0.7 * 255).round());
 
-    // Animated rings
+    // base dot
+    canvas.drawCircle(center, 6, Paint()..color = Colors.white);
+
+    // 3 expanding rings
     for (var i = 0; i < 3; i++) {
       final t = (progress + i / 3) % 1.0;
-      final r = 16 + t * (maxR - 16);
+      final r = 12 + t * (maxR - 12);
       final alpha = (1 - t).clamp(0.0, 1.0);
-      
-      final ringPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..color = Colors.blue.withValues(alpha: 0.6 * alpha);
-      
-      canvas.drawCircle(center, r, ringPaint);
-      
-      final fillPaint = Paint()
-        ..color = Colors.blue.withValues(alpha: 0.1 * alpha)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, r, fillPaint);
+      ring.color = Colors.white.withAlpha(((0.35 * alpha) * 255).round());
+      canvas.drawCircle(center, r, ring);
+      canvas.drawCircle(center, r, bg);
     }
   }
 
@@ -261,12 +226,6 @@ class _RadarPainter extends CustomPainter {
   bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
       oldDelegate.progress != progress;
 }
-
-
-/* --------------------------------------------------------------
-   The rest of the file (RideService, MapService, chat, etc.)
-   remains exactly as you provided – no changes were needed there.
-   -------------------------------------------------------------- */
 
 class RideService {
   final _firestore = FirebaseFirestore.instance;
@@ -322,7 +281,7 @@ class RideService {
             onTimeout: () => <Map<String, dynamic>>[],
           );
 
-      // Filter drivers by the selected rideType
+      // 🔒 Filter drivers by the selected rideType
       String norm(String s) => s.toLowerCase().trim();
       final wantedType = norm((rideData['rideType'] ?? '').toString());
       final filteredDrivers = drivers
@@ -359,7 +318,7 @@ class RideService {
           await _rtdb.update(updates);
         }
         _logger.i(
-          '[RideService] Notified $count "$wantedType" drivers for ride $rideId',
+          '[RideService] ✅ Notified $count "$wantedType" drivers for ride $rideId',
         );
       }
 
@@ -372,11 +331,13 @@ class RideService {
 
   Future<void> expireCounterFare(String rideId) async {
     try {
+      // Firestore: clear the counter and stamp expiry
       await _firestore.collection('rides').doc(rideId).update({
         'counterFare': FieldValue.delete(),
         'counterExpiredAt': FieldValue.serverTimestamp(),
       });
 
+      // RTDB live mirror: clear the counter & stamp expiry
       await _rtdb.child('ridesLive/$rideId').update({
         'counterFare': null,
         'counterExpiredAt': ServerValue.timestamp,
@@ -393,23 +354,28 @@ class RideService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
+      // 1) Firestore: mark cancelled (keep existing timestamps)
       await _firestore.collection('rides').doc(rideId).update({
         'status': 'cancelled',
         'cancelledAt': FieldValue.serverTimestamp(),
+        // Optionally clear driver fields if they were set while rider cancelled early
         'driverId': FieldValue.delete(),
         'driverName': FieldValue.delete(),
       });
 
+      // 2) Rider's RTDB mirror (optional if you don't rely on it anymore)
       try {
         await _rtdb.child('rides/$currentUid/$rideId').remove();
       } catch (_) {}
 
+      // 3) Live broadcast: ridesLive
       await _rtdb.child('ridesLive/$rideId').update({
         'status': 'cancelled',
         'cancelledAt': ServerValue.timestamp,
         'updatedAt': ServerValue.timestamp,
       });
 
+      // 4) 🔥 Fan-out delete this ride from ALL driver_notifications
       final notifsSnap = await _rtdb.child('driver_notifications').get();
       final updates = <String, Object?>{};
       if (notifsSnap.exists && notifsSnap.value is Map) {
@@ -424,14 +390,27 @@ class RideService {
         await _rtdb.update(updates);
       }
 
-      await _rtdb.child('rides_pending/$rideId').remove();
-      await _rtdb.child('rideRequests/$rideId').remove();
+      // 5) (Optional) also clear your legacy broadcast queues if you still use them
+      //    This prevents lingering entries in aggregated queues.
+      await _rtdb
+          .child('rides_pending/$rideId')
+          .remove(); // AppPaths.ridesPendingA
+      await _rtdb
+          .child('rideRequests/$rideId')
+          .remove(); // AppPaths.ridesPendingB
     } catch (e) {
       Logger().e('Failed to cancel ride: $e');
       throw Exception('Unable to cancel ride: $e');
     }
   }
 
+  /// Rider accepts a driver's counter-fare.
+  /// - Locks fare
+  /// - Assigns the proposing driver
+  /// - Marks status=accepted
+  /// - Mirrors to RTDB live node
+  /// - Deletes other drivers' notifications for this ride (best-effort)
+  /// - Removes from pending queues (best-effort)
   Future<void> fanoutDeleteDriverNotificationsForRide(String rideId) async {
     final root = FirebaseDatabase.instance.ref();
 
@@ -452,7 +431,9 @@ class RideService {
         await root.update(updates);
       }
     } catch (e) {
-      // Best-effort cleanup
+      // Best-effort cleanup; don't fail the main flow on this.
+      // You can log it if you like.
+      // debugPrint('[fanoutDeleteDriverNotificationsForRide] $e');
     }
   }
 
@@ -463,6 +444,7 @@ class RideService {
 
     String? driverId;
 
+    // 1) Firestore: atomically accept the counter fare and lock the driver
     await fire.runTransaction((txn) async {
       final snap = await txn.get(rideRef);
       if (!snap.exists) throw Exception('Ride not found');
@@ -473,6 +455,7 @@ class RideService {
         throw Exception('Ride is no longer active');
       }
 
+      // ✅ tolerate both snake/camel, and fallback to live node mirrored by driver
       String proposedBy =
           (data['counterDriverId'] ?? data['counter_driver_id'] ?? '')
               .toString();
@@ -499,35 +482,38 @@ class RideService {
         AppFields.fare: counterFare,
         'counterFare': FieldValue.delete(),
         'counterDriverId': FieldValue.delete(),
-        'counter_driver_id': FieldValue.delete(),
+        'counter_driver_id': FieldValue.delete(), // ✅ clear both
         AppFields.status: RideStatus.accepted,
         AppFields.driverId: driverId,
         AppFields.acceptedAt: FieldValue.serverTimestamp(),
       });
     });
 
+    // 2) RTDB live mirror: also clear counter fields
     final now = ServerValue.timestamp;
     await rtdb.child('${AppPaths.ridesLive}/$rideId').update({
       AppFields.status: RideStatus.accepted,
       AppFields.fare: counterFare,
       AppFields.driverId: driverId,
-      'counterFare': null,
-      'counterDriverId': null,
+      'counterFare': null, // ✅ important
+      'counterDriverId': null, // ✅ important
       AppFields.acceptedAt: now,
       AppFields.updatedAt: now,
     });
 
+    // (Optional) also clear rider mirror if you rely on it in UI:
     try {
       final riderId = FirebaseAuth.instance.currentUser?.uid;
       if (riderId != null) {
         await rtdb.child('rides/$riderId/$rideId').update({
-          'counterFare': null,
+          'counterFare': null, // ✅ prevent re-pop
           'counterDriverId': null,
           'updatedAt': now,
         });
       }
     } catch (_) {}
 
+    // 3) Best-effort: remove from any legacy/pending queues
     try {
       await rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
     } catch (_) {}
@@ -535,6 +521,7 @@ class RideService {
       await rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
     } catch (_) {}
 
+    // 4) Fan-out delete: remove this ride's popup from ALL drivers
     try {
       final notifsSnap = await rtdb.child(AppPaths.driverNotifications).get();
       if (notifsSnap.exists && notifsSnap.value is Map) {
@@ -552,8 +539,11 @@ class RideService {
           await rtdb.update(updates);
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Best-effort cleanup; ignore if rules block cross-user read/write.
+    }
 
+    // 5) Optional: nudge the selected driver (toast/chime)
     if (driverId != null && driverId!.isNotEmpty) {
       try {
         await rtdb.child('${AppPaths.notifications}/$driverId').push().set({
