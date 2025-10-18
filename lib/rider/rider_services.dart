@@ -60,9 +60,7 @@ class RadarSearchingOverlay extends StatefulWidget {
 class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctl;
-  final _sheetController = DraggableScrollableController();
   Timer? _zoomTimer;
-  
   final List<double> _zoomSteps = [18.0, 17.0, 16.0, 15.0, 14.0, 13.5, 13.0, 12.7];
   int _zoomIndex = 0;
 
@@ -75,7 +73,7 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
     )..repeat();
 
     if (widget.mapController != null) {
-      Future.delayed(const Duration(seconds: 2), () {
+      Future.delayed(const Duration(milliseconds: 500), () {
         if (!mounted || widget.mapController == null) return;
         _animateToStep(0);
         _zoomTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -84,31 +82,10 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
           _animateToStep(_zoomIndex);
           if (_zoomIndex >= _zoomSteps.length - 1) {
             _zoomTimer?.cancel();
-            _zoomTimer = null;
           }
         });
       });
     }
-
-    // Snap sheet behavior
-    _sheetController.addListener(() {
-      if (!_sheetController.isAttached) return;
-      final size = _sheetController.size;
-      
-      if (size > 0.75) {
-        _sheetController.animateTo(
-          0.95,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-        );
-      } else if (size < 0.5) {
-        _sheetController.animateTo(
-          0.6,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-        );
-      }
-    });
   }
 
   Future<void> _animateToStep(int idx) async {
@@ -135,111 +112,99 @@ class _RadarSearchingOverlayState extends State<RadarSearchingOverlay>
   void dispose() {
     _ctl.dispose();
     _zoomTimer?.cancel();
-    _sheetController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      expand: false,
-      snap: true,
-      snapSizes: const [0.6, 0.95],
-      initialChildSize: 0.6,
-      minChildSize: 0.6,
-      maxChildSize: 0.95,
-      controller: _sheetController,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.95),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha:0.2),
-                blurRadius: 20,
-                offset: const Offset(0, -4),
-              ),
-            ],
+    final theme = Theme.of(context);
+    
+    return Container(
+      color: Colors.black.withValues(alpha: 0.3),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Spacer(),
+          
+          // Radar animation
+          AnimatedBuilder(
+            animation: _ctl,
+            builder: (_, _) => CustomPaint(
+              painter: _RadarPainter(progress: _ctl.value),
+              size: const Size(240, 240),
+            ),
           ),
-          child: Column(
-            children: [
-              // Handle bar
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha:0.4),
-                  borderRadius: BorderRadius.circular(2),
+          
+          const SizedBox(height: 40),
+          
+          // Message
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withValues(alpha: 0.95),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                Text(
+                  widget.message,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'This may take a moment...',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          
+          const Spacer(),
+          
+          // Cancel button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+            child: FilledButton.tonal(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(double.infinity, 56),
+                backgroundColor: theme.colorScheme.errorContainer,
+                foregroundColor: theme.colorScheme.onErrorContainer,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Radar animation
-                    AnimatedBuilder(
-                      animation: _ctl,
-                      builder: (_, _) => CustomPaint(
-                        painter: _RadarPainter(progress: _ctl.value),
-                        size: const Size(220, 220),
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    
-                    // Message
-                    Text(
-                      widget.message,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Searching nearby drivers...',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // Cancel button
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-                child: FilledButton.tonal(
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 56),
-                    backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                    foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+              onPressed: widget.onCancel,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.close_rounded),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Cancel Search',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  onPressed: widget.onCancel,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.close_rounded),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Cancel Search',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 }
@@ -257,28 +222,38 @@ class _RadarPainter extends CustomPainter {
     final bgPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
-      ..color = Colors.grey.withValues(alpha:0.2);
+      ..color = Colors.blue.withValues(alpha: 0.2);
     
     for (var i = 1; i <= 3; i++) {
       canvas.drawCircle(center, (maxR / 3) * i, bgPaint);
     }
     
-    // Center dot
+    // Center dot with glow
+    final glowPaint = Paint()
+      ..color = Colors.blue.withValues(alpha: 0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawCircle(center, 12, glowPaint);
+    
     final centerDot = Paint()..color = Colors.blue;
     canvas.drawCircle(center, 8, centerDot);
 
     // Animated rings
     for (var i = 0; i < 3; i++) {
       final t = (progress + i / 3) % 1.0;
-      final r = 12 + t * (maxR - 12);
+      final r = 16 + t * (maxR - 16);
       final alpha = (1 - t).clamp(0.0, 1.0);
       
       final ringPaint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3
-        ..color = Colors.blue.withValues(alpha: 0.5 * alpha);
+        ..color = Colors.blue.withValues(alpha: 0.6 * alpha);
       
       canvas.drawCircle(center, r, ringPaint);
+      
+      final fillPaint = Paint()
+        ..color = Colors.blue.withValues(alpha: 0.1 * alpha)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, r, fillPaint);
     }
   }
 
@@ -286,6 +261,8 @@ class _RadarPainter extends CustomPainter {
   bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
       oldDelegate.progress != progress;
 }
+
+
 /* --------------------------------------------------------------
    The rest of the file (RideService, MapService, chat, etc.)
    remains exactly as you provided – no changes were needed there.

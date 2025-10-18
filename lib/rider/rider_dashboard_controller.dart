@@ -77,16 +77,10 @@ class RiderDashboardController
     _driverInfoSub?.cancel();
     _driverInfoSub = null;
 
-    if (driverId == null || driverId.isEmpty) {  // ✅ FIXED
+    // ✅ FIXED: Check for empty string
+    if (driverId == null || driverId.isEmpty) {
       _logger.i('No driverId; clearing driver info');
       _driverInfo = null;
-      final currentRide = state.value;
-      if (currentRide != null) {
-        state = AsyncData({
-          ...currentRide,
-          'driverInfo': null,
-        });
-      }
       return;
     }
 
@@ -96,11 +90,12 @@ class RiderDashboardController
         .snapshots()
         .listen(
           (snap) {
-            if (snap.exists && snap.data() != null) {  // ✅ FIXED
+            // ✅ FIXED: Check data is not null
+            if (snap.exists && snap.data() != null) {
               _driverInfo = snap.data();
               _logger.i('Driver info updated for driverId: $driverId');
-              
-              // ✅ FORCE state update
+            
+              // ✅ FIXED: Force state update with current ride data
               final currentRide = state.value;
               if (currentRide != null) {
                 state = AsyncData({
@@ -117,11 +112,10 @@ class RiderDashboardController
           onError: (err, st) {
             _logger.e('Driver info stream error', error: err, stackTrace: st);
             _driverInfo = null;
-            // Don't set error state for driver info failures
+            // ✅ FIXED: Don't set error state for driver info
           },
         );
-  }
-
+    }
   void fetchActiveRide() {
     final riderId = uid;
     if (riderId == null) {
@@ -138,10 +132,18 @@ class RiderDashboardController
     _rideSub = _rideStreamFor(riderId).listen(
       (ride) {
         final driverId = ride?['driverId'] as String?;
-        _subscribeToDriverInfo(driverId);
+    
+        // ✅ FIXED: Only resubscribe if driverId changed
+        final currentDriverId = state.value?['driverId'] as String?;
+        if (driverId != currentDriverId) {
+          _subscribeToDriverInfo(driverId);
+        }
+    
+        // ✅ FIXED: Update state immediately
         state = AsyncData({
           ...?ride,
           'driverInfo': _driverInfo,
+          'driverId': driverId,
         });
       },
       onError: (err, st) {

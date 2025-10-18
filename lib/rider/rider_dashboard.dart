@@ -31,6 +31,8 @@ final locationPermissionProvider = FutureProvider<bool>((ref) async {
   final permission = await Permission.location.request();
   return permission == PermissionStatus.granted;
 });
+// Add after: final locationPermissionProvider = FutureProvider<bool>...
+final selectedRouteProvider = StateProvider<Map<String, dynamic>?>((ref) => null);
 
 final driverLocationProvider = StreamProvider.family<LatLng?, String>((
   ref,
@@ -460,16 +462,40 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     );
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     final ridesAsync = ref.watch(riderDashboardProvider);
+    // ✅ NEW: Listen for route selection and draw it
+    ref.listen<Map<String, dynamic>?>(selectedRouteProvider, (prev, next) {
+      if (next != null && mounted) {
+        final points = next['routePoints'] as List<LatLng>?;
+        if (points != null && points.isNotEmpty) {
+          setState(() {
+            _pickupLatLng = next['pickup'] as LatLng?;
+            _dropoffLatLng = next['dropoff'] as LatLng?;
+            _polylines.add(
+              Polyline(
+                polylineId: const PolylineId('preview_route'),
+                points: points,
+                color: const Color(0xFF1A57E8),
+                width: 6,
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
+                jointType: JointType.round,
+              ),
+            );
+          });
+        }
+      }
+    });
+
     final rideData = ridesAsync.value;
-    final assignedDriverId = (rideData?['driverId'] as String?);
-    final rideId = (rideData?['id'] as String?);
+    final assignedDriverId = rideData?['driverId'] as String?;
+    final rideId = rideData?['id'] as String?;
     final staticStatus = (rideData?['status'] ?? '').toString();
     final dash = ref.watch(riderDashboardProvider);
     final rideDataa = dash.asData?.value;
-    final statuss = (rideData?['status'] as String?) ?? '';
+    final statuss = rideData?['status'] as String? ?? '';
 
     if (_mapController != null && rideDataa != null && statuss == 'searching') {
       final pLat = (rideDataa['pickupLat'] as num?)?.toDouble();
@@ -565,13 +591,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         rideData != null &&
         (status == 'pending' || status == 'searching') &&
         safePickup != null;
-      if (showRadar && _mapController != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _mapController?.animateCamera(
-              CameraUpdate.newLatLngZoom(safePickup, 15),
-            );
-         }
+    if (showRadar && _mapController != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLngZoom(safePickup, 15),
+          );
+        }
       });
     }
     final rideType = (rideData?['rideType'] ?? '').toString();
@@ -806,6 +832,40 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   ],
                 ),
               ),
+            if (rideData != null)
+              Positioned(
+                top: 50,
+                left: 20,
+                right: 20,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha:0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Ride Status: $status',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Pickup: ${rideData['pickup_address'] ?? ''}'),
+                      Text('Destination: ${rideData['destination_address'] ?? ''}'),
+                      Text('Fare: Rs. ${rideData['fare']?.toString() ?? ''}'),
+                      if (rideData['otp']?.toString().isNotEmpty ?? false)
+                        Text('OTP: ${rideData['otp']?.toString() ?? ''}'),
+                    ],
+                  ),
+                ),
+              ),
             ridesAsync.when(
               data: (rideData) {
                 if (rideData == null || rideData.isEmpty) {
@@ -901,13 +961,29 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         child: RideStatusWidget(ride: ride),
                       ),
                     ),
-                    if (ride['driverId'] != null && driverInfo != null)
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: DriverDetailsWidget(driverInfo: driverInfo),
-                        ),
+                    if (driverId != null && driverId.isNotEmpty)
+                      Consumer(
+                        builder: (context, ref, _) {
+                          // ✅ Fetch driver info directly if not in rideData
+                          final info = driverInfo ??
+                            ref.watch(StreamProvider.autoDispose<Map<String, dynamic>?>((ref) {
+                              return FirebaseFirestore.instance
+                                  .collection('users')
+                                  .doc(driverId)
+                                  .snapshots()
+                                  .map((snap) => snap.data());
+                            })).value;
+
+                          if (info == null) return const SizedBox.shrink();
+
+                          return Align(
+                            alignment: Alignment.topRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8, right: 8),
+                              child: DriverDetailsWidget(driverInfo: info),
+                            ),
+                          );
+                        },
                       ),
                     if (status == 'accepted' ||
                         status == 'in_progress' ||
@@ -934,7 +1010,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       ),
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
-                        bottom: 56,
+                        bottom: 120,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.cancel),
@@ -943,49 +1019,41 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             backgroundColor: Theme.of(context).colorScheme.errorContainer,
                             foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
                           ),
-                          onPressed: () async {
-                            try {
-                              final id = (ride['id'] as String?);
-                              if (id == null || id.isEmpty) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Ride is not initialized yet'),
-                                    ),
-                                  );
-                                }
-                                return;
-                              }
-                              await ref
-                                  .read(riderDashboardProvider.notifier)
-                                  .cancelRide(id);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Ride cancelled'),
-                                  ),
-                                );
-                                showCancelledByRider(rideId: id);
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Failed to cancel: $e'),
-                                  ),
-                                );
-                              }
-                            }
-                          },
+                          onPressed: (ride['id'] == null || (ride['id'] as String).isEmpty)
+                              ? null
+                              : () async {
+                                  try {
+                                    final id = ride['id'] as String;
+                                    await ref
+                                        .read(riderDashboardProvider.notifier)
+                                        .cancelRide(id);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Ride cancelled'),
+                                        ),
+                                      );
+                                      showCancelledByRider(rideId: id);
+                                    }
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Failed to cancel: $e'),
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
                         ).animate().fadeIn(duration: 200.ms).slideX(
-                              begin: 0.5,
-                              end: 0,
-                              duration: 200.ms,
-                            ),
+                          begin: 0.5,
+                          end: 0,
+                          duration: 200.ms,
+                        ),
                       ),
                     if (_chatVisible(status) && rideId != null && rideId.isNotEmpty)
                       Positioned(
-                        bottom: 56,  // ✅ FIXED - Above cancel button
+                        bottom: 56, // ✅ FIXED - Above cancel button
                         left: 16,
                         child: FloatingActionButton.extended(
                           heroTag: 'rider_chat_fab',
@@ -1062,7 +1130,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       ),
     );
   }
-
   Drawer _buildDrawer(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Drawer(
@@ -1277,13 +1344,21 @@ class _RideFormState extends ConsumerState<RideForm> {
         _distanceKm = (result['distanceKm'] as num?)?.toDouble();
       });
 
-      // ✅ CORRECT FIX: Call the parent's callback to draw the route
+      // ✅ NEW: Store route in provider when both locations selected
+      if (sendMarkers && routePoints.isNotEmpty) {
+        ref.read(selectedRouteProvider.notifier).state = {
+          'pickup': _pickupLatLng,
+          'dropoff': _dropoffLatLng,
+          'routePoints': routePoints,
+        };
+      }
+
       widget.onFareUpdated?.call(
         _fare ?? 0,
         _eta ?? 0,
         _distanceKm ?? 0,
         routePoints,
-        pickup: sendMarkers ? _pickupLatLng : null,  // ✅ This triggers route drawing
+        pickup: sendMarkers ? _pickupLatLng : null,
         dropoff: sendMarkers ? _dropoffLatLng : null,
       );
 
