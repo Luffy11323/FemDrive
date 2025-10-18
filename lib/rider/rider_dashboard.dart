@@ -1,4 +1,4 @@
-// rider_dashboard.dart
+// rider_dashboard.dart (updated)
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
@@ -110,16 +110,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   bool _chatVisible(String? raw) =>
       activeStatuses.contains((raw ?? '').trim().toLowerCase());
   bool _hasActive(String? raw) {
-    final s = (raw ?? '').trim();
-    final arrived = s == 'driverArrived' || s == 'driver_arrived';
+    final s = (raw ?? '').trim().toLowerCase(); // ✅ ADD .toLowerCase()
     return const {
           'pending',
           'searching',
           'accepted',
           'in_progress',
-          'onTrip',
-        }.contains(s) ||
-        arrived;
+          'ontrip',        // ✅ lowercase
+          'driver_arrived',
+          'driverarrived',
+        }.contains(s);
   }
 
   BitmapDescriptor? _bikeIcon;
@@ -465,30 +465,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 @override
   Widget build(BuildContext context) {
     final ridesAsync = ref.watch(riderDashboardProvider);
-    // ✅ NEW: Listen for route selection and draw it
-    ref.listen<Map<String, dynamic>?>(selectedRouteProvider, (prev, next) {
-      if (next != null && mounted) {
-        final points = next['routePoints'] as List<LatLng>?;
-        if (points != null && points.isNotEmpty) {
-          setState(() {
-            _pickupLatLng = next['pickup'] as LatLng?;
-            _dropoffLatLng = next['dropoff'] as LatLng?;
-            _polylines.add(
-              Polyline(
-                polylineId: const PolylineId('preview_route'),
-                points: points,
-                color: const Color(0xFF1A57E8),
-                width: 6,
-                startCap: Cap.roundCap,
-                endCap: Cap.roundCap,
-                jointType: JointType.round,
-              ),
-            );
-          });
-        }
-      }
-    });
-
     final rideData = ridesAsync.value;
     final assignedDriverId = rideData?['driverId'] as String?;
     final rideId = rideData?['id'] as String?;
@@ -571,11 +547,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
 
     final hasActive = _hasActive(status);
-    final isActiveOrDone = activeStatuses.contains(status.toLowerCase()) ||
-        status == 'completed' ||
-        status == 'cancelled';
-
-    if (!hasActive && isActiveOrDone && _polylines.isNotEmpty) {
+    if ((status == 'completed' || status == 'cancelled') && _polylines.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _polylines = {});
       });
