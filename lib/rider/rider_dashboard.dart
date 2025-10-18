@@ -891,7 +891,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
-                        bottom: 110,
+                        bottom: 106,
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
@@ -953,7 +953,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       ),
                     if (_chatVisible(status))
                       Positioned(
-                        bottom: 222,
+                        bottom: 162,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.chat_bubble),
