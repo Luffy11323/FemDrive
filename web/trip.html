@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Trip Tracking - FemDrive</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { height: 100vh; width: 100vw; }
+    #error { 
+      position: absolute; 
+      top: 10px; 
+      left: 10px; 
+      background: white; 
+      padding: 10px; 
+      border-radius: 5px; 
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="error"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Firebase configuration (replace with your Firebase project credentials)
+    const firebaseConfig = {
+      apiKey: "AIzaSyBEbRIB7WEQRE84HxH0CH_V8WOoHUnIPd8",
+      authDomain: "ridesharefyp-0022.firebaseapp.com",
+      databaseURL: "https://ridesharefyp-0022-default-rtdb.firebaseio.com",
+      projectId: "ridesharefyp-0022",
+      storageBucket: "ridesharefyp-0022.firebasestorage.app",
+      messagingSenderId: "278929890705",
+      appId: "1:278929890705:web:9066d1a6a34159ac3ece30"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Get shareId from URL (e.g., /trip/abc123)
+    const shareId = window.location.pathname.split('/').pop();
+    if (!shareId) {
+      document.getElementById('error').innerText = 'Invalid trip ID';
+      document.getElementById('error').style.display = 'block';
+      throw new Error('No shareId found in URL');
+    }
+
+    // Initialize Leaflet map
+    const map = L.map('map').setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    let marker = null;
+
+    // Listen for location updates
+    const ref = db.ref(`trip_shares/${shareId}`);
+    ref.on('value', (snapshot) => {
+      const data = snapshot.val();
+      const errorDiv = document.getElementById('error');
+      if (!data || !data.lat || !data.lng) {
+        errorDiv.innerText = 'No location data available';
+        errorDiv.style.display = 'block';
+        return;
+      }
+
+      // Check if data is fresh (<5 min old)
+      const now = Date.now();
+      if (data.updatedAt && (now - data.updatedAt) > 1 * 60 * 1000) {
+        errorDiv.innerText = 'Trip data is outdated';
+        errorDiv.style.display = 'block';
+        return;
+      }
+
+      const latLng = [data.lat, data.lng];
+      if (marker) {
+        marker.setLatLng(latLng);
+      } else {
+        marker = L.marker(latLng).addTo(map);
+      }
+
+      map.setView(latLng, 15);
+      errorDiv.style.display = 'none';
+    }, (err) => {
+      document.getElementById('error').innerText = `Error: ${err.message}`;
+      document.getElementById('error').style.display = 'block';
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('unload', () => {
+      ref.off();
+      map.remove();
+    });
+  </script>
+</body>
+</html>

@@ -1048,3 +1048,104 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
     );
   }
 }
+class ShareTripService {
+  final _logger = Logger();
+  StreamSubscription<Position>? _locationSubscription;
+  String? _currentShareId;
+  Timer? _expirationTimer;
+  final String _apiBaseUrl = 'https://fem-drive.vercel.app/api'; // Your Vercel domain
+
+  Future<String> startSharing(String rideId) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) throw Exception('User not logged in');
+    if (_currentShareId != null) {
+      _logger.w('Sharing already active for shareId: $_currentShareId');
+      return '$_apiBaseUrl/trip/$_currentShareId';
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/trip/share'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'rideId': rideId,
+          'userId': userId,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to create share: ${response.body}');
+      }
+
+      final data = jsonDecode(response.body);
+      _currentShareId = data['shareId'];
+      final shareUrl = data['shareUrl'];
+
+      _locationSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 10,
+        ),
+      ).listen((Position position) {
+        _updateLocation(_currentShareId!, position, userId);
+      }, onError: (e) {
+        _logger.e('Location stream error: $e');
+      });
+
+      _expirationTimer = Timer(const Duration(hours: 2), () {
+        stopSharing(userId);
+      });
+
+      _logger.i('Started sharing for shareId: $_currentShareId');
+      return shareUrl;
+    } catch (e) {
+      _logger.e('Failed to start sharing: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> stopSharing(String userId) async {
+    if (_currentShareId == null) return;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/trip/$_currentShareId/stop'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userId': userId}),
+      );
+
+      if (response.statusCode != 200) {
+        _logger.e('Failed to stop sharing: ${response.body}');
+      }
+    } catch (e) {
+      _logger.e('Error stopping share: $e');
+    } finally {
+      _locationSubscription?.cancel();
+      _locationSubscription = null;
+      _expirationTimer?.cancel();
+      _expirationTimer = null;
+      _logger.i('Stopped sharing for shareId: $_currentShareId');
+      _currentShareId = null;
+    }
+  }
+
+  void _updateLocation(String shareId, Position position, String userId) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/trip/$shareId/location'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'userId': userId,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        _logger.e('Failed to update location: ${response.body}');
+      }
+    } catch (e) {
+      _logger.e('Failed to update location: $e');
+    }
+  }
+}

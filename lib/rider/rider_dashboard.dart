@@ -9,7 +9,6 @@ import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
 import 'package:femdrive/shared/notifications.dart';
 import 'package:femdrive/widgets/payment_services.dart';
-import 'package:femdrive/widgets/share_service.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +21,7 @@ import 'package:logger/logger.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 
 final connectivityProvider = StreamProvider<ConnectivityResult>((ref) {
   return Connectivity().onConnectivityChanged.cast<ConnectivityResult>();
@@ -102,13 +102,21 @@ class RiderDashboard extends ConsumerStatefulWidget {
 }
 
 class _RiderDashboardState extends ConsumerState<RiderDashboard> {
-  static const activeStatuses = {'accepted', 'driver_arrived', 'in_progress'};
+  bool _chatVisible(String? raw) {
+    final s = (raw ?? '').trim().toLowerCase();
+    return s.isNotEmpty &&
+        s != 'cancelled' &&
+        s != 'pending' &&
+        s != 'searching' &&
+        (s == 'accepted' ||
+            s == 'driver_arrived' ||
+            s == 'driverarrived' ||
+            s == 'in_progress' ||
+            s == 'ontrip');
+  }
 
-  bool _chatVisible(String? raw) =>
-      activeStatuses.contains((raw ?? '').trim().toLowerCase());
   bool _hasActive(String? raw) {
     final s = (raw ?? '').trim();
-    // normalize both variants
     final arrived = s == 'driverArrived' || s == 'driver_arrived';
     return const {
           'pending',
@@ -130,10 +138,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   final _pickupController = TextEditingController();
   final _dropoffController = TextEditingController();
   Set<Polyline> _polylines = {};
-  // --- live trim for driver->pickup leg ---
   List<LatLng> _driverLeg = const [];
   Set<Polyline> _trimmed = {};
   LatLng? _lastDriverTick;
+
+  // Add state variable for tracking sharing status
+  bool _isSharing = false; // NEW: Add this line here (around line 180, after _lastDriverTick)
 
   int _nearestIndex(List<LatLng> route, LatLng p) {
     if (route.isEmpty) return 0;
@@ -173,9 +183,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     ];
     final covered = route.sublist(0, cutAt.clamp(0, route.length));
 
-    // demo palette + width
-    const baseLight = Color(0xFF90B6FF); // remaining
-    const progDark = Color(0xFF1A57E8); // covered
+    const baseLight = Color(0xFF90B6FF);
+    const progDark = Color(0xFF1A57E8);
     const w = 10;
 
     _trimmed = {
@@ -244,8 +253,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   LatLng? _dropoffLatLng;
   final Set<String> _acceptedNotified = {};
   final Set<String> _cancelNotified = {};
-  //  final Set<String> _counterNotified = {};
-  //  final Set<String> _emergencyNotified = {};
 
   @override
   void initState() {
@@ -267,7 +274,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/bike_marker.png',
       );
-      // Use your car PNG path here (add it to pubspec assets):
       final car = await BitmapDescriptor.asset(
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/car_marker.png',
@@ -313,7 +319,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
   }
 
-  // same signature + store points for trimming when id == 'driver_to_pickup'
   Future<void> _drawRouteAndStore({
     required LatLng from,
     required LatLng to,
@@ -326,10 +331,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
 
     if (id == 'driver_to_pickup') {
       _driverLeg = points;
-      _applyTrimmedRoute(_driverLeg, from, id: id); // initial cut from 'from'
+      _applyTrimmedRoute(_driverLeg, from, id: id);
       setState(() {
-        _polylines = {}; // clear legacy single polyline
-        _polylines = {..._trimmed}; // show covered+remaining
+        _polylines = {};
+        _polylines = {..._trimmed};
       });
     } else {
       setState(() {
@@ -352,21 +357,16 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   Future<void> _loadCurrentLocation() async {
     try {
       final loc = await MapService().currentLocation();
-
-      // Resolve a human-readable address for the pickup field
       String? addr = await GeocodingService.reverseGeocode(
         lat: loc.latitude,
         lng: loc.longitude,
       );
-      addr ??= 'My location'; // fallback label
-
+      addr ??= 'My location';
       setState(() {
         _currentLocation = loc;
         _pickupLatLng = loc;
-        _pickupController.text = addr!; // <-- real address now
+        _pickupController.text = addr!;
       });
-
-      // Keep nearby driver query centered around the pickup
       ref.read(driverSearchCenterProvider.notifier).state = loc;
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
@@ -383,14 +383,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       a.latitude > b.latitude ? a.latitude : b.latitude,
       a.longitude > b.longitude ? a.longitude : b.longitude,
     );
-
-    // nudge if identical
     if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
       const d = 0.0005;
       sw = LatLng(sw.latitude - d, sw.longitude - d);
       ne = LatLng(ne.latitude + d, ne.longitude + d);
     }
-
     await _mapController!.animateCamera(
       CameraUpdate.newLatLngBounds(
         LatLngBounds(southwest: sw, northeast: ne),
@@ -410,7 +407,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final rideDataa = dash.asData?.value;
     final statuss = (rideData?['status'] as String?) ?? '';
 
-    // ✅ side-effect: keep camera centered on pickup while searching
     if (_mapController != null && rideDataa != null && statuss == 'searching') {
       final pLat = (rideDataa['pickupLat'] as num?)?.toDouble();
       final pLng = (rideDataa['pickupLng'] as num?)?.toDouble();
@@ -423,7 +419,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       }
     }
 
-    // Pull live overlay (fast) if ride exists
     RideLive? live;
     if (rideId != null) {
       live = ref.watch(rtdbRideLiveProvider(rideId)).value;
@@ -432,12 +427,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     final String? driverId = (liveDriverId != null && liveDriverId.isNotEmpty)
         ? liveDriverId
         : (rideData?['driverId'] as String?);
-    // Prefer live status if present
     final status = (live?.status.isNotEmpty == true)
         ? live!.status
         : staticStatus;
 
-    // Prefer live driver lat/lng
     LatLng? driverLatLng = live?.driverLatLng;
     if (driverLatLng == null && driverId != null && driverId.isNotEmpty) {
       driverLatLng = ref.watch(driverLocationProvider(driverId)).value;
@@ -455,15 +448,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           : null;
     }
 
-    // Fallback to driver stream if live didn’t include coords
     final dlat = (rideData?['driverLat'] as num?)?.toDouble();
     final dlng = (rideData?['driverLng'] as num?)?.toDouble();
     if (dlat != null && dlng != null) {
       driverLatLng = LatLng(dlat, dlng);
     }
-    // live trim + follow camera while heading to pickup
     if (driverLatLng != null && status == 'accepted' && _driverLeg.isNotEmpty) {
-      // avoid redundant rebuild churn
       if (_lastDriverTick == null ||
           Geolocator.distanceBetween(
                 _lastDriverTick!.latitude,
@@ -474,7 +464,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               3) {
         _lastDriverTick = driverLatLng;
         _applyTrimmedRoute(_driverLeg, driverLatLng, id: 'driver_to_pickup');
-        // merge with any other polylines you already show
         setState(() => _polylines = {..._trimmed});
         _followCamera(driverLatLng);
       }
@@ -508,6 +497,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               BitmapDescriptor.defaultMarkerWithHue(
                 BitmapDescriptor.hueOrange,
               ));
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rider Dashboard'),
@@ -517,7 +507,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       body: SafeArea(
         child: Stack(
           children: [
-            // --- Map with live markers and route ---
             Consumer(
               builder: (context, ref, _) {
                 final nearbyAsync = ref.watch(nearbyDriversProvider);
@@ -531,7 +520,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         status == 'driverArrived';
 
                     final markers = <Marker>{
-                      // Rider current location only when idle/planning
                       if (_currentLocation != null &&
                           !hasActive &&
                           (_pickupLatLng == null ||
@@ -544,8 +532,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueAzure,
                           ),
                         ),
-
-                      // Pickup shown only until trip starts
                       if (_pickupLatLng != null &&
                           status != 'completed' &&
                           status != 'cancelled')
@@ -556,8 +542,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueGreen,
                           ),
                         ),
-
-                      // Dropoff shown only during trip
                       if (_dropoffLatLng != null &&
                           status != 'completed' &&
                           status != 'cancelled')
@@ -568,8 +552,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             BitmapDescriptor.hueRed,
                           ),
                         ),
-
-                      // Live driver marker whenever we know it
                       if (driverLatLng != null)
                         Marker(
                           markerId: const MarkerId('driver_live'),
@@ -579,8 +561,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           anchor: const Offset(0.5, 0.5),
                           flat: true,
                         ),
-
-                      // Nearby drivers (hidden once one is assigned)
                       ...drivers
                           .where((d) => d['location'] != null)
                           .where(
@@ -590,8 +570,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             final dType = (d['rideType'] ?? d['carType'] ?? '')
                                 .toString()
                                 .toLowerCase();
-                            return dType ==
-                                rideType.toLowerCase(); // <-- enforce match
+                            return dType == rideType.toLowerCase();
                           })
                           .map((d) {
                             final loc = d['location'];
@@ -603,7 +582,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             } else {
                               return null;
                             }
-
                             final id =
                                 (d['id'] ?? d['uid'] ?? UniqueKey().toString())
                                     .toString();
@@ -611,7 +589,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                 .toString();
                             final rating = (d['rating'] ?? '—').toString();
                             final rideType = (d['rideType'] ?? '—').toString();
-
                             return Marker(
                               markerId: MarkerId('driver_$id'),
                               position: pos,
@@ -645,10 +622,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           compassEnabled: false,
                           zoomControlsEnabled: false,
                           mapToolbarEnabled: false,
-
                           trafficEnabled: _trafficEnabled,
                           mapType: _mapType,
-
                           markers: markers,
                           polylines: _polylines,
                         ),
@@ -728,7 +703,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   driverIcon: liveIcon,
                 ),
               ),
-            // --- Fare/ETA/Distance pill (like route summary) ---
             if (_fare != null && _eta != null && _distanceKm != null)
               Positioned(
                 top: 72,
@@ -756,24 +730,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   ],
                 ),
               ),
-
-            // --- Ride state overlays (unchanged logic, polished visuals) ---
             ridesAsync.when(
               data: (rideData) {
                 if (rideData == null || rideData.isEmpty) {
                   return const SizedBox.shrink();
                 }
-
                 final ride = rideData;
                 final status = (ride['status'] ?? '').toString();
-                // --- Route switching logic ---
                 switch (status) {
                   case 'accepted':
                     if (_acceptedNotified.add(ride['id'])) {
                       showAccepted(rideId: ride['id']);
                     }
-
-                    // Replace planning polyline with driver → pickup
                     if (driverLatLng != null && _pickupLatLng != null) {
                       _drawRouteAndStore(
                         from: driverLatLng,
@@ -783,13 +751,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       );
                     }
                     break;
-
                   case 'in_progress':
                   case 'onTrip':
                     if (_startedNotified.add(ride['id'])) {
                       showRideStarted(rideId: ride['id']);
                     }
-                    // Show current driver (live) → dropoff; fallback...
                     if (_dropoffLatLng != null) {
                       final origin =
                           driverLatLng ?? _currentLocation ?? _pickupLatLng;
@@ -798,21 +764,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           from: origin,
                           to: _dropoffLatLng!,
                           id: 'to_dropoff_live',
-                          color: const Color(0xFF90B6FF), // base light
+                          color: const Color(0xFF90B6FF),
                           width: 10,
                         );
                       }
                     }
                     break;
-
                   case 'searching':
                     break;
-
                   case 'completed':
                     if (_completedNotified.add(ride['id'])) {
                       showRideCompleted(rideId: ride['id']);
                     }
-                    // After a short delay, you navigate; clear line now to avoid flash
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
@@ -835,12 +798,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       showNoDrivers(rideId: ride['id']);
                     }
                     break;
-
                   case 'cancelled':
                     if (_cancelNotified.add(ride['id'])) {
                       showCancelled(rideId: ride['id']);
                     }
-
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
@@ -852,15 +813,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     if (_arrivedNotified.add(ride['id'])) {
                       showDriverArrived(rideId: ride['id']);
                     }
-                    // keep/adjust your map logic as needed
                     break;
-
                   default:
-                    // Idle/planning state: do nothing here.
-                    // The planning polyline is drawn by RideForm.onFareUpdated (pickup+dropoff set).
                     break;
                 }
-
                 return Stack(
                   children: [
                     Align(
@@ -880,35 +836,104 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           ),
                         ),
                       ),
-                    if (status == 'accepted' ||
-                        status == 'in_progress' ||
-                        status == 'onTrip')
+                    if (status == 'in_progress' || status == 'onTrip')
                       Positioned(
-                        bottom: 172,
+                        bottom: 220, // NEW: Share Trip button, above Chat
                         right: 16,
-                        child: ShareTripButton(rideId: ride['id']),
-                      ),
-
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.share),
+                          label: const Text('Share Trip'),
+                          onPressed: _isSharing
+                              ? null
+                              : () async {
+                                  final shareService = ShareTripService();
+                                  try {
+                                    final url = await shareService.startSharing(
+                                        ride['id']);
+                                    await SharePlus.instance.share(ShareParams(text: 'Track my live trip location: $url'));
+                                    setState(() {
+                                      _isSharing = true;
+                                    });
+                                    if (mounted) {
+                                      // ignore: use_build_context_synchronously
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Trip shared! Stop sharing below.',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    _logger.e('Failed to start sharing: $e');
+                                    if (mounted) {
+                                      // ignore: use_build_context_synchronously
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                            content:
+                                                Text('Failed to share trip: $e')),
+                                      );
+                                    }
+                                  }
+                                },
+                          style: FilledButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            backgroundColor: _isSharing ? Colors.grey : null,
+                          ),
+                        ),
+                      ), // NEW: End Share Trip button
+                    if (_isSharing && (status == 'in_progress' || status == 'onTrip'))
+                      Positioned(
+                        bottom: 280, // NEW: Stop Sharing button, above Share Trip
+                        right: 16,
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.stop),
+                          label: const Text('Stop Sharing'),
+                          onPressed: () async {
+                            final userId = FirebaseAuth.instance.currentUser?.uid;
+                            if (userId == null) return;
+                            final shareService = ShareTripService();
+                            await shareService.stopSharing(userId);
+                            setState(() {
+                              _isSharing = false;
+                            });
+                            if (mounted) {
+                              // ignore: use_build_context_synchronously
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Stopped sharing trip.')),
+                              );
+                            }
+                          },
+                          style: FilledButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            backgroundColor: Colors.red,
+                          ),
+                        ),
+                      ), // NEW: End Stop Sharing button
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
                         bottom: 106,
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
-                    // ⤵️ Always show Cancel for accepted / in_progress / onTrip
                     if (status == 'accepted' ||
                         status == 'in_progress' ||
                         status == 'onTrip')
                       Positioned(
-                        bottom: 46, // below SOS
+                        bottom: 46,
                         left: 16,
                         right: 16,
                         child: _RiderCancelButton(rideId: ride['id']),
                       ),
-
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
-                        bottom: 56, // just above SOS
+                        bottom: 56,
+                        left: 16,
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.cancel),
@@ -949,6 +974,12 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                               }
                             }
                           },
+                          style: FilledButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          minimumSize: const Size(300, 50), // Wider button
+                          ),
                         ),
                       ),
                     if (_chatVisible(status))
@@ -996,7 +1027,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               loading: () => const SizedBox.shrink(),
               error: (e, st) => const SizedBox.shrink(),
             ),
-            // 1) Radar overlay during pending/searching
             if (showRadar)
               Positioned.fill(
                 child: RadarSearchingOverlay(
@@ -1017,7 +1047,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         }
                         return;
                       }
-
                       await ref
                           .read(riderDashboardProvider.notifier)
                           .cancelRide(id);
@@ -1035,18 +1064,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       }
                     }
                   },
-                  mapController:
-                      _mapController, // <-- added for zoom-out (Patch 2)
+                  mapController: _mapController,
                 ),
               ),
-
             if (rideData != null &&
                 rideData['counterFare'] != null &&
                 status != 'completed' &&
                 status != 'cancelled')
               CounterFareModalLauncher(ride: rideData),
-
-            // 2) Show RideForm only when no active ride
             if (!hasActive)
               Align(
                 alignment: Alignment.bottomCenter,
@@ -1096,9 +1121,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     Polyline(
                                       polylineId: const PolylineId('route'),
                                       points: routePoints,
-                                      color: const Color(
-                                        0xFF90B6FF,
-                                      ), // base light
+                                      color: const Color(0xFF90B6FF),
                                       width: 10,
                                       startCap: Cap.roundCap,
                                       endCap: Cap.roundCap,
@@ -1884,38 +1907,6 @@ class DriverDetailsWidget extends StatelessWidget {
   }
 }
 
-/// ---------------- Share Trip ----------------
-class ShareTripButton extends StatelessWidget {
-  final String rideId;
-  const ShareTripButton({super.key, required this.rideId});
-
-  @override
-  Widget build(BuildContext context) {
-    return FilledButton.tonalIcon(
-      onPressed: () async {
-        try {
-          await ShareService().shareTripStatus(
-            rideId: rideId,
-            userId: FirebaseAuth.instance.currentUser!.uid,
-          );
-          if (context.mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Trip status shared')));
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('Error sharing trip: $e')));
-          }
-        }
-      },
-      icon: const Icon(Icons.share),
-      label: const Text('Share Trip Status'),
-    );
-  }
-}
 
 /// ---------------- Receipt (shows when completed) ----------------
 class ReceiptWidget extends StatelessWidget {

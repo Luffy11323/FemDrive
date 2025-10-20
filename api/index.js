@@ -57,6 +57,7 @@ const AppPaths = {
   driverNotifications: 'driver_notifications',
   ridesLive: 'ridesLive',
   adminAlerts: 'admin_alerts',
+  trip_shares: 'trip_shares',
 };
 
 const AppFields = {
@@ -1089,7 +1090,92 @@ app.post('/housekeep/run', async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// New: Create a shareable trip link
+app.post('/trip/share', async (req, res) => {
+  const { rideId, userId } = req.body;
+  if (!rideId || !userId) {
+    return res.status(400).json({ error: 'Missing rideId/userId' });
+  }
 
+  try {
+    // Generate a unique shareId
+    const shareId = Math.random().toString(36).substring(2, 15);
+    
+    // Validate ride exists
+    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    // Initialize share node in RTDB
+    await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
+      rideId,
+      userId,
+      createdAt: admin.database.ServerValue.TIMESTAMP,
+    });
+
+    // Return shareable URL
+    const shareUrl = `https://fem-drive.vercel.app/trip/${shareId}`; // Update with your Vercel domain
+    res.json({ ok: true, shareId, shareUrl });
+  } catch (e) {
+    console.error('Trip share error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// New: Update location for a shared trip
+app.post('/trip/:shareId/location', async (req, res) => {
+  const { shareId } = req.params;
+  const { lat, lng, userId } = req.body;
+  if (!shareId || !lat || !lng || !userId) {
+    return res.status(400).json({ error: 'Missing shareId/lat/lng/userId' });
+  }
+
+  try {
+    // Verify the share exists and belongs to the user
+    const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
+    if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
+      return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
+    }
+
+    // Update location
+    await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).update({
+      lat,
+      lng,
+      updatedAt: admin.database.ServerValue.TIMESTAMP,
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Trip location update error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// New: Stop sharing a trip
+app.post('/trip/:shareId/stop', async (req, res) => {
+  const { shareId } = req.params;
+  const { userId } = req.body;
+  if (!shareId || !userId) {
+    return res.status(400).json({ error: 'Missing shareId/userId' });
+  }
+
+  try {
+    // Verify the share exists and belongs to the user
+    const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
+    if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
+      return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
+    }
+
+    // Remove the share node
+    await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).remove();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Stop trip share error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 // Triggers: On new emergency, send FCM to admins
 exports.onEmergencyCreate = functions.firestore
   .document('emergencies/{emergencyId}')
