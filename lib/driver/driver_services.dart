@@ -96,6 +96,7 @@ class RideStatus {
     inProgress,
     onTrip,
   };
+  static const terminalSet = <String>{completed, cancelled};
 }
 
 class OfferType {
@@ -1139,7 +1140,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   late final LatLng _pickup;
   late final LatLng _dropoff;
   String _status = RideStatus.accepted;
-
+  StreamSubscription<Map<String, dynamic>?>? _statusSub;
   // --- map / ui state
   GoogleMapController? _mapController;
   Set<Marker> _markers = {};
@@ -1167,6 +1168,35 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     _status =
         (widget.rideData[AppFields.status] as String?) ?? RideStatus.accepted;
 
+    // Subscribe to real-time status updates
+    _statusSub = ridesLiveStream(widget.rideData['rideId'] as String).listen(
+      (live) {
+        if (!mounted) return;
+        final newStatus = (live?['status'] as String?) ?? _status;
+        if (newStatus != _status) {
+          setState(() {
+            _status = newStatus;
+            if (RideStatus.terminalSet.contains(_status)) {
+              // Auto-close on terminal states
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+              });
+            }
+          });
+          // Rebuild route if status changes to in_progress or onTrip
+          if (newStatus == RideStatus.inProgress || newStatus == RideStatus.onTrip) {
+            _fetchRoute();
+          }
+        }
+      },
+      onError: (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to update status: $e')),
+          );
+        }
+      },
+    );
     _markers = {
       Marker(
         markerId: const MarkerId('pickup'),
@@ -1264,8 +1294,10 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       final dest = isTrip ? _dropoff : _pickup;
 
       final dir = DirectionsHttp(googleMapsApiKey);
-      final payload = await dir.fetchRoute(origin, dest);
-
+      final payload = await dir.fetchRoute(origin, dest).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('Route fetch timed out'),
+        );
       final points = (payload['points'] as List<LatLng>);
       final rawSteps = (payload['steps'] as List);
 
@@ -1630,9 +1662,22 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
-
-        if (_loadingRoute) const Center(child: CircularProgressIndicator()),
-
+        if (_loadingRoute)
+          const Center(child: CircularProgressIndicator())
+        else if (_route.isEmpty)
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text('Failed to load route'),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: _fetchRoute,
+                  child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
         // ETA + turn banner
         if (!_loadingRoute)
           Positioned(
@@ -1798,6 +1843,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     _pickupTimer?.cancel();
     _mapController?.dispose();
     _posSub?.cancel();
+    _statusSub?.cancel();
     super.dispose();
   }
 }

@@ -33,7 +33,7 @@ if (process.env.SERVICE_ACCOUNT_BASE64) {
   }
 }
 
-const databaseURL = process.env.FIREBASE_DATABASE_URL || 'https://<PROJECT_ID>.firebaseio.com';
+const databaseURL = 'https://ridesharefyp-0022-default-rtdb.firebaseio.com';
 
 admin.initializeApp({ credential: adminCred, databaseURL });
 
