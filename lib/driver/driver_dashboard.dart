@@ -30,15 +30,13 @@ final LocationSettings locationSettings = LocationSettings(
   distanceFilter: 0,
 );
 
-// 1. Enhanced driverOffersProvider with keepAlive
-final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((ref) {
+final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((
+  ref,
+) {
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid == null) return const Stream<List<PendingRequest>>.empty();
 
   final refBase = FirebaseDatabase.instance.ref('driver_notifications/$uid');
-
-  // Keep the provider alive for longer to prevent disposal
-  ref.keepAlive();
 
   return refBase.onValue.map((ev) {
     final v = ev.snapshot.value as Map?;
@@ -53,17 +51,11 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((r
       final ts = (payload['timestamp'] as num?)?.toInt();
       if (ts != null && (nowMs - ts) > ttlMs) return;
 
-      final request = PendingRequest.fromMap(
-        rideId.toString(),
-        Map<String, dynamic>.from(payload),
-      );
-      list.add(request);
-
-      // Trigger notification for new incoming ride
-      showIncomingRide(
-        rideId: request.rideId,
-        title: 'New Ride Offer',
-        body: 'Pickup: ${request.pickupLabel ?? 'Unknown'}, Fare: ${request.fare?.toStringAsFixed(2) ?? 'N/A'}',
+      list.add(
+        PendingRequest.fromMap(
+          rideId.toString(),
+          Map<String, dynamic>.from(payload),
+        ),
       );
     });
 
@@ -75,6 +67,7 @@ final driverOffersProvider = StreamProvider.autoDispose<List<PendingRequest>>((r
     return list;
   });
 });
+
 class RideStatus {
   static const pending = 'pending';
   static const searching = 'searching';
@@ -93,25 +86,6 @@ class RideStatus {
   };
 
   static const terminalSet = <String>{completed, cancelled};
-}
-
-// NEW: Handle expiration of offers
-Future<void> handleOfferExpiration(String rideId) async {
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return;
-
-  final ref = FirebaseDatabase.instance.ref('driver_notifications/$uid/$rideId');
-  final snapshot = await ref.get();
-  if (snapshot.exists) {
-    final ts = (snapshot.value as Map?)?['timestamp'] as num?;
-    if (ts != null) {
-      final nowMs = DateTime.now().millisecondsSinceEpoch;
-      const ttlMs = 15 * 1000;
-      if (nowMs - ts.toInt() > ttlMs) {
-        await ref.remove();
-      }
-    }
-  }
 }
 
 final _rtdb = FirebaseDatabase.instance.ref();
@@ -480,11 +454,7 @@ class DriverDashboard extends ConsumerStatefulWidget {
   ConsumerState<DriverDashboard> createState() => _DriverDashboardState();
 }
 
-// 2. Add a manual refresh trigger provider
-final driverOffersRefreshProvider = StateProvider<int>((ref) => 0);
-
-class _DriverDashboardState extends ConsumerState<DriverDashboard> 
-    with WidgetsBindingObserver { // Add this mixin
+class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   late final DriverLocationService _loc;
   StreamSubscription<Position>? _posSub;
 
@@ -501,14 +471,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
   final String _mapErrorMessage = '';
   int _selectedIndex = 0;
 
-  // Add periodic refresh timer
-  Timer? _refreshTimer;
-
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this); // Add observer
-    
     _loc = DriverLocationService();
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final connected =
@@ -516,11 +481,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
           results.contains(ConnectivityResult.wifi);
       if (kDebugMode) {
         debugPrint(connected ? 'Internet Connected' : 'No Internet');
-      }
-      
-      // Refresh offers when connectivity is restored
-      if (connected && _isOnline) {
-        _forceRefreshOffers();
       }
     });
 
@@ -542,7 +502,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
         }
       });
     });
-    
     _posSub = _loc.positionStream.listen((pos) {
       if (!mounted) return;
       setState(() {
@@ -552,41 +511,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
         CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
       );
     });
-    
     _initInitialPosition();
-    
-    // Start periodic refresh when online
-    _startPeriodicRefresh();
-  }
-
-  // NEW: Handle app lifecycle changes
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    
-    if (state == AppLifecycleState.resumed && _isOnline) {
-      // App came to foreground - refresh offers
-      _forceRefreshOffers();
-    }
-  }
-
-  // NEW: Force refresh the offers provider
-  void _forceRefreshOffers() {
-    if (!mounted) return;
-    // Invalidate the provider to trigger a fresh stream subscription
-    ref.invalidate(driverOffersProvider);
-    // Also increment the refresh counter
-    ref.read(driverOffersRefreshProvider.notifier).state++;
-  }
-
-  // NEW: Periodic refresh every 30 seconds when online
-  void _startPeriodicRefresh() {
-    _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (_isOnline && mounted) {
-        _forceRefreshOffers();
-      }
-    });
   }
 
   Future<void> _initInitialPosition() async {
@@ -615,13 +540,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
       if (!mounted) return;
       final status = (live?['status'] ?? '').toString();
       final driverId = (live?['driverId'] ?? '').toString();
-      
       if (status == RideStatus.cancelled && _shownRequestIds.add(rideId)) {
         showCancelled(rideId: rideId);
-        // Refresh offers after cancellation
-        Future.delayed(const Duration(milliseconds: 500), _forceRefreshOffers);
       }
-      
       if (RideStatus.ongoingSet.contains(status) &&
           _detailsPushedFor != rideId) {
         _detailsPushedFor = rideId;
@@ -630,13 +551,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
             MaterialPageRoute(
               builder: (_) => DriverRideDetailsPage(rideId: rideId),
             ),
-          ).then((_) {
-            // Refresh offers when returning from ride details
-            _forceRefreshOffers();
-          });
+          );
         }
       }
-      
       final me = _auth.currentUser?.uid;
       if (driverId.isNotEmpty && me != null && driverId != me) return;
 
@@ -652,25 +569,18 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
           MaterialPageRoute(
             builder: (_) => DriverRideDetailsPage(rideId: rideId),
           ),
-        ).then((_) {
-          // Refresh offers when returning from ride details
-          _forceRefreshOffers();
-        });
+        );
       }
 
       if (status == RideStatus.completed || status == RideStatus.cancelled) {
         _loc.setActiveRide(null);
         _detailsPushed = false;
-        // Refresh offers when ride ends
-        Future.delayed(const Duration(milliseconds: 500), _forceRefreshOffers);
       }
     });
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this); // Remove observer
-    _refreshTimer?.cancel();
     _connSub.cancel();
     _mapController?.dispose();
     _liveRideSub?.cancel();
@@ -682,13 +592,9 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
     setState(() => _isOnline = v);
     if (v) {
       await _loc.startOnlineMode();
-      _startPeriodicRefresh();
-      // Force immediate refresh when going online
-      _forceRefreshOffers();
     } else {
       await _loc.goOffline();
       _shownRequestIds.clear();
-      _refreshTimer?.cancel();
     }
   }
 
@@ -700,9 +606,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
 
   @override
   Widget build(BuildContext context) {
-    // Watch the refresh counter to trigger rebuilds
-    ref.watch(driverOffersRefreshProvider);
-    
     if (!_hasAttachedListeners) {
       _hasAttachedListeners = true;
 
@@ -719,8 +622,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
           _liveWatchingRideId = null;
           _detailsPushed = false;
           _loc.setActiveRide(null);
-          // Refresh offers when no active ride
-          _forceRefreshOffers();
           return;
         }
 
@@ -781,7 +682,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
                       if (_shownRequestIds.add(active.rideId)) {
                         showIncomingRide(rideId: active.rideId);
                       }
-                      
                       return Align(
                         alignment: Alignment.bottomCenter,
                         child: Padding(
@@ -804,8 +704,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
                                     .remove();
                               }
                               showAccepted(rideId: active.rideId);
-                              // Refresh after accepting
-                              _forceRefreshOffers();
                             },
                             onDecline: () async {
                               await ref
@@ -820,8 +718,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
                                     )
                                     .remove();
                               }
-                              // Refresh after declining
-                              _forceRefreshOffers();
                             },
                             onCounter: (newFare) async {
                               await ref
@@ -836,8 +732,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
                                     )
                                     .remove();
                               }
-                              // Refresh after counter
-                              _forceRefreshOffers();
                             },
                             onExpire: () async {
                               final uid =
@@ -849,8 +743,6 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard>
                                     )
                                     .remove();
                               }
-                              // Refresh after expiration
-                              _forceRefreshOffers();
                             },
                           ),
                         ),

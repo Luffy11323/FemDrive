@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:femdrive/shared/notifications.dart';
+// keep if used elsewhere
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -17,7 +17,8 @@ import 'package:dart_geohash/dart_geohash.dart';
 
 import 'package:femdrive/location/directions_service.dart';
 import 'package:femdrive/shared/emergency_service.dart';
-import 'package:http/http.dart' as http;
+// ignore: unused_import
+import 'package:http/http.dart' as http; // (safe even if unused elsewhere)
 import 'package:femdrive/location/directions_http.dart';
 
 class AppPaths {
@@ -27,7 +28,7 @@ class AppPaths {
   static const ridesCollection = 'rides';
   static const ratingsCollection = 'ratings';
   static const locationsCollection = 'locations';
-  static const driverLocations = 'driverLocations';
+  static const driverLocations = 'driverLocations'; // RTDB live marker path
   static const notifications = 'notifications';
   static const messages = 'messages';
   static const driverNotifications = 'driver_notifications';
@@ -78,6 +79,7 @@ class AppFields {
   static const etaSecs = 'etaSecs';
 }
 
+/// Unified (matches DriverDashboard)
 class RideStatus {
   static const pending = 'pending';
   static const searching = 'searching';
@@ -102,61 +104,63 @@ class OfferType {
   static const rideDeclined = 'ride_declined';
   static const statusUpdate = 'status_update';
   static const rideCompleted = 'ride_completed';
-  static const rideCancelled = 'ride_cancelled';
 }
 
 const darkGuidanceStyle = '''
 [
+  // General map geometry background
   {
     "elementType": "geometry",
     "stylers": [
-      { "color": "#f7f9fb" }
+      { "color": "#f7f9fb" } // Light neutral tone for background
     ]
   },
   {
     "elementType": "labels.icon",
     "stylers": [
-      { "visibility": "off" }
+      { "visibility": "off" } // No icons for cleaner look
     ]
   },
   {
     "elementType": "labels.text.fill",
     "stylers": [
-      { "color": "#3b4a5a" }
+      { "color": "#3b4a5a" } // Dark gray-blue for good legibility
     ]
   },
   {
     "elementType": "labels.text.stroke",
     "stylers": [
-      { "color": "#ffffff" }
+      { "color": "#ffffff" } // White stroke improves contrast
     ]
   },
+
+  // Roads
   {
     "featureType": "road",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#e0e4ea" }
+      { "color": "#e0e4ea" } // Slightly more contrast than background
     ]
   },
   {
     "featureType": "road.arterial",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#d0d4dc" }
+      { "color": "#d0d4dc" } // More prominent for arterial roads
     ]
   },
   {
     "featureType": "road.highway",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#c4c9d1" }
+      { "color": "#c4c9d1" } // Clearly distinguish highways
     ]
   },
   {
     "featureType": "road.highway.controlled_access",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#babfc7" }
+      { "color": "#babfc7" } // Highest priority roads — highest contrast
     ]
   },
   {
@@ -166,39 +170,45 @@ const darkGuidanceStyle = '''
       { "color": "#5e6d7a" }
     ]
   },
+
+  // Points of Interest
   {
     "featureType": "poi",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#eef2f7" }
+      { "color": "#eef2f7" } // Subtle but visible
     ]
   },
   {
     "featureType": "poi.park",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#e3f2e0" }
+      { "color": "#e3f2e0" } // Soft green for parks
     ]
   },
   {
     "featureType": "poi.park",
     "elementType": "labels.text.fill",
     "stylers": [
-      { "color": "#7cac7a" }
+      { "color": "#7cac7a" } // Green label text for parks
     ]
   },
+
+  // Transit
   {
     "featureType": "transit.line",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#d6dbe4" }
+      { "color": "#d6dbe4" } // Transit lines muted but visible
     ]
   },
+
+  // Water
   {
     "featureType": "water",
     "elementType": "geometry",
     "stylers": [
-      { "color": "#d0e6f8" }
+      { "color": "#d0e6f8" } // Light blue for water
     ]
   }
 ]
@@ -225,14 +235,17 @@ Future<String> getCarMarkerAsset() async {
     throw Exception("User document not found");
   }
 
-  final carType = userDoc.data()?['carType'] ?? 'car';
-  return (carType.toLowerCase() == 'bike')
+  final carType = userDoc.data()?['carType'] ?? 'car'; // default to 'car'
+
+  final asset = (carType.toLowerCase() == 'bike')
       ? 'assets/images/bike_marker.png'
       : 'assets/images/car_marker.png';
+
+  return asset;
 }
 
 final googleMapsApiKey = 'AIzaSyCRpuf1w49Ri0gNiiTPOJcSY7iyhyC-2c4';
-
+// Fares config (exported so UI can import it)
 final faresConfigProvider = FutureProvider<Map<String, double>>((ref) async {
   final snap = await FirebaseFirestore.instance
       .collection('config')
@@ -245,6 +258,7 @@ final faresConfigProvider = FutureProvider<Map<String, double>>((ref) async {
   };
 });
 
+// RTDB live ride node (shared by rider & driver)
 Stream<Map<String, dynamic>?> ridesLiveStream(String rideId) {
   final ref = FirebaseDatabase.instance.ref('${AppPaths.ridesLive}/$rideId');
   return ref.onValue.map((e) {
@@ -286,7 +300,7 @@ class PendingRequest {
       pickupLng: (map[AppFields.pickupLng] as num?)?.toDouble() ?? 0,
       dropoffLat: (map[AppFields.dropoffLat] as num?)?.toDouble() ?? 0,
       dropoffLng: (map[AppFields.dropoffLng] as num?)?.toDouble() ?? 0,
-      fare: map[AppFields.fare] as num?,
+      fare: (map[AppFields.fare] as num?),
       raw: Map<String, dynamic>.from(map),
     );
   }
@@ -299,13 +313,16 @@ class DriverLocationService {
   final DatabaseReference _rtdb = FirebaseDatabase.instance.ref();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final GeoHasher _geoHasher = GeoHasher();
-  final Connectivity _connectivity = Connectivity();
 
   StreamSubscription<Position>? _positionSub;
+  final GeoHasher _geoHasher = GeoHasher();
+
   LocationSettings locationSettings;
+
   String? _activeRideId;
   bool _isPaused = false;
+
+  // Stream controller for position updates to notify UI (e.g., map camera)
   final StreamController<Position> _positionController =
       StreamController<Position>.broadcast();
 
@@ -319,6 +336,7 @@ class DriverLocationService {
               distanceFilter: 10,
             );
 
+  // Exponential backoff variables
   int _retryAttempt = 0;
   Timer? _retryTimer;
 
@@ -327,21 +345,24 @@ class DriverLocationService {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        if (kDebugMode) debugPrint('[Location] Location permission denied');
+        if (kDebugMode) {
+          debugPrint('[Location] Location permission denied');
+        }
         return false;
       }
     }
     if (permission == LocationPermission.deniedForever) {
-      if (kDebugMode) debugPrint('[Location] Location permission denied forever');
+      if (kDebugMode) {
+        debugPrint(
+          '[Location] Location permission denied forever. Cannot request.',
+        );
+      }
       return false;
     }
     return true;
   }
 
-  Future<bool> _checkConnectivity() async {
-    final result = await _connectivity.checkConnectivity();
-    return !result.contains(ConnectivityResult.none);
-  }
+  /// Starts listening to location updates and writes them to RTDB and Firestore.
   Future<void> startOnlineMode({String? rideId}) async {
     final user = _auth.currentUser;
     if (user == null) {
@@ -352,12 +373,10 @@ class DriverLocationService {
     _activeRideId = rideId;
     _isPaused = false;
 
-    if (!await _checkAndRequestPermissions()) return;
-    if (!await _checkConnectivity()) {
-      if (kDebugMode) debugPrint('[Location] No network connectivity');
-      return;
-    }
+    bool permissionGranted = await _checkAndRequestPermissions();
+    if (!permissionGranted) return;
 
+    // Initialize background execution
     try {
       final ok = await FlutterBackground.initialize();
       if (ok) {
@@ -368,45 +387,65 @@ class DriverLocationService {
       if (kDebugMode) debugPrint('[Location] Background init failed: $e');
     }
 
+    // Cancel existing subscription if any
     await _positionSub?.cancel();
-    _positionSub = Geolocator.getPositionStream(locationSettings: locationSettings)
-        .listen(
-      (pos) async {
-        if (_isPaused || !await _checkConnectivity()) return;
 
-        _retryAttempt = 0;
-        _positionController.add(pos);
+    // Always write to drivers_online to maintain availability
+    await _firestore.collection('drivers_online').doc(uid).set({
+      'uid': uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
 
-        final String hash = _geoHasher.encode(
-          pos.latitude,
-          pos.longitude,
-          precision: GeoCfg.driverHashPrecision,
+    _positionSub =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          (pos) async {
+            if (_isPaused) return;
+
+            _retryAttempt = 0; // reset retry counter on success
+
+            _positionController.add(pos);
+
+            final String hash = _geoHasher.encode(
+              pos.latitude,
+              pos.longitude,
+              precision: 7, // Adjust precision as needed
+            );
+
+            try {
+              // Debounce writes to every ~3 seconds (adjust as needed)
+              _debouncedWrite(uid, pos, hash);
+            } catch (e) {
+              if (kDebugMode) debugPrint('[Location] Write failed: $e');
+            }
+          },
+          onError: (err) async {
+            if (kDebugMode) debugPrint('[Location] Stream error: $err');
+
+            // Retry with exponential backoff
+            _retryAttempt++;
+            final delaySeconds = _calculateBackoffSeconds(_retryAttempt);
+            if (kDebugMode) {
+              debugPrint('[Location] Retry in $delaySeconds seconds');
+            }
+
+            _retryTimer?.cancel();
+            _retryTimer = Timer(Duration(seconds: delaySeconds), () async {
+              await _positionSub?.cancel();
+              _positionSub = null;
+              if (!_isPaused) {
+                await startOnlineMode(rideId: _activeRideId);
+              }
+            });
+          },
         );
-
-        try {
-          _debouncedWrite(uid, pos, hash);
-        } catch (e) {
-          if (kDebugMode) debugPrint('[Location] Write failed: $e');
-        }
-      },
-      onError: (err) async {
-        if (kDebugMode) debugPrint('[Location] Stream error: $err');
-        _retryAttempt++;
-        final delaySeconds = _calculateBackoffSeconds(_retryAttempt);
-        _retryTimer?.cancel();
-        _retryTimer = Timer(Duration(seconds: delaySeconds), () async {
-          await _positionSub?.cancel();
-          _positionSub = null;
-          if (!_isPaused) await startOnlineMode(rideId: _activeRideId);
-        });
-      },
-    );
   }
 
+  // Helper: exponential backoff with max delay cap at 32 seconds
   int _calculateBackoffSeconds(int attempt) {
     return attempt > 5 ? 32 : (1 << attempt);
   }
 
+  // Debounce timer & last write cache to reduce frequent writes
   Timer? _debounceTimer;
   Position? _lastPosition;
   String? _lastGeoHash;
@@ -414,66 +453,86 @@ class DriverLocationService {
 
   void _debouncedWrite(String uid, Position pos, String hash) {
     final now = DateTime.now();
+
+    // If last write < 3 seconds ago and position/geohash didn't change significantly, skip
     if (_lastWriteTime != null &&
         now.difference(_lastWriteTime!).inSeconds < 3 &&
         _lastPosition != null &&
         _isPositionClose(_lastPosition!, pos) &&
         _lastGeoHash == hash) {
+      // Skip update
       return;
     }
 
+    // Cancel previous timer, if any
     _debounceTimer?.cancel();
+
+    // Schedule write in 1 second
     _debounceTimer = Timer(const Duration(seconds: 1), () async {
       try {
-        await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
-          AppFields.uid: uid,
-          AppFields.lat: pos.latitude,
-          AppFields.lng: pos.longitude,
-          AppFields.geohash: hash,
-          AppFields.updatedAt: ServerValue.timestamp,
+        // Always update drivers_online to keep driver available
+        await _firestore.collection('drivers_online').doc(uid).set({
+          'uid': uid,
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'geohash': hash,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+
+        // Canonical online presence (RTDB)
+        await _rtdb.child('driversOnline/$uid').set({
+          'uid': uid,
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'geohash': hash,
+          'updatedAt': ServerValue.timestamp,
         });
 
-        await _rtdb.child('${AppPaths.driverLocations}/$uid').update({
-          AppFields.lat: pos.latitude,
-          AppFields.lng: pos.longitude,
-          AppFields.updatedAt: ServerValue.timestamp,
+        // Rider-facing live location marker (RTDB)
+        await _rtdb.child('driverLocations/$uid').update({
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'updatedAt': ServerValue.timestamp,
         });
 
+        // Optional: historical breadcrumbs in Firestore
         await _firestore
             .collection('users')
             .doc(uid)
-            .collection(AppPaths.driverLocations)
+            .collection('driverLocations')
             .doc(now.toIso8601String())
             .set({
-              AppFields.lat: pos.latitude,
-              AppFields.lng: pos.longitude,
-              AppFields.timestamp: FieldValue.serverTimestamp(),
-              AppFields.status: 'available',
+              'lat': pos.latitude,
+              'lng': pos.longitude,
+              'timestamp': FieldValue.serverTimestamp(),
+              'status': 'available',
             });
 
+        // If in a ride, mirror location to ride doc & path
         if (_activeRideId != null) {
           await _firestore
-              .collection(AppPaths.ridesCollection)
+              .collection('rides')
               .doc(_activeRideId)
               .update({
-                AppFields.driverLat: pos.latitude,
-                AppFields.driverLng: pos.longitude,
+                'driverLat': pos.latitude,
+                'driverLng': pos.longitude,
               });
 
           await _firestore
-              .collection(AppPaths.locationsCollection)
+              .collection('locations')
               .doc(_activeRideId)
               .collection('driver')
               .doc(uid)
               .collection('positions')
               .doc(now.toIso8601String())
               .set({
-                AppFields.lat: pos.latitude,
-                AppFields.lng: pos.longitude,
-                AppFields.timestamp: FieldValue.serverTimestamp(),
+                'lat': pos.latitude,
+                'lng': pos.longitude,
+                'timestamp': FieldValue.serverTimestamp(),
               });
         }
 
+        // Cache last written state
         _lastPosition = pos;
         _lastGeoHash = hash;
         _lastWriteTime = now;
@@ -483,6 +542,7 @@ class DriverLocationService {
     });
   }
 
+  // Simple distance check to avoid updates when driver barely moved (~5 meters)
   bool _isPositionClose(Position a, Position b, [double thresholdMeters = 5]) {
     final distance = Geolocator.distanceBetween(
       a.latitude,
@@ -493,18 +553,22 @@ class DriverLocationService {
     return distance < thresholdMeters;
   }
 
+  /// Pause location updates without canceling subscription (useful on temporary offline states)
   void pause() {
     _isPaused = true;
   }
 
+  /// Resume location updates if paused
   void resume() {
     _isPaused = false;
   }
 
+  /// Set or clear the active ride ID to start/stop mirroring location to ride documents
   void setActiveRide(String? rideId) {
     _activeRideId = rideId;
   }
 
+  /// Stops location updates, removes RTDB and Firestore presence, disables background execution
   Future<void> goOffline() async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -512,25 +576,30 @@ class DriverLocationService {
     _activeRideId = null;
     _isPaused = true;
 
+    // Cancel position subscription & timers
     await _positionSub?.cancel();
     _positionSub = null;
     _retryTimer?.cancel();
     _debounceTimer?.cancel();
 
     try {
-      await _rtdb.child('${AppPaths.driversOnline}/$uid').remove();
-      await _rtdb.child('${AppPaths.driverLocations}/$uid').remove();
+      // Remove from drivers_online in Firestore
+      await _firestore.collection('drivers_online').doc(uid).delete();
+      // Remove from RTDB
+      await _rtdb.child('driversOnline/$uid').remove();
+      await _rtdb.child('driverLocations/$uid').remove();
 
+      // Optional breadcrumb in Firestore marking offline
       await _firestore
           .collection('users')
           .doc(uid)
-          .collection(AppPaths.driverLocations)
+          .collection('driverLocations')
           .doc(DateTime.now().toIso8601String())
           .set({
-            AppFields.lat: 0.0,
-            AppFields.lng: 0.0,
-            AppFields.timestamp: FieldValue.serverTimestamp(),
-            AppFields.status: 'offline',
+            'lat': 0.0,
+            'lng': 0.0,
+            'timestamp': FieldValue.serverTimestamp(),
+            'status': 'offline',
           });
     } catch (e) {
       if (kDebugMode) debugPrint('[Location] Remove failed: $e');
@@ -546,6 +615,7 @@ class DriverLocationService {
     }
   }
 
+  /// Dispose method for cleaning up streams and timers
   Future<void> dispose() async {
     await _positionSub?.cancel();
     await _positionController.close();
@@ -559,16 +629,16 @@ class DriverService {
   final _fire = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
   final _rtdb = FirebaseDatabase.instance.ref();
-  final Connectivity _connectivity = Connectivity();
+  final _loc = DriverLocationService();
 
   Stream<DocumentSnapshot<Map<String, dynamic>>?> listenActiveRide() {
     final user = _auth.currentUser;
     if (user == null) return const Stream.empty();
 
     final q = _fire
-        .collection(AppPaths.ridesCollection)
-        .where(AppFields.driverId, isEqualTo: user.uid)
-        .where(AppFields.status, whereIn: RideStatus.ongoingSet.toList())
+        .collection('rides')
+        .where('driverId', isEqualTo: user.uid)
+        .where('status', whereIn: ['accepted', 'driver_arrived', 'in_progress'])
         .limit(1);
 
     return q.snapshots().map((snap) {
@@ -577,64 +647,64 @@ class DriverService {
     });
   }
 
+  // ACCEPT
   Future<void> acceptRide(String rideId, PendingRequest? contextData) async {
     final user = _auth.currentUser;
     if (user == null) {
       throw FirebaseAuthException(code: 'no-user', message: 'Not logged in');
     }
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
     final driverId = user.uid;
 
+    // read driver name once
     final userDoc = await _fire.collection('users').doc(driverId).get();
-    final driverName = userDoc.data()?[AppFields.username] ?? 'Unknown Driver';
+    final driverName = userDoc.data()?['username'] ?? 'Unknown Driver';
 
+    // 1) Atomic accept in Firestore
     await _fire.runTransaction((tx) async {
-      final docRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
+      final docRef = _fire.collection('rides').doc(rideId);
       final snap = await tx.get(docRef);
-      if (!snap.exists) throw Exception('Ride not found');
       final currentStatus = snap.data()?['status'];
 
-      if (currentStatus != RideStatus.pending) {
-        throw Exception('Ride already taken or invalid state');
+      if (currentStatus != 'pending') {
+        throw Exception('Ride already taken');
       }
 
       tx.update(docRef, {
-        AppFields.driverId: driverId,
-        AppFields.status: RideStatus.accepted,
-        AppFields.acceptedAt: FieldValue.serverTimestamp(),
+        'driverId': driverId,
+        'status': 'accepted',
+        'acceptedAt': FieldValue.serverTimestamp(),
         'driverName': driverName,
         if (contextData != null) ...{
-          AppFields.pickupLat: contextData.pickupLat,
-          AppFields.pickupLng: contextData.pickupLng,
-          AppFields.dropoffLat: contextData.dropoffLat,
-          AppFields.dropoffLng: contextData.dropoffLng,
+          'pickupLat': contextData.pickupLat,
+          'pickupLng': contextData.pickupLng,
+          'dropoffLat': contextData.dropoffLat,
+          'dropoffLng': contextData.dropoffLng,
         },
       });
     });
 
-    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-      AppFields.status: RideStatus.accepted,
+    // 2) Mirror to RTDB live node
+    await _rtdb.child('ridesLive/$rideId').update({
+      'status': 'accepted',
       'driverId': driverId,
       'updatedAt': ServerValue.timestamp,
     });
 
+    // 3) Remove this ride from pending queues (best-effort)
     try {
-      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
-      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
-    } catch (e) {
-      if (kDebugMode) debugPrint('[DriverService] Pending queue removal failed: $e');
-    }
+      await _rtdb.child('ridesPendingA/$rideId').remove();
+      await _rtdb.child('ridesPendingB/$rideId').remove();
+    } catch (_) {}
 
+    // 4) Fan-out delete the notification from ALL drivers (optional but recommended)
     try {
-      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
+      final notifsSnap = await _rtdb.child('driverNotifications').get();
       final updates = <String, Object?>{};
       if (notifsSnap.exists && notifsSnap.value is Map) {
         final map = notifsSnap.value as Map;
         map.forEach((driverKey, ridesMap) {
           if (ridesMap is Map && ridesMap.containsKey(rideId)) {
-            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] = null;
+            updates['driverNotifications/$driverKey/$rideId'] = null;
           }
         });
       }
@@ -642,207 +712,167 @@ class DriverService {
         await _rtdb.update(updates);
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[DriverService.acceptRide] Fan-out delete failed: $e');
+      if (kDebugMode) {
+        print('[DriverService.acceptRide] Fan-out delete failed: $e');
+      }
     }
 
-    final riderId = (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-        .data()?[AppFields.riderId];
+    // 5) Notify rider (best-effort)
+    final riderId = (await _fire.collection('rides').doc(rideId).get())
+        .data()?['riderId'];
     if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: OfferType.rideAccepted,
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
+      await _rtdb.child('notifications/$riderId').push().set({
+        'type': 'ride_accepted',
+        'rideId': rideId,
+        'timestamp': ServerValue.timestamp,
       });
     }
     try {
       await _rtdb
-          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
+          .child('driverNotifications/$driverId/$rideId')
           .remove();
-    } catch (e) {
-      if (kDebugMode) debugPrint('[DriverService] Notification removal failed: $e');
-    }
+    } catch (_) {}
+
+    // 6) Update active ride ID but keep streaming to drivers_online
+    _loc.setActiveRide(rideId);
+    await _loc.startOnlineMode(rideId: rideId);
   }
 
+  // COUNTER
   Future<void> proposeCounterFare(String rideId, double newFare) async {
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
-    final user = _auth.currentUser;
-    if (user == null) throw Exception('Not logged in');
-    final driverId = user.uid;
+    final fire = FirebaseFirestore.instance;
+    final rtdb = FirebaseDatabase.instance.ref();
+    final rideRef = fire.collection('rides').doc(rideId);
 
     String riderId = '';
-    final rideRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
 
-    await _fire.runTransaction((txn) async {
+    await fire.runTransaction((txn) async {
       final snap = await txn.get(rideRef);
       if (!snap.exists) throw Exception('Ride not found');
-      final data = snap.data()!;
-      final status = data[AppFields.status] ?? '';
-      riderId = data[AppFields.riderId] ?? '';
-      if (status == RideStatus.cancelled || status == RideStatus.completed) {
+      final data = snap.data() as Map<String, dynamic>;
+
+      final status = (data['status'] ?? '').toString();
+      riderId = (data['riderId'] ?? '').toString();
+      if (status == 'cancelled' || status == 'completed') {
         throw Exception('Ride is no longer active');
       }
 
+      final me = FirebaseAuth.instance.currentUser!.uid;
       txn.update(rideRef, {
         'counterFare': newFare,
         'counterProposedAt': FieldValue.serverTimestamp(),
-        'counterDriverId': driverId,
+        'counterDriverId': me,
       });
     });
+    final me = FirebaseAuth.instance.currentUser!.uid;
+    final now = ServerValue.timestamp;
 
-    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
+    await rtdb.child('ridesLive/$rideId').update({
       'counterFare': newFare,
-      'counterDriverId': driverId,
-      'updatedAt': ServerValue.timestamp,
+      'counterDriverId': me,
+      'updatedAt': now,
     });
 
     if (riderId.isNotEmpty) {
-      await _rtdb.child('rides/$riderId/$rideId').update({
+      await rtdb.child('rides/$riderId/$rideId').update({
         'counterFare': newFare,
-        'counterDriverId': driverId,
-        'updatedAt': ServerValue.timestamp,
+        'counterDriverId': me,
+        'updatedAt': now,
       });
 
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+      await rtdb.child('rider_notifications/$riderId/$rideId').set({
         'rideId': rideId,
-        'action': OfferType.counterFare,
+        'action': 'COUNTER',
         'counterFare': newFare,
+        'timestamp': now,
+      });
+    }
+  }
+
+  // STATUS (accepted -> driver_arrived -> in_progress -> completed)
+  Future<void> updateRideStatus(String rideId, String newStatus) async {
+    await _fire.collection('rides').doc(rideId).update({
+      'status': newStatus,
+      '${newStatus}At': FieldValue.serverTimestamp(),
+    });
+
+    await _rtdb.child('ridesLive/$rideId').update({
+      'status': newStatus,
+      'updatedAt': ServerValue.timestamp,
+    });
+
+    final riderId = (await _fire.collection('rides').doc(rideId).get())
+        .data()?['riderId'];
+    if (riderId != null) {
+      await _rtdb.child('notifications/$riderId').push().set({
+        'type': 'status_update',
+        'status': newStatus,
+        'rideId': rideId,
         'timestamp': ServerValue.timestamp,
       });
     }
 
-    try {
-      final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/ride/counter-fare'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'rideId': rideId,
-          'driverUid': driverId,
-          'counterFare': newFare,
-          'riderId': riderId,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        if (kDebugMode) debugPrint('Vercel counter fare call failed: ${response.body}');
-      } else {
-        final responseData = jsonDecode(response.body);
-        if (responseData['ok'] == true && responseData['counterFare'] != null) {
-          await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-            'counterFare': responseData['counterFare'],
-            'updatedAt': ServerValue.timestamp,
-          });
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error calling Vercel for counter fare: $e');
-    }
+    // Ensure driver remains online after status updates
+    await _loc.startOnlineMode(rideId: rideId);
   }
 
-  Future<void> syncCounterWithServer(String rideId) async {
-    try {
-      final response = await http.get(
-        Uri.parse('https://fem-drive.vercel.app/ride/counter-fare/$rideId'),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['ok'] == true && data['counterFare'] != null) {
-          await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-            'counterFare': data['counterFare'],
-            'updatedAt': ServerValue.timestamp,
-          });
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error syncing counter with server: $e');
-    }
-  }
-
-  Future<void> updateRideStatus(String rideId, String newStatus) async {
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
-    if (!RideStatus.ongoingSet.contains(newStatus) && newStatus != RideStatus.completed) {
-      throw Exception('Invalid status transition');
-    }
-
-    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      AppFields.status: newStatus,
-      '${newStatus}At': FieldValue.serverTimestamp(),
-    });
-
-    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-      AppFields.status: newStatus,
-      'updatedAt': ServerValue.timestamp,
-    });
-
-    final riderId = (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-        .data()?[AppFields.riderId];
-    if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: OfferType.statusUpdate,
-        AppFields.status: newStatus,
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
-      });
-    }
-  }
-
+  // CANCEL
   Future<void> cancelRide(String rideId) async {
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
-    final doc = await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
-    final riderId = doc.data()?[AppFields.riderId];
+    final doc = await _fire.collection('rides').doc(rideId).get();
+    final riderId = doc.data()?['riderId'];
 
-    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      AppFields.status: RideStatus.cancelled,
-      AppFields.driverId: FieldValue.delete(),
+    await _fire.collection('rides').doc(rideId).update({
+      'status': 'cancelled',
+      'driverId': FieldValue.delete(),
       'driverName': FieldValue.delete(),
-      AppFields.cancelledAt: FieldValue.serverTimestamp(),
+      'cancelledAt': FieldValue.serverTimestamp(),
     });
 
-    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-      AppFields.status: RideStatus.cancelled,
+    await _rtdb.child('ridesLive/$rideId').update({
+      'status': 'cancelled',
       'updatedAt': ServerValue.timestamp,
     });
 
     if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: OfferType.rideCancelled,
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
+      await _rtdb.child('notifications/$riderId').push().set({
+        'type': 'ride_cancelled',
+        'rideId': rideId,
+        'timestamp': ServerValue.timestamp,
       });
     }
+
+    // Clear active ride ID and ensure driver remains online
+    _loc.setActiveRide(null);
+    await _loc.startOnlineMode();
   }
 
+  // COMPLETE
   Future<void> completeRide(String rideId, double finalFare) async {
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
-    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
-      AppFields.status: RideStatus.completed,
-      AppFields.completedAt: FieldValue.serverTimestamp(),
-      AppFields.finalFare: finalFare,
-      AppFields.paymentStatus: 'processed',
+    await _fire.collection('rides').doc(rideId).update({
+      'status': 'completed',
+      'completedAt': FieldValue.serverTimestamp(),
+      'finalFare': finalFare,
+      'paymentStatus': 'processed',
     });
 
-    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
-      AppFields.status: RideStatus.completed,
+    await _rtdb.child('ridesLive/$rideId').update({
+      'status': 'completed',
       'updatedAt': ServerValue.timestamp,
     });
 
-    final riderId = (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-        .data()?[AppFields.riderId];
+    final riderId = (await _fire.collection('rides').doc(rideId).get())
+        .data()?['riderId'];
     if (riderId != null) {
-      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: OfferType.rideCompleted,
-        AppFields.rideId: rideId,
-        AppFields.timestamp: ServerValue.timestamp,
+      await _rtdb.child('notifications/$riderId').push().set({
+        'type': 'ride_completed',
+        'rideId': rideId,
+        'timestamp': ServerValue.timestamp,
       });
     }
+
+    // Clear active ride ID and ensure driver remains online
+    _loc.setActiveRide(null);
+    await _loc.startOnlineMode();
   }
 
   Future<void> declineRide(String rideId) async {
@@ -850,40 +880,48 @@ class DriverService {
     if (user == null) {
       throw FirebaseAuthException(code: 'no-user', message: 'Not logged in');
     }
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
     final driverId = user.uid;
 
+    // 1) Remove ONLY this driver's local popup
     try {
       await _rtdb
-          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
+          .child('driverNotifications/$driverId/$rideId')
           .remove();
     } catch (e) {
-      if (kDebugMode) debugPrint('[DriverService.declineRide] Remove my notif failed: $e');
+      if (kDebugMode) {
+        print('[DriverService.declineRide] Remove my notif failed: $e');
+      }
     }
 
+    // 2) Optional rider heads-up (no status change)
     try {
-      final rideSnap = await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
-      final riderId = rideSnap.data()?[AppFields.riderId];
+      final rideSnap = await _fire.collection('rides').doc(rideId).get();
+      final riderId = rideSnap.data()?['riderId'];
       if (riderId != null) {
-        await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-          AppFields.type: OfferType.rideDeclined,
-          AppFields.rideId: rideId,
-          AppFields.timestamp: ServerValue.timestamp,
-          'by': driverId,
+        await _rtdb.child('notifications/$riderId').push().set({
+          'type': 'ride_declined',
+          'rideId': rideId,
+          'timestamp': ServerValue.timestamp,
+          'by': driverId, // optional attribution
         });
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[DriverService.declineRide] Rider notify failed: $e');
+      if (kDebugMode) {
+        print('[DriverService.declineRide] Rider notify failed: $e');
+      }
     }
+
+    // 3) DO NOT modify rides/{rideId} or ridesLive/{rideId}
+    // 4) DO NOT remove from global pending queues or other drivers’ notifications
   }
 
-  Future<void> sendMessage(String rideId, String message, String senderId) async {
+  // RTDB chat under /rides/{rideId}/messages
+  Future<void> sendMessage(
+    String rideId,
+    String message,
+    String senderId,
+  ) async {
     if (rideId.isEmpty || message.trim().isEmpty) return;
-    if (!await _checkConnectivity()) {
-      throw Exception('No network connectivity');
-    }
 
     try {
       final response = await http.post(
@@ -899,11 +937,12 @@ class DriverService {
         throw Exception('Failed to send message: ${response.body}');
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Error sending message: $e');
+      debugPrint('Error sending message: $e');
       rethrow;
     }
   }
 
+  // Stream of messages (unchanged)
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
     return _rtdb
         .child('rides/$rideId/messages')
@@ -912,21 +951,21 @@ class DriverService {
           final v = event.snapshot.value as Map?;
           if (v == null) return [];
           return v.entries
-              .map((e) => Map<String, dynamic>.from(e.value as Map)..['id'] = e.key)
+              .map(
+                (e) =>
+                    Map<String, dynamic>.from(e.value as Map)..['id'] = e.key,
+              )
               .toList();
         });
   }
-
-  Future<bool> _checkConnectivity() async {
-    final result = await _connectivity.checkConnectivity();
-    return !result.contains(ConnectivityResult.none);
-  }
 }
 
-final driverDashboardProvider = StateNotifierProvider<
-    DriverDashboardController, AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>>(
-  (ref) => DriverDashboardController(ref),
-);
+// State / providers
+final driverDashboardProvider =
+    StateNotifierProvider<
+      DriverDashboardController,
+      AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>
+    >((ref) => DriverDashboardController(ref));
 
 final _authGlobal = FirebaseAuth.instance;
 
@@ -981,12 +1020,13 @@ class DriverDashboardController
   }
 }
 
+// ---------------- Driver Map widget (polyline adapter added) -----------------
 class DriverMapWidget extends ConsumerStatefulWidget {
   final Map<String, dynamic> rideData;
   final void Function(GoogleMapController) onMapCreated;
   final Function(String newStatus) onStatusChange;
   final VoidCallback onComplete;
-  final VoidCallback onContactRider;
+  final VoidCallback onContactRider; // NEW
 
   const DriverMapWidget({
     super.key,
@@ -1006,7 +1046,6 @@ class _StepInfo {
   final String html, maneuver;
   final int distanceM;
   final List<LatLng> points;
-
   _StepInfo({
     required this.start,
     required this.end,
@@ -1017,14 +1056,17 @@ class _StepInfo {
   });
 }
 
-class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
-    with TickerProviderStateMixin {
-  double _distanceFromPolyline(LatLng p, List<LatLng> line, {int startIndex = 0}) {
+class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
+  double _distanceFromPolyline(
+    LatLng p,
+    List<LatLng> line, {
+    int startIndex = 0,
+  }) {
     if (line.length < 2) return double.infinity;
     double best = double.infinity;
     for (int i = startIndex; i < line.length - 1; i++) {
       best = math.min(best, _distanceToSegment(p, line[i], line[i + 1]));
-      if (i - startIndex > 200 && best < 10) break;
+      if (i - startIndex > 200 && best < 10) break; // perf window
     }
     return best;
   }
@@ -1047,6 +1089,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
   static const int _rerouteCooldownSec = 8;
 
   DateTime? _lastRerouteAt;
+  // Add this helper near the top of the class
   bool get _showRideActions =>
       _status == RideStatus.accepted ||
       _status == RideStatus.driverArrived ||
@@ -1076,21 +1119,31 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
     return true;
   }
 
+  // --- live position subscription
   StreamSubscription<Position>? _posSub;
+
+  // --- route state
   List<LatLng> _route = [];
   List<LatLng> _routeCovered = [];
   List<LatLng> _routeRemaining = [];
   Polyline? _polylineRemaining;
   Polyline? _polylineCovered;
+
   int _nearestIdx = 0;
+
   List<_StepInfo> _steps = [];
   int _currentStep = 0;
   String? _turnBanner;
+
+  // --- endpoints & status
   late final LatLng _pickup;
   late final LatLng _dropoff;
   String _status = RideStatus.accepted;
+
+  // --- map / ui state
   GoogleMapController? _mapController;
   Set<Marker> _markers = {};
+  // ignore: unused_field
   Position? _currentPosition;
   String? _eta;
   bool _loadingRoute = true;
@@ -1098,14 +1151,11 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
   bool _emergencyBusy = false;
   Timer? _pickupTimer;
   bool _timerExpired = false;
-  late AnimationController _fadeController;
-  late Animation<double> _fadeAnimation;
-  late AnimationController _slideController;
-  late Animation<Offset> _slideAnimation;
 
   @override
   void initState() {
     super.initState();
+
     _pickup = LatLng(
       (widget.rideData[AppFields.pickupLat] as num).toDouble(),
       (widget.rideData[AppFields.pickupLng] as num).toDouble(),
@@ -1114,24 +1164,8 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       (widget.rideData[AppFields.dropoffLat] as num).toDouble(),
       (widget.rideData[AppFields.dropoffLng] as num).toDouble(),
     );
-    _status = widget.rideData[AppFields.status] ?? RideStatus.accepted;
-
-    _fadeController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-    _fadeAnimation = CurvedAnimation(parent: _fadeController, curve: Curves.easeIn);
-    _slideController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.2),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _slideController, curve: Curves.easeOut));
-
-    _fadeController.forward();
-    _slideController.forward();
+    _status =
+        (widget.rideData[AppFields.status] as String?) ?? RideStatus.accepted;
 
     _markers = {
       Marker(
@@ -1146,6 +1180,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       ),
     };
 
+    // live position → follow, progress, light reroute
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
@@ -1153,14 +1188,16 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       ),
     ).listen(_onPosition);
 
-    _fetchRoute();
+    _fetchRoute(); // initial route for current leg
   }
 
+  // === live position handler =================================================
   void _onPosition(Position pos) async {
     if (!mounted) return;
     _currentPosition = pos;
     final me = LatLng(pos.latitude, pos.longitude);
 
+    // update driver marker + bearing toward next remaining point
     final bearing = _bearingFromRouteOrLast(me);
     setState(() {
       _markers = {
@@ -1175,12 +1212,14 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       };
     });
 
+    // camera: behind-the-car, tilted, smooth
     _mapController?.animateCamera(
       CameraUpdate.newCameraPosition(
         CameraPosition(target: me, zoom: 17.0, tilt: 45.0, bearing: bearing),
       ),
     );
 
+    // progress: trim covered / keep remaining
     if (_route.isNotEmpty) {
       final idx = _nearestRouteIndex(me, startFrom: _nearestIdx);
       if (idx >= _nearestIdx) {
@@ -1189,39 +1228,46 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       }
     }
 
+    // light off-route detection + cooldowned reroute
     if (_route.isNotEmpty) {
       final d = _distanceFromPolyline(me, _route, startIndex: _nearestIdx);
       final now = DateTime.now();
-      final cool = _lastRerouteAt == null ||
+      final cool =
+          _lastRerouteAt == null ||
           now.difference(_lastRerouteAt!).inSeconds > _rerouteCooldownSec;
 
       if (d > _offRouteMeters && cool) {
         _lastRerouteAt = now;
         final target =
             (_status == RideStatus.inProgress || _status == RideStatus.onTrip)
-                ? _dropoff
-                : _pickup;
+            ? _dropoff
+            : _pickup;
         await _refetchFromPos(me, target);
       }
     }
 
+    // lite turn-by-turn banner (optional if steps available)
     _updateStepBanner(me);
   }
 
+  // === route building for current leg =======================================
   Future<void> _fetchRoute() async {
     setState(() => _loadingRoute = true);
     try {
+      // Determine leg
       final pos = await Geolocator.getCurrentPosition();
       final isTrip =
           (_status == RideStatus.inProgress || _status == RideStatus.onTrip);
-      final origin = isTrip ? _pickup : LatLng(pos.latitude, pos.longitude);
+      final origin = isTrip
+          ? _pickup /* already at pickup when trip starts */
+          : LatLng(pos.latitude, pos.longitude);
       final dest = isTrip ? _dropoff : _pickup;
 
       final dir = DirectionsHttp(googleMapsApiKey);
       final payload = await dir.fetchRoute(origin, dest);
 
-      final points = payload['points'] as List<LatLng>;
-      final rawSteps = payload['steps'] as List;
+      final points = (payload['points'] as List<LatLng>);
+      final rawSteps = (payload['steps'] as List);
 
       if (points.isEmpty) {
         if (mounted) {
@@ -1232,6 +1278,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
         return;
       }
 
+      // Map into your structures
       _route = points;
       _nearestIdx = 0;
       _rebuildProgressPolylines(cutAt: 0);
@@ -1247,24 +1294,24 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
           html: (m['primaryText'] as String?) ?? '',
           maneuver: (m['maneuver'] as String?) ?? '',
           distanceM: (m['distanceM'] as num?)?.toInt() ?? 0,
-          points: const <LatLng>[],
+          points: const <LatLng>[], // optional per-step polyline
         );
       }).toList();
 
+      // ETA text from totalSeconds
       final totalSeconds = (payload['totalSeconds'] as int?) ?? 0;
       String? etaText;
       if (totalSeconds > 0) {
         final mins = (totalSeconds / 60).round();
         etaText = mins >= 60 ? '${mins ~/ 60}h ${mins % 60}m' : '$mins min';
       }
-      if (mounted) {
-        setState(() {
-          _eta = etaText;
-          _loadingRoute = false;
-          _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
-        });
-      }
+      setState(() {
+        _eta = etaText;
+        _loadingRoute = false;
+        _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+      });
 
+      // Push ETA to RTDB (unchanged)
       final rideId = widget.rideData['rideId'] as String?;
       final etaSecs = totalSeconds;
       if (rideId != null && etaSecs > 0) {
@@ -1274,8 +1321,9 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Route error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Route error: $e')));
       }
     } finally {
       if (mounted) setState(() => _loadingRoute = false);
@@ -1288,14 +1336,14 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       final dir = DirectionsHttp(googleMapsApiKey);
       final payload = await dir.fetchRoute(from, to);
 
-      final points = payload['points'] as List<LatLng>;
+      final points = (payload['points'] as List<LatLng>);
       if (points.isEmpty) return;
 
       _route = points;
       _nearestIdx = 0;
       _rebuildProgressPolylines(cutAt: 0);
 
-      final rawSteps = payload['steps'] as List;
+      final rawSteps = (payload['steps'] as List);
       _steps = rawSteps.map<_StepInfo>((m) {
         final s = LatLng(
           ((m['end']?['lat'] as num?) ?? 0).toDouble(),
@@ -1311,20 +1359,21 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
         );
       }).toList();
 
-      if (mounted) {
-        setState(() {
-          _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
-        });
-      }
+      setState(() {
+        _turnBanner = _steps.isNotEmpty ? _stripHtml(_steps.first.html) : null;
+      });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Reroute failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Reroute failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _loadingRoute = false);
     }
   }
+
+  // === helpers ==============================================================
 
   int _nearestRouteIndex(LatLng p, {int startFrom = 0}) {
     if (_route.isEmpty) return 0;
@@ -1337,7 +1386,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
         best = d;
         bestIdx = i;
       }
-      if (i - startFrom > 200) break;
+      if (i - startFrom > 200) break; // small window for perf
     }
     return bestIdx;
   }
@@ -1352,12 +1401,13 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
   }
 
   double _bearingBetween(LatLng a, LatLng b) {
-    double toRad(double deg) => deg * (math.pi / 180.0);
-    double toDeg(double rad) => rad * (180.0 / math.pi);
+    double toRad(double deg) => deg * (3.141592653589793 / 180.0);
+    double toDeg(double rad) => rad * (180.0 / 3.141592653589793);
     final lat1 = toRad(a.latitude), lat2 = toRad(b.latitude);
     final dLon = toRad(b.longitude - a.longitude);
     final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
     final brng = toDeg(math.atan2(y, x));
     return (brng + 360.0) % 360.0;
@@ -1386,7 +1436,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
     _polylineCovered = Polyline(
       polylineId: const PolylineId('covered'),
       points: _routeCovered,
-      color: const Color(0xFF90B6FF),
+      color: Colors.grey,
       width: 6,
       startCap: Cap.roundCap,
       endCap: Cap.roundCap,
@@ -1395,17 +1445,20 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
     _polylineRemaining = Polyline(
       polylineId: const PolylineId('remaining'),
       points: _routeRemaining,
-      color: const Color(0xFF1A57E8),
+      color: Colors.blueAccent,
       width: 6,
       startCap: Cap.roundCap,
       endCap: Cap.roundCap,
       jointType: JointType.round,
     );
-    if (mounted) setState(() {});
+    setState(() {}); // trigger repaint
   }
 
   String _stripHtml(String s) {
-    return s.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', ' ').trim();
+    return s
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll('&nbsp;', ' ')
+        .trim();
   }
 
   void _updateStepBanner(LatLng me) {
@@ -1421,6 +1474,8 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
     _turnBanner = _stripHtml(_steps[_currentStep].html);
   }
 
+  // === status progression ====================================================
+  // accepted -> driver_arrived -> in_progress -> completed
   Future<void> _progressStatus() async {
     if (_statusBusy) return;
 
@@ -1456,11 +1511,14 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
         showRideCompleted(rideId: widget.rideData['rideId'] as String);
       }
 
+      // rebuild route when switching leg (current→pickup or pickup→dropoff)
       await _fetchRoute();
 
       if (next == RideStatus.completed) {
         final distance = await DirectionsService.getDistance(_pickup, _dropoff);
-        final fares = ref.read(faresConfigProvider).asData?.value ?? {'base': 5.0, 'perKm': 1.0};
+        final fares =
+            ref.read(faresConfigProvider).asData?.value ??
+            {'base': 5.0, 'perKm': 1.0};
         final finalFare = fares['base']! + distance * fares['perKm']!;
         await ref
             .read(driverDashboardProvider.notifier)
@@ -1469,24 +1527,28 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Status update failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Status update failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _statusBusy = false);
     }
   }
 
+  // === pickup timer ==========================================================
   void _startPickupTimer() {
     _pickupTimer?.cancel();
     _pickupTimer = Timer(const Duration(minutes: 5), () {
       if (!mounted) return;
       setState(() => _timerExpired = true);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Pickup time expired.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pickup time expired.')));
     });
   }
 
+  // === emergency =============================================================
   Future<void> _sendEmergency() async {
     if (_emergencyBusy) return;
 
@@ -1494,7 +1556,9 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Confirm Emergency'),
-        content: const Text('Are you sure you want to send an emergency alert?'),
+        content: const Text(
+          'Are you sure you want to send an emergency alert?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1528,23 +1592,25 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
         otherUid: otherUid,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Emergency sent')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Emergency sent')));
         showEmergencyAlert(rideId: widget.rideData['rideId'] as String);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Emergency failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Emergency failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _emergencyBusy = false);
     }
   }
 
+  // === build ================================================================
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Stack(
       children: [
         GoogleMap(
@@ -1564,217 +1630,162 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
-        if (_loadingRoute)
-          const Center(
-            child: CircularProgressIndicator(),
-          ),
+
+        if (_loadingRoute) const Center(child: CircularProgressIndicator()),
+
+        // ETA + turn banner
         if (!_loadingRoute)
           Positioned(
             top: 20,
             left: 20,
             right: 20,
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: SlideTransition(
-                position: _slideAnimation,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface.withValues(alpha: 0.8),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white70,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_turnBanner != null)
+                      Text(
+                        _turnBanner!,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_turnBanner != null)
-                          Text(
-                            _turnBanner!,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                        if (_eta != null)
-                          Text(
-                            'ETA: $_eta',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+                    if (_eta != null)
+                      Text(
+                        'ETA: $_eta',
+                        style: const TextStyle(color: Colors.black54),
+                      ),
+                  ],
                 ),
               ),
             ),
           ),
+
+        // ---- Modern 4-button overlay: Primary + (Emergency | Cancel | Contact rider)
         if (_showRideActions)
           Positioned(
             bottom: 16,
             left: 16,
             right: 16,
             child: SafeArea(
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: SlideTransition(
-                  position: _slideAnimation,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _primaryEnabled() ? _progressStatus : null,
+                      child: _statusBusy
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(_primaryLabel()),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
                     children: [
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: _primaryEnabled() ? _progressStatus : null,
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
+                      // Emergency
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
                           ),
-                          child: _statusBusy
+                          onPressed: _emergencyBusy ? null : _sendEmergency,
+                          child: _emergencyBusy
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : Text(
-                                  _primaryLabel(),
-                                  style: theme.textTheme.labelLarge,
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: theme.colorScheme.error,
-                                side: BorderSide(color: theme.colorScheme.error),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                              ),
-                              onPressed: _emergencyBusy ? null : _sendEmergency,
-                              child: _emergencyBusy
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : Text(
-                                      'SOS',
-                                      style: theme.textTheme.labelLarge?.copyWith(
-                                        color: theme.colorScheme.error,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                              ),
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (_) => AlertDialog(
-                                    title: const Text('Cancel Ride'),
-                                    content: const Text(
-                                        'Are you sure you want to cancel this ride?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, false),
-                                        child: const Text('No'),
-                                      ),
-                                      ElevatedButton(
-                                        onPressed: () => Navigator.pop(context, true),
-                                        child: const Text('Yes'),
-                                      ),
-                                    ],
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
                                   ),
-                                );
-                                if (confirm == true) {
-                                  await ref
-                                      .read(driverDashboardProvider.notifier)
-                                      .cancelRide(widget.rideData['rideId'] as String);
-                                  // ignore: use_build_context_synchronously
-                                  if (mounted) Navigator.of(context).maybePop();
-                                }
-                              },
-                              child: Text(
-                                'Cancel',
-                                style: theme.textTheme.labelLarge,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: FilledButton.tonal(
-                              onPressed: widget.onContactRider,
-                              style: FilledButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              child: Text(
-                                'Contact',
-                                style: theme.textTheme.labelLarge,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (_status == RideStatus.accepted && !_nearPickup())
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Move closer to pickup to continue',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
+                                )
+                              : const Text('SOS'),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Cancel
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Cancel Ride'),
+                                content: const Text(
+                                  'Are you sure you want to cancel this ride?',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('No'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Yes'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              await ref
+                                  .read(driverDashboardProvider.notifier)
+                                  .cancelRide(
+                                    widget.rideData['rideId'] as String,
+                                  );
+                              // ignore: use_build_context_synchronously
+                              if (mounted) Navigator.of(context).maybePop();
+                            }
+                          },
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Contact rider
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: widget.onContactRider,
+                          child: const Text('Info'),
+                        ),
+                      ),
                     ],
                   ),
-                ),
+                  if (_status == RideStatus.accepted && !_nearPickup())
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        'Move closer to pickup to continue',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
+
         if (_timerExpired)
           Positioned(
             top: 60,
             left: 20,
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.amber.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(
-                    'Pickup timer expired!',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: Colors.amber.shade900,
-                    ),
-                  ),
-                ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.yellow.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Text('Pickup timer expired!'),
               ),
             ),
           ),
@@ -1787,12 +1798,11 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget>
     _pickupTimer?.cancel();
     _mapController?.dispose();
     _posSub?.cancel();
-    _fadeController.dispose();
-    _slideController.dispose();
     super.dispose();
   }
 }
 
+// -------------------- Feedback dialog & offers helpers (unchanged here) -----
 class FeedbackDialog extends StatefulWidget {
   final String rideId;
   final String riderId;
@@ -1816,9 +1826,8 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return AlertDialog(
-      title: Text('Rate This Ride', style: theme.textTheme.titleLarge),
+      title: const Text('Rate This Ride'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1832,12 +1841,7 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
           ),
           TextField(
             controller: comment,
-            decoration: InputDecoration(
-              labelText: 'Comments',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            decoration: const InputDecoration(labelText: 'Comments'),
           ),
         ],
       ),
@@ -1882,14 +1886,18 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
                     if (mounted) {
                       // ignore: use_build_context_synchronously
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Thank you for your feedback!')),
+                        const SnackBar(
+                          content: Text('Thank you for your feedback!'),
+                        ),
                       );
                     }
                   } catch (e) {
                     if (mounted) {
                       // ignore: use_build_context_synchronously
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed to submit feedback: $e')),
+                        SnackBar(
+                          content: Text('Failed to submit feedback: $e'),
+                        ),
                       );
                     }
                   } finally {
@@ -1902,7 +1910,7 @@ class _FeedbackDialogState extends State<FeedbackDialog> {
                   height: 20,
                   child: CircularProgressIndicator(),
                 )
-              : Text('Submit', style: theme.textTheme.labelLarge),
+              : const Text('Submit'),
         ),
       ],
     );
@@ -1940,7 +1948,8 @@ class DriverOffer {
       dropoffLat: d(data[AppFields.dropoffLat]),
       dropoffLng: d(data[AppFields.dropoffLng]),
       fare: d(data[AppFields.fare]),
-      createdAtMs: (data[AppFields.timestamp] as num?)?.toInt() ??
+      createdAtMs:
+          (data[AppFields.timestamp] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
     );
   }
