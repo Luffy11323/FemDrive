@@ -730,20 +730,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   ],
                 ),
               ),
-            ridesAsync.when(
+ridesAsync.when(
               data: (rideData) {
                 if (rideData == null || rideData.isEmpty) {
                   return const SizedBox.shrink();
                 }
                 final ride = rideData;
-                // REPLACE THIS LINE:
-                // final status = (ride['status'] ?? '').toString();
-    
-                // WITH THIS (same logic as outer status):
-                final status = (live?.status.isNotEmpty == true)
-                    ? live!.status
-                    : (ride['status'] ?? '').toString();
-                switch (status) {
+                
+                // USE STATIC STATUS for switch/case logic (prevents rebuilds)
+                final staticStatus = (ride['status'] ?? '').toString();
+                
+                // Process ride status changes with STATIC status
+                switch (staticStatus) {
                   case 'accepted':
                     if (_acceptedNotified.add(ride['id'])) {
                       showAccepted(rideId: ride['id']);
@@ -823,6 +821,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   default:
                     break;
                 }
+                
+                // Return UI Stack - use OUTER 'status' for button visibility
                 return Stack(
                   children: [
                     Align(
