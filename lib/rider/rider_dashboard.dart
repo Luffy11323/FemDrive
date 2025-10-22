@@ -736,7 +736,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   return const SizedBox.shrink();
                 }
                 final ride = rideData;
-                final status = (ride['status'] ?? '').toString();
+                // REPLACE THIS LINE:
+                // final status = (ride['status'] ?? '').toString();
+    
+                // WITH THIS (same logic as outer status):
+                final status = (live?.status.isNotEmpty == true)
+                    ? live!.status
+                    : (ride['status'] ?? '').toString();
                 switch (status) {
                   case 'accepted':
                     if (_acceptedNotified.add(ride['id'])) {
