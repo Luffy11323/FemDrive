@@ -730,7 +730,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   ],
                 ),
               ),
-ridesAsync.when(
+            ridesAsync.when(
               data: (rideData) {
                 if (rideData == null || rideData.isEmpty) {
                   return const SizedBox.shrink();
