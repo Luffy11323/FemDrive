@@ -143,7 +143,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   LatLng? _lastDriverTick;
 
   // Add state variable for tracking sharing status
-  bool _isSharing = false; // NEW: Add this line here (around line 180, after _lastDriverTick)
+  bool _isSharing =
+      false; // NEW: Add this line here (around line 180, after _lastDriverTick)
 
   int _nearestIndex(List<LatLng> route, LatLng p) {
     if (route.isEmpty) return 0;
@@ -736,10 +737,10 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   return const SizedBox.shrink();
                 }
                 final ride = rideData;
-                
+
                 // USE STATIC STATUS for switch/case logic (prevents rebuilds)
                 final staticStatus = (ride['status'] ?? '').toString();
-                
+
                 // Process ride status changes with STATIC status
                 switch (staticStatus) {
                   case 'accepted':
@@ -821,7 +822,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                   default:
                     break;
                 }
-                
+
                 // Return UI Stack - use OUTER 'status' for button visibility
                 return Stack(
                   children: [
@@ -855,14 +856,22 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                   final shareService = ShareTripService();
                                   try {
                                     final url = await shareService.startSharing(
-                                        ride['id']);
-                                    await SharePlus.instance.share(ShareParams(text: 'Track my live trip location: $url'));
+                                      ride['id'],
+                                    );
+                                    await SharePlus.instance.share(
+                                      ShareParams(
+                                        text:
+                                            'Track my live trip location: $url',
+                                      ),
+                                    );
                                     setState(() {
                                       _isSharing = true;
                                     });
                                     if (mounted) {
                                       // ignore: use_build_context_synchronously
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         const SnackBar(
                                           content: Text(
                                             'Trip shared! Stop sharing below.',
@@ -874,10 +883,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     _logger.e('Failed to start sharing: $e');
                                     if (mounted) {
                                       // ignore: use_build_context_synchronously
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         SnackBar(
-                                            content:
-                                                Text('Failed to share trip: $e')),
+                                          content: Text(
+                                            'Failed to share trip: $e',
+                                          ),
+                                        ),
                                       );
                                     }
                                   }
@@ -890,15 +903,18 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           ),
                         ),
                       ), // NEW: End Share Trip button
-                    if (_isSharing && (status == 'in_progress' || status == 'onTrip'))
+                    if (_isSharing &&
+                        (status == 'in_progress' || status == 'onTrip'))
                       Positioned(
-                        bottom: 280, // NEW: Stop Sharing button, above Share Trip
+                        bottom:
+                            280, // NEW: Stop Sharing button, above Share Trip
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.stop),
                           label: const Text('Stop Sharing'),
                           onPressed: () async {
-                            final userId = FirebaseAuth.instance.currentUser?.uid;
+                            final userId =
+                                FirebaseAuth.instance.currentUser?.uid;
                             if (userId == null) return;
                             final shareService = ShareTripService();
                             await shareService.stopSharing(userId);
@@ -909,7 +925,8 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                               // ignore: use_build_context_synchronously
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                    content: Text('Stopped sharing trip.')),
+                                  content: Text('Stopped sharing trip.'),
+                                ),
                               );
                             }
                           },
@@ -935,58 +952,6 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         left: 16,
                         right: 16,
                         child: _RiderCancelButton(rideId: ride['id']),
-                      ),
-                    if (status != 'completed' && status != 'cancelled')
-                      Positioned(
-                        bottom: 56,
-                        left: 16,
-                        right: 16,
-                        child: FilledButton.tonalIcon(
-                          icon: const Icon(Icons.cancel),
-                          label: const Text('Cancel Ride'),
-                          onPressed: () async {
-                            try {
-                              final id = (ride['id'] as String?);
-                              if (id == null || id.isEmpty) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Ride is not initialized yet',
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return;
-                              }
-                              await ref
-                                  .read(riderDashboardProvider.notifier)
-                                  .cancelRide(id);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Ride cancelled'),
-                                  ),
-                                );
-                                showCancelledByRider(rideId: id);
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Failed to cancel: $e'),
-                                  ),
-                                );
-                              }
-                            }
-                          },
-                          style: FilledButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          minimumSize: const Size(300, 50), // Wider button
-                          ),
-                        ),
                       ),
                     if (_chatVisible(status))
                       Positioned(
@@ -1464,7 +1429,11 @@ class _RideFormState extends ConsumerState<RideForm> {
             RideTypePicker(
               options: const [
                 RideOption('Ride mini', 'Ride', Icons.directions_car_rounded),
-                RideOption('Ride X', 'Comfort', Icons.directions_car_filled_rounded),
+                RideOption(
+                  'Ride X',
+                  'Comfort',
+                  Icons.directions_car_filled_rounded,
+                ),
                 RideOption('Bike', 'EV/Scooty', Icons.electric_scooter_rounded),
               ],
               selected: _selectedRideType!,
@@ -1912,7 +1881,6 @@ class DriverDetailsWidget extends StatelessWidget {
     );
   }
 }
-
 
 /// ---------------- Receipt (shows when completed) ----------------
 class ReceiptWidget extends StatelessWidget {
