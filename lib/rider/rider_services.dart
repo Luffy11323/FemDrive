@@ -1065,7 +1065,7 @@ class ShareTripService {
 
     try {
       final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/trip/share'),
+        Uri.parse('$_apiBaseUrl/trip/share'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'rideId': rideId,
@@ -1109,7 +1109,7 @@ class ShareTripService {
 
     try {
       final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/trip/$_currentShareId/stop'),
+        Uri.parse('$_apiBaseUrl/trip/$_currentShareId/stop'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'userId': userId}),
       );
@@ -1132,7 +1132,7 @@ class ShareTripService {
   void _updateLocation(String shareId, Position position, String userId) async {
     try {
       final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/trip/$shareId/location'),
+        Uri.parse('$_apiBaseUrl/trip/$shareId/location'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'lat': position.latitude,

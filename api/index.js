@@ -5,7 +5,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash');
 const haversine = require('haversine-distance');
-
+const functions = require('firebase-functions');
 /// ──────────────────────────────────────────────────────────────────────────
 ///  Firebase Admin initialization
 /// ──────────────────────────────────────────────────────────────────────────
@@ -102,6 +102,27 @@ const AppFields = {
   reportedBy: 'reportedBy',
   otherUid: 'otherUid',
   etaSecs: 'etaSecs',
+  createdAt: 'createdAt',
+  role: 'role',
+  trustScore: 'trustScore',
+  requiresManualReview: 'requiresManualReview',
+  cnicNumber: 'cnicNumber',
+  cnicBase64: 'cnicBase64',
+  verifiedCnic: 'verifiedCnic',
+  documentsUploaded: 'documentsUploaded',
+  uploadTimestamp: 'uploadTimestamp',
+  carType: 'carType',
+  carModel: 'carModel',
+  altContact: 'altContact',
+  licenseBase64: 'licenseBase64',
+  verifiedLicense: 'verifiedLicense',
+  awaitingVerification: 'awaitingVerification',
+  paymentMethod: 'paymentMethod',
+  amount: 'amount',
+  paymentTimestamp: 'paymentTimestamp',
+  earnings: 'earnings',
+  cancelledBy: 'cancelledBy',
+  cancelReason: 'cancelReason',
 };
 
 const RideStatus = {
@@ -133,8 +154,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Create a router for all /api/* routes
+const apiRouter = express.Router();
+
 /// Health
-app.get('/health', (_req, res) => res.json({ ok: true }));
+apiRouter.get('/health', (_req, res) => res.json({ ok: true }));
 
 /// ──────────────────────────────────────────────────────────────────────────
 /// Helpers
@@ -229,7 +253,7 @@ async function validateCnic(cnicNumber) {
 /// ──────────────────────────────────────────────────────────────────────────
 
 // 0) Hook to seed ridesLive
-app.post('/rides/init', async (req, res) => {
+apiRouter.post('/rides/init', async (req, res) => {
   const { rideId } = req.body;
   if (!rideId) return res.status(400).json({ error: 'rideId required' });
   try {
@@ -241,7 +265,7 @@ app.post('/rides/init', async (req, res) => {
 });
 
 // 1) Generic rider status notifier (server-side)
-app.post('/notify/status', async (req, res) => {
+apiRouter.post('/notify/status', async (req, res) => {
   const { riderId, status, rideId } = req.body;
   if (!riderId || !status || !rideId || !StatusTitles[status]) {
     return res.status(400).json({ error: 'Invalid params' });
@@ -258,7 +282,7 @@ app.post('/notify/status', async (req, res) => {
 });
 
 // 2) Pair / broadcast offers to nearby drivers
-app.post('/pair/ride', async (req, res) => {
+apiRouter.post('/pair/ride', async (req, res) => {
   const { rideId, pickupLat, pickupLng } = req.body;
   const pLat = asNum(pickupLat), pLng = asNum(pickupLng);
   if (!rideId || pLat == null || pLng == null) {
@@ -362,7 +386,7 @@ app.post('/pair/ride', async (req, res) => {
 });
 
 // 3) Driver accept (race-protected) → notify rider
-app.post('/accept/driver', async (req, res) => {
+apiRouter.post('/accept/driver', async (req, res) => {
   const { rideId, driverUid } = req.body;
   if (!rideId || !driverUid) return res.status(400).json({ error: 'Missing rideId/driverUid' });
 
@@ -426,7 +450,7 @@ app.post('/accept/driver', async (req, res) => {
 });
 
 // 4) Counter fare (driver → rider)
-app.post('/ride/counter-fare', async (req, res) => {
+apiRouter.post('/ride/counter-fare', async (req, res) => {
   const { rideId, driverUid, counterFare } = req.body;
   if (!rideId || !driverUid || typeof counterFare !== 'number') {
     return res.status(400).json({ error: 'Missing rideId/driverUid/counterFare' });
@@ -466,7 +490,7 @@ app.post('/ride/counter-fare', async (req, res) => {
 });
 
 // 4b) Counter fare resolution (rider → driver)
-app.post('/ride/counter-fare/resolve', async (req, res) => {
+apiRouter.post('/ride/counter-fare/resolve', async (req, res) => {
   const { rideId, riderUid, accepted } = req.body;
   if (!rideId || typeof accepted !== 'boolean') {
     return res.status(400).json({ error: 'Missing rideId/accepted' });
@@ -499,7 +523,7 @@ app.post('/ride/counter-fare/resolve', async (req, res) => {
 });
 
 // 5) Status progression → notify rider for known titles
-app.post('/ride/status', async (req, res) => {
+apiRouter.post('/ride/status', async (req, res) => {
   const { rideId, newStatus } = req.body;
   if (!rideId || !newStatus) return res.status(400).json({ error: 'Missing rideId/newStatus' });
   const valid = new Set(Object.values(RideStatus));
@@ -536,7 +560,7 @@ app.post('/ride/status', async (req, res) => {
 });
 
 // 6) Cancel ride → notify BOTH parties with role-aware wording
-app.post('/ride/cancel', async (req, res) => {
+apiRouter.post('/ride/cancel', async (req, res) => {
   const { rideId, byUid } = req.body;
   if (!rideId) return res.status(400).json({ error: 'Missing rideId' });
 
@@ -605,7 +629,7 @@ app.post('/ride/cancel', async (req, res) => {
 });
 
 // 7) Emergency endpoint (also notifies reported user)
-app.post('/emergency', async (req, res) => {
+apiRouter.post('/emergency', async (req, res) => {
   const { rideId, reportedBy, otherUid } = req.body;
   if (!rideId || !reportedBy || !otherUid) {
     return res.status(400).json({ error: 'Missing rideId/reportedBy/otherUid' });
@@ -739,7 +763,7 @@ app.post('/emergency', async (req, res) => {
 });
 
 // 8) Payments (optional hooks you can call from your PaymentService)
-app.post('/notify/payment', async (req, res) => {
+apiRouter.post('/notify/payment', async (req, res) => {
   const { rideId, toUid, ok } = req.body; // ok=true/false
   if (!rideId || !toUid || typeof ok !== 'boolean') {
     return res.status(400).json({ error: 'Missing rideId/toUid/ok' });
@@ -759,7 +783,7 @@ app.post('/notify/payment', async (req, res) => {
 });
 
 // New: User Signup (from signup_page.dart)
-app.post('/signup', async (req, res) => {
+apiRouter.post('/signup', async (req, res) => {
   const {
     uid,
     phone,
@@ -845,7 +869,7 @@ app.post('/signup', async (req, res) => {
 });
 
 // New: Process Payment (from payment_services.dart)
-app.post('/processPayment', async (req, res) => {
+apiRouter.post('/processPayment', async (req, res) => {
   const { rideId, amount, paymentMethod, userId } = req.body;
   if (!rideId || !amount || !paymentMethod || !userId) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -905,8 +929,9 @@ app.post('/processPayment', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // 9) Send Message → Store and notify recipient
-app.post('/rides/:rideId/messages', async (req, res) => {
+apiRouter.post('/rides/:rideId/messages', async (req, res) => {
   const rideId = req.params.rideId;
   const { senderId, text } = req.body;
   
@@ -960,8 +985,9 @@ app.post('/rides/:rideId/messages', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // NEW: Handle counter fare proposal
-app.post('/ride/counter-fare', async (req, res) => {
+apiRouter.post('/ride/counter-fare', async (req, res) => {
   const { rideId, driverUid, counterFare, riderId } = req.body;
 
   if (!rideId || !driverUid || !counterFare || !riderId) {
@@ -1007,13 +1033,14 @@ app.post('/ride/counter-fare', async (req, res) => {
     }
 
     res.json({ ok: true, counterFare });
-  } catch (error) {
-    console.error('Error processing counter fare:', error);
+  } catch (e) {
+    console.error('Error processing counter fare:', e);
     res.status(500).json({ error: 'Failed to process counter fare' });
   }
 });
+
 // New: Update Location (from location_service.dart)
-app.post('/updateLocation', async (req, res) => {
+apiRouter.post('/updateLocation', async (req, res) => {
   const { role, rideId, lat, lng, driverId } = req.body;
   if (!role || !lat || !lng) {
     return res.status(400).json({ error: 'Missing role/lat/lng' });
@@ -1082,7 +1109,7 @@ async function pruneExpiredOffers() {
   if (Object.keys(updates).length) await rtdb.update(updates);
 }
 
-app.post('/housekeep/run', async (_req, res) => {
+apiRouter.post('/housekeep/run', async (_req, res) => {
   try {
     await Promise.all([pruneStaleDrivers(), pruneExpiredOffers()]);
     res.json({ ok: true });
@@ -1090,8 +1117,9 @@ app.post('/housekeep/run', async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // New: Create a shareable trip link
-app.post('/trip/share', async (req, res) => {
+apiRouter.post('/trip/share', async (req, res) => {
   const { rideId, userId } = req.body;
   if (!rideId || !userId) {
     return res.status(400).json({ error: 'Missing rideId/userId' });
@@ -1125,7 +1153,7 @@ app.post('/trip/share', async (req, res) => {
 });
 
 // New: Update location for a shared trip
-app.post('/trip/:shareId/location', async (req, res) => {
+apiRouter.post('/trip/:shareId/location', async (req, res) => {
   const { shareId } = req.params;
   const { lat, lng, userId } = req.body;
   if (!shareId || !lat || !lng || !userId) {
@@ -1154,7 +1182,7 @@ app.post('/trip/:shareId/location', async (req, res) => {
 });
 
 // New: Stop sharing a trip
-app.post('/trip/:shareId/stop', async (req, res) => {
+apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   const { shareId } = req.params;
   const { userId } = req.body;
   if (!shareId || !userId) {
@@ -1176,6 +1204,10 @@ app.post('/trip/:shareId/stop', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Mount the API router at /api
+app.use('/api', apiRouter);
+
 // Triggers: On new emergency, send FCM to admins
 exports.onEmergencyCreate = functions.firestore
   .document('emergencies/{emergencyId}')
