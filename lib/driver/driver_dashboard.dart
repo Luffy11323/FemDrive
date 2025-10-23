@@ -460,6 +460,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
   String? _detailsPushedFor;
   StreamSubscription? _liveRideSub;
+  bool _detailsPushed = false;
   String? _liveWatchingRideId;
   bool _isOnline = false;
   late final StreamSubscription<List<ConnectivityResult>> _connSub;
@@ -533,6 +534,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     _liveWatchingRideId = rideId;
     _loc.setActiveRide(rideId);
 
+    _detailsPushed = false;
 
     _liveRideSub = ridesLiveStream(rideId).listen((live) {
       if (!mounted) return;
@@ -555,10 +557,24 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       final me = _auth.currentUser?.uid;
       if (driverId.isNotEmpty && me != null && driverId != me) return;
 
+      final isActive =
+          status == RideStatus.accepted ||
+          status == RideStatus.driverArrived ||
+          status == RideStatus.inProgress ||
+          status == RideStatus.onTrip;
 
+      if (isActive && !_detailsPushed) {
+        _detailsPushed = true;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DriverRideDetailsPage(rideId: rideId),
+          ),
+        );
+      }
 
       if (status == RideStatus.completed || status == RideStatus.cancelled) {
         _loc.setActiveRide(null);
+        _detailsPushed = false;
       }
     });
   }
@@ -604,6 +620,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
           _liveRideSub?.cancel();
           _liveRideSub = null;
           _liveWatchingRideId = null;
+          _detailsPushed = false;
           _loc.setActiveRide(null);
           return;
         }

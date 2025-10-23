@@ -96,7 +96,6 @@ class RideStatus {
     inProgress,
     onTrip,
   };
-  static const terminalSet = <String>{completed, cancelled};
 }
 
 class OfferType {
@@ -330,12 +329,12 @@ class DriverLocationService {
   Stream<Position> get positionStream => _positionController.stream;
 
   DriverLocationService({LocationSettings? locationSettings})
-      : locationSettings =
-            locationSettings ??
-            const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              distanceFilter: 10,
-            );
+    : locationSettings =
+          locationSettings ??
+          const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          );
 
   // Exponential backoff variables
   int _retryAttempt = 0;
@@ -391,12 +390,6 @@ class DriverLocationService {
     // Cancel existing subscription if any
     await _positionSub?.cancel();
 
-    // Always write to drivers_online to maintain availability
-    await _firestore.collection('drivers_online').doc(uid).set({
-      'uid': uid,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
     _positionSub =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
           (pos) async {
@@ -409,7 +402,7 @@ class DriverLocationService {
             final String hash = _geoHasher.encode(
               pos.latitude,
               pos.longitude,
-              precision: 7, // Adjust precision as needed
+              precision: GeoCfg.driverHashPrecision,
             );
 
             try {
@@ -471,65 +464,56 @@ class DriverLocationService {
     // Schedule write in 1 second
     _debounceTimer = Timer(const Duration(seconds: 1), () async {
       try {
-        // Always update drivers_online to keep driver available
-        await _firestore.collection('drivers_online').doc(uid).set({
-          'uid': uid,
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'geohash': hash,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
         // Canonical online presence (RTDB)
-        await _rtdb.child('driversOnline/$uid').set({
-          'uid': uid,
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'geohash': hash,
-          'updatedAt': ServerValue.timestamp,
+        await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
+          AppFields.uid: uid,
+          AppFields.lat: pos.latitude,
+          AppFields.lng: pos.longitude,
+          AppFields.geohash: hash,
+          AppFields.updatedAt: ServerValue.timestamp,
         });
 
         // Rider-facing live location marker (RTDB)
-        await _rtdb.child('driverLocations/$uid').update({
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'updatedAt': ServerValue.timestamp,
+        await _rtdb.child('${AppPaths.driverLocations}/$uid').update({
+          AppFields.lat: pos.latitude,
+          AppFields.lng: pos.longitude,
+          AppFields.updatedAt: ServerValue.timestamp,
         });
 
         // Optional: historical breadcrumbs in Firestore
         await _firestore
             .collection('users')
             .doc(uid)
-            .collection('driverLocations')
+            .collection(AppPaths.driverLocations)
             .doc(now.toIso8601String())
             .set({
-              'lat': pos.latitude,
-              'lng': pos.longitude,
-              'timestamp': FieldValue.serverTimestamp(),
-              'status': 'available',
+              AppFields.lat: pos.latitude,
+              AppFields.lng: pos.longitude,
+              AppFields.timestamp: FieldValue.serverTimestamp(),
+              AppFields.status: 'available',
             });
 
         // If in a ride, mirror location to ride doc & path
         if (_activeRideId != null) {
           await _firestore
-              .collection('rides')
+              .collection(AppPaths.ridesCollection)
               .doc(_activeRideId)
               .update({
-                'driverLat': pos.latitude,
-                'driverLng': pos.longitude,
+                AppFields.driverLat: pos.latitude,
+                AppFields.driverLng: pos.longitude,
               });
 
           await _firestore
-              .collection('locations')
+              .collection(AppPaths.locationsCollection)
               .doc(_activeRideId)
               .collection('driver')
               .doc(uid)
               .collection('positions')
               .doc(now.toIso8601String())
               .set({
-                'lat': pos.latitude,
-                'lng': pos.longitude,
-                'timestamp': FieldValue.serverTimestamp(),
+                AppFields.lat: pos.latitude,
+                AppFields.lng: pos.longitude,
+                AppFields.timestamp: FieldValue.serverTimestamp(),
               });
         }
 
@@ -569,7 +553,7 @@ class DriverLocationService {
     _activeRideId = rideId;
   }
 
-  /// Stops location updates, removes RTDB and Firestore presence, disables background execution
+  /// Stops location updates, removes RTDB presence, disables background execution
   Future<void> goOffline() async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -583,24 +567,24 @@ class DriverLocationService {
     _retryTimer?.cancel();
     _debounceTimer?.cancel();
 
+    // Clear position broadcast stream?
+    // _positionController.add(null); // Optionally notify listeners of offline?
+
     try {
-      // Remove from drivers_online in Firestore
-      await _firestore.collection('drivers_online').doc(uid).delete();
-      // Remove from RTDB
-      await _rtdb.child('driversOnline/$uid').remove();
-      await _rtdb.child('driverLocations/$uid').remove();
+      await _rtdb.child('${AppPaths.driversOnline}/$uid').remove();
+      await _rtdb.child('${AppPaths.driverLocations}/$uid').remove();
 
       // Optional breadcrumb in Firestore marking offline
       await _firestore
           .collection('users')
           .doc(uid)
-          .collection('driverLocations')
+          .collection(AppPaths.driverLocations)
           .doc(DateTime.now().toIso8601String())
           .set({
-            'lat': 0.0,
-            'lng': 0.0,
-            'timestamp': FieldValue.serverTimestamp(),
-            'status': 'offline',
+            AppFields.lat: 0.0,
+            AppFields.lng: 0.0,
+            AppFields.timestamp: FieldValue.serverTimestamp(),
+            AppFields.status: 'offline',
           });
     } catch (e) {
       if (kDebugMode) debugPrint('[Location] Remove failed: $e');
@@ -630,16 +614,15 @@ class DriverService {
   final _fire = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
   final _rtdb = FirebaseDatabase.instance.ref();
-  final _loc = DriverLocationService();
 
   Stream<DocumentSnapshot<Map<String, dynamic>>?> listenActiveRide() {
     final user = _auth.currentUser;
     if (user == null) return const Stream.empty();
 
     final q = _fire
-        .collection('rides')
-        .where('driverId', isEqualTo: user.uid)
-        .where('status', whereIn: ['accepted', 'driver_arrived', 'in_progress'])
+        .collection(AppPaths.ridesCollection)
+        .where(AppFields.driverId, isEqualTo: user.uid)
+        .where(AppFields.status, whereIn: RideStatus.ongoingSet.toList())
         .limit(1);
 
     return q.snapshots().map((snap) {
@@ -658,11 +641,11 @@ class DriverService {
 
     // read driver name once
     final userDoc = await _fire.collection('users').doc(driverId).get();
-    final driverName = userDoc.data()?['username'] ?? 'Unknown Driver';
+    final driverName = userDoc.data()?[AppFields.username] ?? 'Unknown Driver';
 
     // 1) Atomic accept in Firestore
     await _fire.runTransaction((tx) async {
-      final docRef = _fire.collection('rides').doc(rideId);
+      final docRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
       final snap = await tx.get(docRef);
       final currentStatus = snap.data()?['status'];
 
@@ -671,41 +654,42 @@ class DriverService {
       }
 
       tx.update(docRef, {
-        'driverId': driverId,
-        'status': 'accepted',
-        'acceptedAt': FieldValue.serverTimestamp(),
+        AppFields.driverId: driverId,
+        AppFields.status: RideStatus.accepted,
+        AppFields.acceptedAt: FieldValue.serverTimestamp(),
         'driverName': driverName,
         if (contextData != null) ...{
-          'pickupLat': contextData.pickupLat,
-          'pickupLng': contextData.pickupLng,
-          'dropoffLat': contextData.dropoffLat,
-          'dropoffLng': contextData.dropoffLng,
+          AppFields.pickupLat: contextData.pickupLat,
+          AppFields.pickupLng: contextData.pickupLng,
+          AppFields.dropoffLat: contextData.dropoffLat,
+          AppFields.dropoffLng: contextData.dropoffLng,
         },
       });
     });
 
     // 2) Mirror to RTDB live node
-    await _rtdb.child('ridesLive/$rideId').update({
-      'status': 'accepted',
+    await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
+      AppFields.status: RideStatus.accepted,
       'driverId': driverId,
       'updatedAt': ServerValue.timestamp,
     });
 
     // 3) Remove this ride from pending queues (best-effort)
     try {
-      await _rtdb.child('ridesPendingA/$rideId').remove();
-      await _rtdb.child('ridesPendingB/$rideId').remove();
+      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
     } catch (_) {}
 
     // 4) Fan-out delete the notification from ALL drivers (optional but recommended)
     try {
-      final notifsSnap = await _rtdb.child('driverNotifications').get();
+      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
       final updates = <String, Object?>{};
       if (notifsSnap.exists && notifsSnap.value is Map) {
         final map = notifsSnap.value as Map;
         map.forEach((driverKey, ridesMap) {
           if (ridesMap is Map && ridesMap.containsKey(rideId)) {
-            updates['driverNotifications/$driverKey/$rideId'] = null;
+            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
+                null;
           }
         });
       }
@@ -719,24 +703,21 @@ class DriverService {
     }
 
     // 5) Notify rider (best-effort)
-    final riderId = (await _fire.collection('rides').doc(rideId).get())
-        .data()?['riderId'];
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
     if (riderId != null) {
-      await _rtdb.child('notifications/$riderId').push().set({
-        'type': 'ride_accepted',
-        'rideId': rideId,
-        'timestamp': ServerValue.timestamp,
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_accepted',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
       });
     }
     try {
       await _rtdb
-          .child('driverNotifications/$driverId/$rideId')
+          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
           .remove();
     } catch (_) {}
-
-    // 6) Update active ride ID but keep streaming to drivers_online
-    _loc.setActiveRide(rideId);
-    await _loc.startOnlineMode(rideId: rideId);
   }
 
   // COUNTER
@@ -792,88 +773,82 @@ class DriverService {
 
   // STATUS (accepted -> driver_arrived -> in_progress -> completed)
   Future<void> updateRideStatus(String rideId, String newStatus) async {
-    await _fire.collection('rides').doc(rideId).update({
-      'status': newStatus,
+    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
+      AppFields.status: newStatus,
       '${newStatus}At': FieldValue.serverTimestamp(),
     });
 
     await _rtdb.child('ridesLive/$rideId').update({
-      'status': newStatus,
+      AppFields.status: newStatus,
       'updatedAt': ServerValue.timestamp,
     });
 
-    final riderId = (await _fire.collection('rides').doc(rideId).get())
-        .data()?['riderId'];
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
     if (riderId != null) {
-      await _rtdb.child('notifications/$riderId').push().set({
-        'type': 'status_update',
-        'status': newStatus,
-        'rideId': rideId,
-        'timestamp': ServerValue.timestamp,
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'status_update',
+        AppFields.status: newStatus,
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
       });
     }
-
-    // Ensure driver remains online after status updates
-    await _loc.startOnlineMode(rideId: rideId);
   }
 
   // CANCEL
   Future<void> cancelRide(String rideId) async {
-    final doc = await _fire.collection('rides').doc(rideId).get();
-    final riderId = doc.data()?['riderId'];
+    final doc = await _fire
+        .collection(AppPaths.ridesCollection)
+        .doc(rideId)
+        .get();
+    final riderId = doc.data()?[AppFields.riderId];
 
-    await _fire.collection('rides').doc(rideId).update({
-      'status': 'cancelled',
-      'driverId': FieldValue.delete(),
+    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
+      AppFields.status: RideStatus.cancelled,
+      AppFields.driverId: FieldValue.delete(),
       'driverName': FieldValue.delete(),
-      'cancelledAt': FieldValue.serverTimestamp(),
+      AppFields.cancelledAt: FieldValue.serverTimestamp(),
     });
 
     await _rtdb.child('ridesLive/$rideId').update({
-      'status': 'cancelled',
+      AppFields.status: RideStatus.cancelled,
       'updatedAt': ServerValue.timestamp,
     });
 
     if (riderId != null) {
-      await _rtdb.child('notifications/$riderId').push().set({
-        'type': 'ride_cancelled',
-        'rideId': rideId,
-        'timestamp': ServerValue.timestamp,
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_cancelled',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
       });
     }
-
-    // Clear active ride ID and ensure driver remains online
-    _loc.setActiveRide(null);
-    await _loc.startOnlineMode();
   }
 
   // COMPLETE
   Future<void> completeRide(String rideId, double finalFare) async {
-    await _fire.collection('rides').doc(rideId).update({
-      'status': 'completed',
-      'completedAt': FieldValue.serverTimestamp(),
-      'finalFare': finalFare,
-      'paymentStatus': 'processed',
+    await _fire.collection(AppPaths.ridesCollection).doc(rideId).update({
+      AppFields.status: RideStatus.completed,
+      AppFields.completedAt: FieldValue.serverTimestamp(),
+      AppFields.finalFare: finalFare,
+      AppFields.paymentStatus: 'processed',
     });
 
     await _rtdb.child('ridesLive/$rideId').update({
-      'status': 'completed',
+      AppFields.status: RideStatus.completed,
       'updatedAt': ServerValue.timestamp,
     });
 
-    final riderId = (await _fire.collection('rides').doc(rideId).get())
-        .data()?['riderId'];
+    final riderId =
+        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+            .data()?[AppFields.riderId];
     if (riderId != null) {
-      await _rtdb.child('notifications/$riderId').push().set({
-        'type': 'ride_completed',
-        'rideId': rideId,
-        'timestamp': ServerValue.timestamp,
+      await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+        AppFields.type: 'ride_completed',
+        AppFields.rideId: rideId,
+        AppFields.timestamp: ServerValue.timestamp,
       });
     }
-
-    // Clear active ride ID and ensure driver remains online
-    _loc.setActiveRide(null);
-    await _loc.startOnlineMode();
   }
 
   Future<void> declineRide(String rideId) async {
@@ -886,7 +861,7 @@ class DriverService {
     // 1) Remove ONLY this driver's local popup
     try {
       await _rtdb
-          .child('driverNotifications/$driverId/$rideId')
+          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
           .remove();
     } catch (e) {
       if (kDebugMode) {
@@ -896,13 +871,16 @@ class DriverService {
 
     // 2) Optional rider heads-up (no status change)
     try {
-      final rideSnap = await _fire.collection('rides').doc(rideId).get();
-      final riderId = rideSnap.data()?['riderId'];
+      final rideSnap = await _fire
+          .collection(AppPaths.ridesCollection)
+          .doc(rideId)
+          .get();
+      final riderId = rideSnap.data()?[AppFields.riderId];
       if (riderId != null) {
-        await _rtdb.child('notifications/$riderId').push().set({
-          'type': 'ride_declined',
-          'rideId': rideId,
-          'timestamp': ServerValue.timestamp,
+        await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
+          AppFields.type: 'ride_declined',
+          AppFields.rideId: rideId,
+          AppFields.timestamp: ServerValue.timestamp,
           'by': driverId, // optional attribution
         });
       }
@@ -1140,7 +1118,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
   late final LatLng _pickup;
   late final LatLng _dropoff;
   String _status = RideStatus.accepted;
-  StreamSubscription<Map<String, dynamic>?>? _statusSub;
+
   // --- map / ui state
   GoogleMapController? _mapController;
   Set<Marker> _markers = {};
@@ -1168,35 +1146,6 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     _status =
         (widget.rideData[AppFields.status] as String?) ?? RideStatus.accepted;
 
-    // Subscribe to real-time status updates
-    _statusSub = ridesLiveStream(widget.rideData['rideId'] as String).listen(
-      (live) {
-        if (!mounted) return;
-        final newStatus = (live?['status'] as String?) ?? _status;
-        if (newStatus != _status) {
-          setState(() {
-            _status = newStatus;
-            if (RideStatus.terminalSet.contains(_status)) {
-              // Auto-close on terminal states
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-              });
-            }
-          });
-          // Rebuild route if status changes to in_progress or onTrip
-          if (newStatus == RideStatus.inProgress || newStatus == RideStatus.onTrip) {
-            _fetchRoute();
-          }
-        }
-      },
-      onError: (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to update status: $e')),
-          );
-        }
-      },
-    );
     _markers = {
       Marker(
         markerId: const MarkerId('pickup'),
@@ -1294,10 +1243,8 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       final dest = isTrip ? _dropoff : _pickup;
 
       final dir = DirectionsHttp(googleMapsApiKey);
-      final payload = await dir.fetchRoute(origin, dest).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw TimeoutException('Route fetch timed out'),
-        );
+      final payload = await dir.fetchRoute(origin, dest);
+
       final points = (payload['points'] as List<LatLng>);
       final rawSteps = (payload['steps'] as List);
 
@@ -1662,22 +1609,9 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
           myLocationEnabled: true,
           myLocationButtonEnabled: true,
         ),
-        if (_loadingRoute)
-          const Center(child: CircularProgressIndicator())
-        else if (_route.isEmpty)
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text('Failed to load route'),
-                const SizedBox(height: 8),
-                OutlinedButton(
-                  onPressed: _fetchRoute,
-                  child: const Text('Retry'),
-                  ),
-                ],
-              ),
-            ),
+
+        if (_loadingRoute) const Center(child: CircularProgressIndicator()),
+
         // ETA + turn banner
         if (!_loadingRoute)
           Positioned(
@@ -1843,7 +1777,6 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     _pickupTimer?.cancel();
     _mapController?.dispose();
     _posSub?.cancel();
-    _statusSub?.cancel();
     super.dispose();
   }
 }

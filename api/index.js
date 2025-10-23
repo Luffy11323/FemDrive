@@ -5,7 +5,6 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash');
 const haversine = require('haversine-distance');
-const functions = require('firebase-functions');
 /// ──────────────────────────────────────────────────────────────────────────
 ///  Firebase Admin initialization
 /// ──────────────────────────────────────────────────────────────────────────
@@ -1207,83 +1206,5 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
 
 // Mount the API router at /api
 app.use('/api', apiRouter);
-
-// Triggers: On new emergency, send FCM to admins
-exports.onEmergencyCreate = functions.firestore
-  .document('emergencies/{emergencyId}')
-  .onCreate(async (snap, context) => {
-    const data = snap.data();
-    const rideId = data.rideId;
-    const reportedBy = data.reportedBy;
-    const otherUid = data.otherUid;
-
-    try {
-      await rtdb.child('notifications/admin').push().set({
-        [AppFields.type]: 'emergency',
-        [AppFields.rideId]: rideId,
-        [AppFields.reportedBy]: reportedBy,
-        [AppFields.otherUid]: otherUid,
-        [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
-      });
-
-      const adminTokens = await getAdminTokens();
-      if (adminTokens.length) {
-        await fcm.sendMulticast({
-          tokens: adminTokens,
-          notification: {
-            title: '🚨 New Emergency',
-            body: `Ride ${rideId} reported by ${reportedBy}`,
-          },
-          data: { action: 'EMERGENCY', rideId, reportedBy, otherUid },
-          android: { priority: 'high', notification: { channelId: 'ride_incoming_ch', sound: 'ride_incoming_15s' } },
-          apns: { payload: { aps: { sound: 'ride_incoming_15s.wav', contentAvailable: 1 } },
-                  headers: { 'apns-priority': '10' } },
-        });
-      }
-    } catch (e) {
-      console.error('onEmergencyCreate error:', e);
-    }
-  });
-
-// Triggers: On ride status change, notify relevant parties
-exports.onRideStatusChange = functions.firestore
-  .document('rides/{rideId}')
-  .onUpdate(async (change, context) => {
-    const before = change.before.data();
-    const after = change.after.data();
-    const rideId = context.params.rideId;
-
-    if (before.status === after.status) return;
-
-    try {
-      await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
-        [AppFields.status]: after.status,
-        updatedAt: admin.database.ServerValue.TIMESTAMP,
-      });
-
-      const riderId = after.riderId;
-      const driverId = after.driverId;
-
-      if (riderId && StatusTitles[after.status]) {
-        await fcmToUser(riderId, {
-          notification: StatusTitles[after.status],
-          data: { status: after.status, rideId },
-        }, { androidChannelId: 'ride_progress_ch' });
-      }
-
-      // Notify driver for rider-initiated changes
-      if (driverId && ['completed', 'cancelled'].includes(after.status)) {
-        await fcmToUser(driverId, {
-          notification: {
-            title: after.status === 'completed' ? 'Ride Completed' : 'Ride Cancelled',
-            body: after.status === 'completed' ? 'Ride marked as completed by rider.' : 'Ride cancelled by rider.',
-          },
-          data: { action: after.status === 'completed' ? 'COMPLETED' : 'CANCELLED_BY_RIDER', rideId },
-        }, { androidChannelId: 'ride_progress_ch' });
-      }
-    } catch (e) {
-      console.error('onRideStatusChange error:', e);
-    }
-  });
 
 module.exports = app;
