@@ -870,6 +870,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     if (mounted) {
                                       // ignore: use_build_context_synchronously
                                       ScaffoldMessenger.of(
+                                        // ignore: use_build_context_synchronously
                                         context,
                                       ).showSnackBar(
                                         const SnackBar(
@@ -884,6 +885,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                                     if (mounted) {
                                       // ignore: use_build_context_synchronously
                                       ScaffoldMessenger.of(
+                                        // ignore: use_build_context_synchronously
                                         context,
                                       ).showSnackBar(
                                         SnackBar(

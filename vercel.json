@@ -60,7 +60,7 @@
           "value": "http"
         }
       ],
-      "destination": "https://:host/:path",
+      "destination": "https://:host/:path*",
       "permanent": true
     }
   ]
