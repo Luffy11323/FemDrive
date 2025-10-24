@@ -1204,8 +1204,23 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   }
 });
 
+// === SERVE trip.html STATICALLY ===
+const path = require('path');
+
+// Serve /trip/abc123 → web/trip.html
 app.get('/trip/:shareId', (req, res) => {
-  res.sendFile(path.join(__dirname, '../web/trip.html'));
+  const filePath = path.resolve(__dirname, '../web/trip.html');
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      console.error('File send error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+});
+
+// Optional: with trailing slash
+app.get('/trip/:shareId/', (req, res) => {
+  res.redirect('/trip/' + req.params.shareId);
 });
 // Mount the API router at /api
 app.use('/api', apiRouter);

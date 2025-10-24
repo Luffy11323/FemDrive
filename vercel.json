@@ -1,14 +1,4 @@
 {
-  "rewrites": [
-    {
-      "source": "/trip/:shareId",
-      "destination": "/web/trip.html"
-    },
-    {
-      "source": "/trip/:shareId/",
-      "destination": "/web/trip.html"
-    }
-  ],
   "headers": [
     {
       "source": "/api/(.*)",
