@@ -811,15 +811,23 @@ extension RiderChat on RideService {
   DatabaseReference get _db => FirebaseDatabase.instance.ref();
   FirebaseAuth get _auth => FirebaseAuth.instance;
 
-  /// Send a chat message to /rides/{rideId}/messages via server endpoint
+/// Send a chat message to /rides/{rideId}/messages via RTDB + server endpoint
   Future<void> sendMessage(String rideId, String message) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw Exception('Not logged in');
     if (rideId.isEmpty || message.trim().isEmpty) return;
 
     try {
+      // 1. Write directly to RTDB (auto-creates path)
+      await _db.child('rides/$rideId/messages').push().set({
+        ChatFields.senderId: uid,
+        ChatFields.text: message.trim(),
+        ChatFields.timestamp: ServerValue.timestamp,
+      });
+
+      // 2. Notify server to send FCM
       final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/rides/$rideId/messages'),
+        Uri.parse('https://fem-drive.vercel.app/api/rides/$rideId/messages'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'senderId': uid,
@@ -828,20 +836,19 @@ extension RiderChat on RideService {
       );
 
       if (response.statusCode != 200) {
-        throw Exception('Failed to send message: ${response.body}');
+        throw Exception('Failed to notify: ${response.body}');
       }
     } catch (e) {
       debugPrint('Error sending message: $e');
       rethrow;
     }
   }
-
-  /// Live stream of messages sorted by timestamp ASC (unchanged)
+  /// Live stream of messages sorted by timestamp DESC (newest first)
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
     final ref = _db.child('rides/$rideId/messages');
     return ref.onValue.map((event) {
-      final raw = event.snapshot.value as Map?;
-      if (raw == null) return <Map<String, dynamic>>[];
+      final raw = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (raw == null || raw.isEmpty) return <Map<String, dynamic>>[];
 
       final list = raw.entries.map((e) {
         final m = Map<String, dynamic>.from(e.value as Map);
@@ -852,11 +859,12 @@ extension RiderChat on RideService {
       list.sort((a, b) {
         final ta = (a[ChatFields.timestamp] as num?)?.toInt() ?? 0;
         final tb = (b[ChatFields.timestamp] as num?)?.toInt() ?? 0;
-        return ta.compareTo(tb);
+        return tb.compareTo(ta); // DESC: newest first
       });
       return list;
     });
   }
+
 }
 class RiderChatController extends StateNotifier<AsyncValue<void>> {
   RiderChatController(this.ref) : super(const AsyncData(null));
@@ -1058,52 +1066,30 @@ class ShareTripService {
   Future<String> startSharing(String rideId) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('User not logged in');
-    if (_currentShareId != null) {
-      _logger.w('Sharing already active for shareId: $_currentShareId');
-      return '$_apiBaseUrl/trip/$_currentShareId';
-    }
+    if (_currentShareId != null) return 'https://fem-drive.vercel.app/trip/$_currentShareId';
 
-    try {
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/trip/share'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'rideId': rideId,
-          'userId': userId,
-        }),
-      );
+    final response = await http.post(
+      Uri.parse('https://fem-drive.vercel.app/api/trip/share'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'rideId': rideId, 'userId': userId}),
+    );
 
-      if (response.statusCode != 200) {
-        throw Exception('Failed to create share: ${response.body}');
-      }
+    if (response.statusCode != 200) throw Exception('Failed to create share: ${response.body}');
 
-      final data = jsonDecode(response.body);
-      _currentShareId = data['shareId'];
-      final shareUrl = data['shareUrl'];
+    final data = jsonDecode(response.body);
+    _currentShareId = data['shareId'];
+    final shareUrl = 'https://fem-drive.vercel.app/trip/$_currentShareId';
 
-      _locationSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10,
-        ),
-      ).listen((Position position) {
-        _updateLocation(_currentShareId!, position, userId);
-      }, onError: (e) {
-        _logger.e('Location stream error: $e');
-      });
+    _locationSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
+    ).listen((Position position) {
+      _updateLocation(_currentShareId!, position, userId);
+    });
 
-      _expirationTimer = Timer(const Duration(hours: 2), () {
-        stopSharing(userId);
-      });
-
-      _logger.i('Started sharing for shareId: $_currentShareId');
-      return shareUrl;
-    } catch (e) {
-      _logger.e('Failed to start sharing: $e');
-      rethrow;
-    }
+    _expirationTimer = Timer(const Duration(hours: 2), () => stopSharing(userId));
+    return shareUrl;
   }
-
+ 
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
 

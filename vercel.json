@@ -1,8 +1,13 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index.js" },
-    { "source": "/trip/:shareId", "destination": "/web/trip.html" },
-    { "source": "/:path*", "destination": "/web/:path*" }
+    {
+      "source": "/trip/:shareId",
+      "destination": "/web/trip.html"
+    },
+    {
+      "source": "/trip/:shareId/",
+      "destination": "/web/trip.html"
+    }
   ],
   "headers": [
     {

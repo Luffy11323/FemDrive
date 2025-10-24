@@ -1,35 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Trip Tracking - FemDrive</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Trip Tracker  FemDrive</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="icon" type="image/png" href="/favicon.png">
   <style>
-    body { margin: 0; padding: 0; }
-    #map { height: 100vh; width: 100vw; }
-    #error { 
-      position: absolute; 
-      top: 10px; 
-      left: 10px; 
-      background: white; 
-      padding: 10px; 
-      border-radius: 5px; 
-      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-      display: none;
+    body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { width: 100%; height: 100%; }
+    #error {
+      position: absolute; top: 16px; left: 16px; right: 16px;
+      background: #ff4444; color: white; padding: 12px; border-radius: 8px;
+      text-align: center; z-index: 1000; display: none; font-weight: 500;
     }
   </style>
 </head>
 <body>
-  <div id="map"></div>
   <div id="error"></div>
+  <div id="map"></div>
 
-  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-database-compat.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    // Firebase configuration (replace with your Firebase project credentials)
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
+    import { getDatabase, ref, onValue, off } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
+
+    // Firebase configuration
     const firebaseConfig = {
       apiKey: "AIzaSyBEbRIB7WEQRE84HxH0CH_V8WOoHUnIPd8",
       authDomain: "ridesharefyp-0022.firebaseapp.com",
@@ -41,63 +37,119 @@
     };
 
     // Initialize Firebase
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
 
     // Get shareId from URL (e.g., /trip/abc123)
     const shareId = window.location.pathname.split('/').pop();
-    if (!shareId) {
-      document.getElementById('error').innerText = 'Invalid trip ID';
-      document.getElementById('error').style.display = 'block';
-      throw new Error('No shareId found in URL');
+    const errorDiv = document.getElementById('error');
+
+    if (!shareId || shareId === 'trip') {
+      errorDiv.innerText = 'Invalid trip link. Please check the shared URL.';
+      errorDiv.style.display = 'block';
+      document.title = 'Invalid Trip';
+      throw new Error('Invalid shareId');
     }
 
     // Initialize Leaflet map
-    const map = L.map('map').setView([0, 0], 2);
+    const map = L.map('map', {
+      zoomControl: true,
+      dragging: true,
+      touchZoom: true,
+      doubleClickZoom: true,
+      scrollWheelZoom: true,
+      boxZoom: true,
+      keyboard: true
+    }).setView([33.6844, 73.0479], 6); // Default: Islamabad
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19
     }).addTo(map);
 
     let marker = null;
+    let firstLocation = true;
 
     // Listen for location updates
-    const ref = db.ref(`trip_shares/${shareId}`);
-    ref.on('value', (snapshot) => {
+    const locationRef = ref(db, `trip_shares/${shareId}`);
+    
+    onValue(locationRef, (snapshot) => {
       const data = snapshot.val();
-      const errorDiv = document.getElementById('error');
-      if (!data || !data.lat || !data.lng) {
-        errorDiv.innerText = 'No location data available';
+
+      if (!data || data.lat == null || data.lng == null) {
+        errorDiv.innerText = 'Waiting for location update...';
         errorDiv.style.display = 'block';
         return;
       }
 
-      // Check if data is fresh (<5 min old)
+      // Check freshness: 5 minutes
       const now = Date.now();
-      if (data.updatedAt && (now - data.updatedAt) > 1 * 60 * 1000) {
-        errorDiv.innerText = 'Trip data is outdated';
+      const updatedAt = data.updatedAt || 0;
+      if ((now - updatedAt) > 5 * 60 * 1000) {
+        errorDiv.innerText = 'Location is outdated (more than 5 minutes old)';
         errorDiv.style.display = 'block';
         return;
       }
 
-      const latLng = [data.lat, data.lng];
+      const latLng = [parseFloat(data.lat), parseFloat(data.lng)];
+
+      // Validate coordinates
+      if (isNaN(latLng[0]) || isNaN(latLng[1])) {
+        errorDiv.innerText = 'Invalid location data';
+        errorDiv.style.display = 'block';
+        return;
+      }
+
+      // Update or create marker with smooth animation
       if (marker) {
         marker.setLatLng(latLng);
       } else {
-        marker = L.marker(latLng).addTo(map);
+        marker = L.marker(latLng, {
+          title: 'Live Location',
+          riseOnHover: true
+        }).addTo(map)
+          .bindPopup('<b>Live Location</b><br>Updated just now.')
+          .openPopup();
       }
 
-      map.setView(latLng, 15);
+      // Fit map on first location
+      if (firstLocation) {
+        map.setView(latLng, 16);
+        firstLocation = false;
+      } else {
+        map.panTo(latLng, { animate: true, duration: 1.5 });
+      }
+
+      // Update popup time
+      const timeAgo = formatTimeAgo(updatedAt);
+      marker.setPopupContent(`<b>Live Location</b><br>${timeAgo}`);
+
       errorDiv.style.display = 'none';
+      document.title = `Trip • ${Math.round(data.speed || 0)} km/h`;
     }, (err) => {
-      document.getElementById('error').innerText = `Error: ${err.message}`;
-      document.getElementById('error').style.display = 'block';
+      console.error('RTDB Error:', err);
+      errorDiv.innerText = `Connection error: ${err.message}`;
+      errorDiv.style.display = 'block';
     });
 
+    // Format relative time
+    function formatTimeAgo(timestamp) {
+      const seconds = Math.floor((Date.now() - timestamp) / 1000);
+      if (seconds < 60) return `Just now`;
+      if (seconds < 120) return `1 minute ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
+      if (seconds < 7200) return `1 hour ago`;
+      return `${Math.floor(seconds / 3600)} hours ago`;
+    }
+
     // Cleanup on page unload
-    window.addEventListener('unload', () => {
-      ref.off();
-      map.remove();
+    window.addEventListener('beforeunload', () => {
+      off(locationRef);
     });
+
+    // Optional: Add loading state
+    errorDiv.innerText = 'Connecting to live location...';
+    errorDiv.style.display = 'block';
   </script>
 </body>
 </html>

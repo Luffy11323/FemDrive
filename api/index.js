@@ -1204,6 +1204,9 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   }
 });
 
+app.get('/trip/:shareId', (req, res) => {
+  res.sendFile(path.join(__dirname, '../web/trip.html'));
+});
 // Mount the API router at /api
 app.use('/api', apiRouter);
 

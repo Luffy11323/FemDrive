@@ -781,6 +781,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     if (_completedNotified.add(ride['id'])) {
                       showRideCompleted(rideId: ride['id']);
                     }
+                    if (_isSharing) {
+                      setState(() => _isSharing = false);
+                    }
                     if (_polylines.isNotEmpty) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _polylines = {});
@@ -853,48 +856,22 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                           onPressed: _isSharing
                               ? null
                               : () async {
-                                  final shareService = ShareTripService();
                                   try {
-                                    final url = await shareService.startSharing(
-                                      ride['id'],
-                                    );
+                                    final url = await ShareTripService().startSharing(ride['id']);
                                     await SharePlus.instance.share(
-                                      ShareParams(
-                                        text:
-                                            'Track my live trip location: $url',
-                                      ),
+                                      ShareParams(text: 'Track my live trip location: $url'),
                                     );
-                                    setState(() {
-                                      _isSharing = true;
-                                    });
-                                    if (mounted) {
-                                      // ignore: use_build_context_synchronously
-                                      ScaffoldMessenger.of(
-                                        // ignore: use_build_context_synchronously
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Trip shared! Stop sharing below.',
-                                          ),
-                                        ),
-                                      );
-                                    }
+                                    setState(() => _isSharing = true);
+                                    // ignore: use_build_context_synchronously
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Trip shared! Stop sharing below.')),
+                                    );
                                   } catch (e) {
-                                    _logger.e('Failed to start sharing: $e');
-                                    if (mounted) {
-                                      // ignore: use_build_context_synchronously
-                                      ScaffoldMessenger.of(
-                                        // ignore: use_build_context_synchronously
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            'Failed to share trip: $e',
-                                          ),
-                                        ),
-                                      );
-                                    }
+                                    debugPrint('Share failed: $e');
+                                    // ignore: use_build_context_synchronously
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to share trip: $e')),
+                                    );
                                   }
                                 },
                           style: FilledButton.styleFrom(
