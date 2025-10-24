@@ -88,10 +88,10 @@ flutter:
 flutter_launcher_icons:  # Corrected key to avoid deprecation warning
   android: { enabled: true }  # Use map syntax
   ios: { enabled: true, remove_alpha_ios: true }
-  web: { enabled: true }      # Use map syntax
-  windows: { enabled: true }  # Use map syntax
-  macos: { enabled: true }    # Use map syntax
-  linux: { enabled: true }    # Use map syntax
+  # web: { enabled: true }      # Use map syntax
+  # windows: { enabled: true }  # Use map syntax
+  # macos: { enabled: true }    # Use map syntax
+  # linux: { enabled: true }    # Use map syntax
   image_path: "assets/images/femdrive_icon.png"  # Path to your PNG
   adaptive_icon_background: "#FF99CC"  # Match your pink gradient
   adaptive_icon_foreground: "assets/images/femdrive_icon.png"  # Same PNG or separate foreground
