@@ -1,13 +1,23 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "api/**/*.js", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    { "src": "/trip/(.*)", "dest": "/api/trip" }
-  ],
   "functions": {
-    "api/trip/index.js": { "maxDuration": 10 }
-  }
+    "api/trip/index.js": { 
+      "maxDuration": 10 
+    }
+  },
+  "rewrites": [
+    { 
+      "source": "/trip/:path*", 
+      "destination": "/api/trip" 
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
+      ]
+    }
+  ]
 }
