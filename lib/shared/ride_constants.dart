@@ -35,6 +35,13 @@ class AppFields {
   static const rideId = 'rideId';
   static const type = 'type';
   static const timestamp = 'timestamp';
+  static const driversOnline = 'drivers_online';
+  static const driverLocations = 'driverLocations';
+  static const ridesLive = 'ridesLive';
+  // ignore: constant_identifier_names
+  static const trip_shares = 'trip_shares';
+  static const ridesCollection = 'rides';
+  static const locationsCollection = 'locations';
 }
 
 class RideStatus {

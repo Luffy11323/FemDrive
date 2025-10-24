@@ -142,10 +142,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
   Set<Polyline> _trimmed = {};
   LatLng? _lastDriverTick;
 
-  // Add state variable for tracking sharing status
-  bool _isSharing =
-      false; // NEW: Add this line here (around line 180, after _lastDriverTick)
-
+  bool _isSharing = false;
   int _nearestIndex(List<LatLng> route, LatLng p) {
     if (route.isEmpty) return 0;
     double best = double.infinity;
@@ -848,7 +845,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       ),
                     if (status == 'in_progress' || status == 'onTrip')
                       Positioned(
-                        bottom: 220, // NEW: Share Trip button, above Chat
+                        bottom: 220, // Share Trip button, above Chat
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.share),
@@ -881,31 +878,25 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             backgroundColor: _isSharing ? Colors.grey : null,
                           ),
                         ),
-                      ), // NEW: End Share Trip button
-                    if (_isSharing &&
-                        (status == 'in_progress' || status == 'onTrip'))
+                      ), // End Share Trip button
+
+                    if (_isSharing && (status == 'in_progress' || status == 'onTrip'))
                       Positioned(
-                        bottom:
-                            280, // NEW: Stop Sharing button, above Share Trip
+                        bottom: 280, // Stop Sharing button, above Share Trip
                         right: 16,
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.stop),
                           label: const Text('Stop Sharing'),
                           onPressed: () async {
-                            final userId =
-                                FirebaseAuth.instance.currentUser?.uid;
+                            final userId = FirebaseAuth.instance.currentUser?.uid;
                             if (userId == null) return;
                             final shareService = ShareTripService();
                             await shareService.stopSharing(userId);
-                            setState(() {
-                              _isSharing = false;
-                            });
+                            setState(() => _isSharing = false);
                             if (mounted) {
                               // ignore: use_build_context_synchronously
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Stopped sharing trip.'),
-                                ),
+                                const SnackBar(content: Text('Stopped sharing trip.')),
                               );
                             }
                           },
@@ -916,16 +907,14 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                             backgroundColor: Colors.red,
                           ),
                         ),
-                      ), // NEW: End Stop Sharing button
+                      ), // End Stop Sharing button
                     if (status != 'completed' && status != 'cancelled')
                       Positioned(
                         bottom: 106,
                         right: 16,
                         child: SOSButton(ride: ride),
                       ),
-                    if (status == 'accepted' ||
-                        status == 'in_progress' ||
-                        status == 'onTrip')
+                    if (status != 'completed' && status != 'cancelled')
                       Positioned(
                         bottom: 46,
                         left: 16,

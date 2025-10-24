@@ -9,7 +9,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -320,126 +319,76 @@ class DriverLocationService {
   LocationSettings locationSettings;
 
   String? _activeRideId;
+  String? _activeShareId;
   bool _isPaused = false;
 
-  // Stream controller for position updates to notify UI (e.g., map camera)
   final StreamController<Position> _positionController =
       StreamController<Position>.broadcast();
-
   Stream<Position> get positionStream => _positionController.stream;
 
-  DriverLocationService({LocationSettings? locationSettings})
-    : locationSettings =
-          locationSettings ??
-          const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 10,
-          );
+  DriverLocationService({
+    LocationSettings? locationSettings,
+  }) : locationSettings = locationSettings ??
+            const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 10,
+            );
 
-  // Exponential backoff variables
-  int _retryAttempt = 0;
-  Timer? _retryTimer;
-
+  // === PERMISSIONS ===
   Future<bool> _checkAndRequestPermissions() async {
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        if (kDebugMode) {
-          debugPrint('[Location] Location permission denied');
-        }
-        return false;
-      }
+      if (permission == LocationPermission.denied) return false;
     }
-    if (permission == LocationPermission.deniedForever) {
-      if (kDebugMode) {
-        debugPrint(
-          '[Location] Location permission denied forever. Cannot request.',
-        );
-      }
-      return false;
-    }
+    if (permission == LocationPermission.deniedForever) return false;
     return true;
   }
 
-  /// Starts listening to location updates and writes them to RTDB and Firestore.
+  // === START ONLINE MODE ===
   Future<void> startOnlineMode({String? rideId}) async {
     final user = _auth.currentUser;
-    if (user == null) {
-      if (kDebugMode) debugPrint('[Location] No logged-in user');
-      return;
-    }
+    if (user == null) return;
     final uid = user.uid;
+
     _activeRideId = rideId;
     _isPaused = false;
 
-    bool permissionGranted = await _checkAndRequestPermissions();
-    if (!permissionGranted) return;
+    if (!await _checkAndRequestPermissions()) return;
 
-    // Initialize background execution
-    try {
-      final ok = await FlutterBackground.initialize();
-      if (ok) {
-        await FlutterBackground.enableBackgroundExecution();
-        if (kDebugMode) debugPrint('[Location] Background execution enabled');
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('[Location] Background init failed: $e');
-    }
-
-    // Cancel existing subscription if any
     await _positionSub?.cancel();
 
-    _positionSub =
-        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-          (pos) async {
-            if (_isPaused) return;
+    _positionSub = Geolocator.getPositionStream(locationSettings: locationSettings)
+        .listen(
+      (pos) async {
+        if (_isPaused) return;
 
-            _retryAttempt = 0; // reset retry counter on success
+        _positionController.add(pos);
 
-            _positionController.add(pos);
+        final hash = _geoHasher.encode(pos.latitude, pos.longitude, precision: 9);
 
-            final String hash = _geoHasher.encode(
-              pos.latitude,
-              pos.longitude,
-              precision: GeoCfg.driverHashPrecision,
-            );
+        // Fetch shareId once
+        if (_activeRideId != null && _activeShareId == null) {
+          try {
+            final rideSnap = await _firestore
+                .collection('rides')
+                .doc(_activeRideId)
+                .get();
+            _activeShareId = rideSnap.data()?['shareId'] as String?;
+          } catch (e) {
+            if (kDebugMode) debugPrint('[Location] Failed to get shareId: $e');
+          }
+        }
 
-            try {
-              // Debounce writes to every ~3 seconds (adjust as needed)
-              _debouncedWrite(uid, pos, hash);
-            } catch (e) {
-              if (kDebugMode) debugPrint('[Location] Write failed: $e');
-            }
-          },
-          onError: (err) async {
-            if (kDebugMode) debugPrint('[Location] Stream error: $err');
-
-            // Retry with exponential backoff
-            _retryAttempt++;
-            final delaySeconds = _calculateBackoffSeconds(_retryAttempt);
-            if (kDebugMode) {
-              debugPrint('[Location] Retry in $delaySeconds seconds');
-            }
-
-            _retryTimer?.cancel();
-            _retryTimer = Timer(Duration(seconds: delaySeconds), () async {
-              await _positionSub?.cancel();
-              _positionSub = null;
-              if (!_isPaused) {
-                await startOnlineMode(rideId: _activeRideId);
-              }
-            });
-          },
-        );
+        _debouncedWrite(uid, pos, hash);
+      },
+      onError: (err) {
+        if (kDebugMode) debugPrint('[Location] Stream error: $err');
+      },
+    );
   }
 
-  // Helper: exponential backoff with max delay cap at 32 seconds
-  int _calculateBackoffSeconds(int attempt) {
-    return attempt > 5 ? 32 : (1 << attempt);
-  }
-
-  // Debounce timer & last write cache to reduce frequent writes
+  // === DEBOUNCED WRITE ===
   Timer? _debounceTimer;
   Position? _lastPosition;
   String? _lastGeoHash;
@@ -448,168 +397,111 @@ class DriverLocationService {
   void _debouncedWrite(String uid, Position pos, String hash) {
     final now = DateTime.now();
 
-    // If last write < 3 seconds ago and position/geohash didn't change significantly, skip
     if (_lastWriteTime != null &&
         now.difference(_lastWriteTime!).inSeconds < 3 &&
         _lastPosition != null &&
         _isPositionClose(_lastPosition!, pos) &&
         _lastGeoHash == hash) {
-      // Skip update
       return;
     }
 
-    // Cancel previous timer, if any
     _debounceTimer?.cancel();
-
-    // Schedule write in 1 second
     _debounceTimer = Timer(const Duration(seconds: 1), () async {
       try {
-        // Canonical online presence (RTDB)
-        await _rtdb.child('${AppPaths.driversOnline}/$uid').set({
-          AppFields.uid: uid,
-          AppFields.lat: pos.latitude,
-          AppFields.lng: pos.longitude,
-          AppFields.geohash: hash,
-          AppFields.updatedAt: ServerValue.timestamp,
-        });
+        final timestamp = ServerValue.timestamp;
+        final updates = <String, dynamic>{};
 
-        // Rider-facing live location marker (RTDB)
-        await _rtdb.child('${AppPaths.driverLocations}/$uid').update({
-          AppFields.lat: pos.latitude,
-          AppFields.lng: pos.longitude,
-          AppFields.updatedAt: ServerValue.timestamp,
-        });
+        // 1. drivers_online
+        updates['drivers_online/$uid'] = {
+          'uid': uid,
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'geohash': hash,
+          'updatedAt': timestamp,
+        };
 
-        // Optional: historical breadcrumbs in Firestore
-        await _firestore
-            .collection('users')
-            .doc(uid)
-            .collection(AppPaths.driverLocations)
-            .doc(now.toIso8601String())
-            .set({
-              AppFields.lat: pos.latitude,
-              AppFields.lng: pos.longitude,
-              AppFields.timestamp: FieldValue.serverTimestamp(),
-              AppFields.status: 'available',
-            });
+        // 2. driverLocations
+        updates['driverLocations/$uid'] = {
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'updatedAt': timestamp,
+        };
 
-        // If in a ride, mirror location to ride doc & path
+        // 3. ridesLive/{rideId}
         if (_activeRideId != null) {
-          await _firestore
-              .collection(AppPaths.ridesCollection)
-              .doc(_activeRideId)
-              .update({
-                AppFields.driverLat: pos.latitude,
-                AppFields.driverLng: pos.longitude,
-              });
-
-          await _firestore
-              .collection(AppPaths.locationsCollection)
-              .doc(_activeRideId)
-              .collection('driver')
-              .doc(uid)
-              .collection('positions')
-              .doc(now.toIso8601String())
-              .set({
-                AppFields.lat: pos.latitude,
-                AppFields.lng: pos.longitude,
-                AppFields.timestamp: FieldValue.serverTimestamp(),
-              });
+          updates['ridesLive/$_activeRideId'] = {
+            'driverLat': pos.latitude,
+            'driverLng': pos.longitude,
+            'driverTs': timestamp,
+            'status': 'in_progress',
+            'updatedAt': timestamp,
+          };
         }
 
-        // Cache last written state
+        // 4. trip_shares/{shareId} → PUBLIC TRACKER
+        if (_activeShareId != null) {
+          updates['trip_shares/$_activeShareId'] = {
+            'lat': pos.latitude,
+            'lng': pos.longitude,
+            'updatedAt': timestamp,
+          };
+        }
+
+        await _rtdb.update(updates);
+
         _lastPosition = pos;
         _lastGeoHash = hash;
         _lastWriteTime = now;
       } catch (e) {
-        if (kDebugMode) debugPrint('[Location] Debounced write failed: $e');
+        if (kDebugMode) debugPrint('[Location] Write failed: $e');
       }
     });
   }
 
-  // Simple distance check to avoid updates when driver barely moved (~5 meters)
-  bool _isPositionClose(Position a, Position b, [double thresholdMeters = 5]) {
-    final distance = Geolocator.distanceBetween(
-      a.latitude,
-      a.longitude,
-      b.latitude,
-      b.longitude,
-    );
-    return distance < thresholdMeters;
+  bool _isPositionClose(Position a, Position b, [double threshold = 5]) {
+    return Geolocator.distanceBetween(
+          a.latitude,
+          a.longitude,
+          b.latitude,
+          b.longitude,
+        ) <
+        threshold;
   }
 
-  /// Pause location updates without canceling subscription (useful on temporary offline states)
-  void pause() {
-    _isPaused = true;
-  }
+  void pause() => _isPaused = true;
+  void resume() => _isPaused = false;
 
-  /// Resume location updates if paused
-  void resume() {
-    _isPaused = false;
-  }
-
-  /// Set or clear the active ride ID to start/stop mirroring location to ride documents
-  void setActiveRide(String? rideId) {
+  void setActiveRide(String? rideId, {String? shareId}) {
     _activeRideId = rideId;
+    _activeShareId = shareId;
   }
 
-  /// Stops location updates, removes RTDB presence, disables background execution
   Future<void> goOffline() async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-    final uid = user.uid;
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return;
+
     _activeRideId = null;
+    _activeShareId = null;
     _isPaused = true;
 
-    // Cancel position subscription & timers
     await _positionSub?.cancel();
     _positionSub = null;
-    _retryTimer?.cancel();
     _debounceTimer?.cancel();
 
-    // Clear position broadcast stream?
-    // _positionController.add(null); // Optionally notify listeners of offline?
-
     try {
-      await _rtdb.child('${AppPaths.driversOnline}/$uid').remove();
-      await _rtdb.child('${AppPaths.driverLocations}/$uid').remove();
-
-      // Optional breadcrumb in Firestore marking offline
-      await _firestore
-          .collection('users')
-          .doc(uid)
-          .collection(AppPaths.driverLocations)
-          .doc(DateTime.now().toIso8601String())
-          .set({
-            AppFields.lat: 0.0,
-            AppFields.lng: 0.0,
-            AppFields.timestamp: FieldValue.serverTimestamp(),
-            AppFields.status: 'offline',
-          });
+      await _rtdb.child('drivers_online/$uid').remove();
+      await _rtdb.child('driverLocations/$uid').remove();
     } catch (e) {
-      if (kDebugMode) debugPrint('[Location] Remove failed: $e');
-    }
-
-    try {
-      if (FlutterBackground.isBackgroundExecutionEnabled) {
-        await FlutterBackground.disableBackgroundExecution();
-        if (kDebugMode) debugPrint('[Location] Background execution disabled');
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('[Location] Background disable failed: $e');
+      if (kDebugMode) debugPrint('[Location] Cleanup failed: $e');
     }
   }
 
-  /// Dispose method for cleaning up streams and timers
   Future<void> dispose() async {
     await _positionSub?.cancel();
     await _positionController.close();
-    _retryTimer?.cancel();
-    _debounceTimer?.cancel();
     await goOffline();
   }
 }
-
 class DriverService {
   final _fire = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
@@ -674,38 +566,13 @@ class DriverService {
       'updatedAt': ServerValue.timestamp,
     });
 
-    // 3) Remove this ride from pending queues (best-effort)
-    try {
-      await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
-      await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
-    } catch (_) {}
+    // 3) Remove from pending queues
+    await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
+    await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
 
-    // 4) Fan-out delete the notification from ALL drivers (optional but recommended)
-    try {
-      final notifsSnap = await _rtdb.child(AppPaths.driverNotifications).get();
-      final updates = <String, Object?>{};
-      if (notifsSnap.exists && notifsSnap.value is Map) {
-        final map = notifsSnap.value as Map;
-        map.forEach((driverKey, ridesMap) {
-          if (ridesMap is Map && ridesMap.containsKey(rideId)) {
-            updates['${AppPaths.driverNotifications}/$driverKey/$rideId'] =
-                null;
-          }
-        });
-      }
-      if (updates.isNotEmpty) {
-        await _rtdb.update(updates);
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('[DriverService.acceptRide] Fan-out delete failed: $e');
-      }
-    }
-
-    // 5) Notify rider (best-effort)
-    final riderId =
-        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-            .data()?[AppFields.riderId];
+    // 4) Notify rider
+    final riderId = (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
+        .data()?[AppFields.riderId];
     if (riderId != null) {
       await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
         AppFields.type: 'ride_accepted',
@@ -713,13 +580,16 @@ class DriverService {
         AppFields.timestamp: ServerValue.timestamp,
       });
     }
-    try {
-      await _rtdb
-          .child('${AppPaths.driverNotifications}/$driverId/$rideId')
-          .remove();
-    } catch (_) {}
-  }
 
+    // 5) READ shareId FROM RIDE DOC
+    final rideSnap = await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
+    final shareId = rideSnap.data()?['shareId'] as String?;
+
+    // 6) START LOCATION TRACKING WITH shareId
+    final locationService = DriverLocationService();
+    await locationService.startOnlineMode(rideId: rideId);
+    locationService.setActiveRide(rideId, shareId: shareId);
+  }
   // COUNTER
   Future<void> proposeCounterFare(String rideId, double newFare) async {
     final fire = FirebaseFirestore.instance;

@@ -811,21 +811,16 @@ extension RiderChat on RideService {
   DatabaseReference get _db => FirebaseDatabase.instance.ref();
   FirebaseAuth get _auth => FirebaseAuth.instance;
 
-/// Send a chat message to /rides/{rideId}/messages via RTDB + server endpoint
   Future<void> sendMessage(String rideId, String message) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw Exception('Not logged in');
     if (rideId.isEmpty || message.trim().isEmpty) return;
-
     try {
-      // 1. Write directly to RTDB (auto-creates path)
       await _db.child('rides/$rideId/messages').push().set({
         ChatFields.senderId: uid,
         ChatFields.text: message.trim(),
         ChatFields.timestamp: ServerValue.timestamp,
       });
-
-      // 2. Notify server to send FCM
       final response = await http.post(
         Uri.parse('https://fem-drive.vercel.app/api/rides/$rideId/messages'),
         headers: {'Content-Type': 'application/json'},
@@ -834,7 +829,6 @@ extension RiderChat on RideService {
           'text': message.trim(),
         }),
       );
-
       if (response.statusCode != 200) {
         throw Exception('Failed to notify: ${response.body}');
       }
@@ -843,19 +837,17 @@ extension RiderChat on RideService {
       rethrow;
     }
   }
-  /// Live stream of messages sorted by timestamp DESC (newest first)
+
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
     final ref = _db.child('rides/$rideId/messages');
     return ref.onValue.map((event) {
       final raw = event.snapshot.value as Map<dynamic, dynamic>?;
       if (raw == null || raw.isEmpty) return <Map<String, dynamic>>[];
-
       final list = raw.entries.map((e) {
         final m = Map<String, dynamic>.from(e.value as Map);
         m['id'] = e.key;
         return m;
       }).toList();
-
       list.sort((a, b) {
         final ta = (a[ChatFields.timestamp] as num?)?.toInt() ?? 0;
         final tb = (b[ChatFields.timestamp] as num?)?.toInt() ?? 0;
@@ -869,7 +861,6 @@ extension RiderChat on RideService {
 class RiderChatController extends StateNotifier<AsyncValue<void>> {
   RiderChatController(this.ref) : super(const AsyncData(null));
   final Ref ref;
-
   Future<void> send(String rideId, String text) async {
     if (text.trim().isEmpty) return;
     state = const AsyncLoading();
@@ -899,14 +890,6 @@ class RiderChatPage extends ConsumerStatefulWidget {
 class _RiderChatPageState extends ConsumerState<RiderChatPage> {
   final _text = TextEditingController();
   final _scroll = ScrollController();
-
-  @override
-  void dispose() {
-    _text.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
   Future<void> _send() async {
     final t = _text.text.trim();
     if (t.isEmpty) return;
@@ -921,31 +904,18 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
       );
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final uid = ref.watch(riderCurrentUserIdProvider);
     final msgs = ref.watch(riderMessagesProvider(widget.rideId));
-    final sending = ref.watch(riderChatControllerProvider).isLoading;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.otherDisplayName == null
-              ? 'Chat'
-              : 'Chat with ${widget.otherDisplayName}',
-        ),
-      ),
+      appBar: AppBar(title: Text(widget.otherDisplayName ?? 'Chat')),
       body: Column(
         children: [
           Expanded(
             child: msgs.when(
               data: (list) {
-                if (list.isEmpty) {
-                  return const Center(child: Text('Say hi 👋'));
-                }
-
-                // Add post frame callback to scroll to the bottom
+                if (list.isEmpty) return const Center(child: Text('Say hi 👋'));
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (_scroll.hasClients) {
                     _scroll.animateTo(
@@ -955,55 +925,31 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
                     );
                   }
                 });
-
                 return ListView.separated(
                   controller: _scroll,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 16,
-                  ),
                   itemCount: list.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (_, i) {
                     final m = list[i];
-                    final sender = m[ChatFields.senderId]?.toString();
-                    final text = (m[ChatFields.text] ?? '').toString();
-                    final ts = (m[ChatFields.timestamp] as num?)?.toInt();
-                    final isMe = (sender != null && sender == uid);
-
-                    final timeStr = ts == null
-                        ? ''
-                        : DateTime.fromMillisecondsSinceEpoch(
-                            ts,
-                          ).toLocal().toString().substring(11, 16);
-
+                    final isMe = m[ChatFields.senderId] == uid;
                     return Align(
-                      alignment: isMe
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
+                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: isMe
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Colors.grey.shade200,
+                          color: isMe ? Theme.of(context).colorScheme.primaryContainer : Colors.grey.shade200,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           child: Column(
-                            crossAxisAlignment: isMe
-                                ? CrossAxisAlignment.end
-                                : CrossAxisAlignment.start,
+                            crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                             children: [
-                              Text(text),
-                              const SizedBox(height: 2),
+                              Text(m[ChatFields.text] ?? ''),
                               Text(
-                                timeStr,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: Colors.black54),
+                                DateTime.fromMillisecondsSinceEpoch(m[ChatFields.timestamp]?.toInt() ?? 0)
+                                    .toLocal()
+                                    .toString()
+                                    .substring(11, 16),
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
                               ),
                             ],
                           ),
@@ -1011,15 +957,14 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
                       ),
                     );
                   },
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
                 );
               },
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Chat error: $e')),
             ),
           ),
-
           SafeArea(
-            top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
               child: Row(
@@ -1027,24 +972,16 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
                   Expanded(
                     child: TextField(
                       controller: _text,
-                      decoration: const InputDecoration(
-                        hintText: 'Type a message…',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
+                      decoration: const InputDecoration(hintText: 'Type a message…', border: OutlineInputBorder()),
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _send(),
                     ),
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: sending ? null : _send,
-                    child: sending
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                    onPressed: ref.watch(riderChatControllerProvider).isLoading ? null : _send,
+                    child: ref.watch(riderChatControllerProvider).isLoading
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.send),
                   ),
                 ],
@@ -1058,80 +995,54 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
 }
 class ShareTripService {
   final _logger = Logger();
-  StreamSubscription<Position>? _locationSubscription;
   String? _currentShareId;
   Timer? _expirationTimer;
-  final String _apiBaseUrl = 'https://fem-drive.vercel.app/api'; // Your Vercel domain
+  final String _apiBaseUrl = 'https://fem-drive.vercel.app/api';
 
   Future<String> startSharing(String rideId) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('User not logged in');
-    if (_currentShareId != null) return 'https://fem-drive.vercel.app/trip/$_currentShareId';
+    if (_currentShareId != null) return 'https://magical-flan-a4e3e3.netlify.app/trip/$_currentShareId';
 
     final response = await http.post(
-      Uri.parse('https://fem-drive.vercel.app/api/trip/share'),
+      Uri.parse('$_apiBaseUrl/trip/share'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'rideId': rideId, 'userId': userId}),
     );
 
-    if (response.statusCode != 200) throw Exception('Failed to create share: ${response.body}');
+    if (response.statusCode != 200) throw Exception('Failed: ${response.body}');
 
     final data = jsonDecode(response.body);
     _currentShareId = data['shareId'];
-    final shareUrl = 'https://fem-drive.vercel.app/trip/$_currentShareId';
+    final shareUrl = 'https://magical-flan-a4e3e3.netlify.app/trip/$_currentShareId';
 
-    _locationSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
-    ).listen((Position position) {
-      _updateLocation(_currentShareId!, position, userId);
-    });
+    // SAVE shareId TO RIDE DOC
+    await FirebaseFirestore.instance
+        .collection(AppPaths.ridesCollection)
+        .doc(rideId)
+        .update({'shareId': _currentShareId});
 
-    _expirationTimer = Timer(const Duration(hours: 2), () => stopSharing(userId));
+    // Auto-stop after 3 hours
+    _expirationTimer = Timer(const Duration(hours: 3), () => stopSharing(userId));
+
     return shareUrl;
-  }
- 
+  } 
+
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
 
     try {
-      final response = await http.post(
+      await http.post(
         Uri.parse('$_apiBaseUrl/trip/$_currentShareId/stop'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'userId': userId}),
       );
-
-      if (response.statusCode != 200) {
-        _logger.e('Failed to stop sharing: ${response.body}');
-      }
     } catch (e) {
-      _logger.e('Error stopping share: $e');
+      _logger.e('Stop sharing error: $e');
     } finally {
-      _locationSubscription?.cancel();
-      _locationSubscription = null;
       _expirationTimer?.cancel();
-      _expirationTimer = null;
-      _logger.i('Stopped sharing for shareId: $_currentShareId');
       _currentShareId = null;
-    }
-  }
-
-  void _updateLocation(String shareId, Position position, String userId) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/trip/$shareId/location'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'userId': userId,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        _logger.e('Failed to update location: ${response.body}');
-      }
-    } catch (e) {
-      _logger.e('Failed to update location: $e');
+      _logger.i('Stopped sharing');
     }
   }
 }

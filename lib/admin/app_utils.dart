@@ -17,6 +17,10 @@ class AppPaths {
   static const String notifications = 'notifications';
   static const String ridesPendingA = 'ridesPendingA';
   static const String ridesPendingB = 'ridesPendingB';
+  static const driverLocations = 'driverLocations';
+  // ignore: constant_identifier_names
+  static const trip_shares = 'trip_shares';
+  static const locationsCollection = 'locations';
 }
 
 class AppFields {

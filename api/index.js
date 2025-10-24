@@ -1117,7 +1117,7 @@ apiRouter.post('/housekeep/run', async (_req, res) => {
   }
 });
 
-// New: Create a shareable trip link
+// FINAL: Create shareable trip + return NETLIFY URL
 apiRouter.post('/trip/share', async (req, res) => {
   const { rideId, userId } = req.body;
   if (!rideId || !userId) {
@@ -1125,9 +1125,9 @@ apiRouter.post('/trip/share', async (req, res) => {
   }
 
   try {
-    // Generate a unique shareId
+    // Generate unique shareId
     const shareId = Math.random().toString(36).substring(2, 15);
-    
+
     // Validate ride exists
     const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
     const rideSnap = await rideRef.get();
@@ -1135,22 +1135,23 @@ apiRouter.post('/trip/share', async (req, res) => {
       return res.status(404).json({ error: 'Ride not found' });
     }
 
-    // Initialize share node in RTDB
+    // Create trip_shares node
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
       rideId,
       userId,
       createdAt: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // Return shareable URL
-    const shareUrl = `https://fem-drive.vercel.app/trip/${shareId}`; // Update with your Vercel domain
+    // RETURN NETLIFY TRACKER URL
+    const NETLIFY_URL = "https://magical-flan-a4e3e3.netlify.app";
+    const shareUrl = `${NETLIFY_URL}/trip/${shareId}`;
+
     res.json({ ok: true, shareId, shareUrl });
   } catch (e) {
     console.error('Trip share error:', e);
     res.status(500).json({ error: e.message });
   }
 });
-
 // New: Update location for a shared trip
 apiRouter.post('/trip/:shareId/location', async (req, res) => {
   const { shareId } = req.params;
@@ -1217,7 +1218,14 @@ app.get('/trip/:shareId', (req, res) => {
     }
   });
 });
+// === UPDATE THIS LINE ===
+const NETLIFY_TRACKER = "https://scintillating-alpaca-17a661.netlify.app";
 
+res.json({
+  ok: true,
+  shareId,
+  shareUrl: `${NETLIFY_TRACKER}/trip/${shareId}`
+});
 // Optional: with trailing slash
 app.get('/trip/:shareId/', (req, res) => {
   res.redirect('/trip/' + req.params.shareId);

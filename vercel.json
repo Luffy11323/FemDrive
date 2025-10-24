@@ -1,22 +1,13 @@
 {
-  "rewrites": [
-    {
-      "source": "/trip/:shareId",
-      "destination": "/api/trip"
-    },
-    {
-      "source": "/trip/:shareId/",
-      "destination": "/api/trip"
-    }
+  "version": 2,
+  "builds": [
+    { "src": "api/**/*.js", "use": "@vercel/node" }
   ],
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type,Authorization" }
-      ]
-    }
-  ]
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/trip/(.*)", "dest": "/api/trip" }
+  ],
+  "functions": {
+    "api/trip/index.js": { "maxDuration": 10 }
+  }
 }
