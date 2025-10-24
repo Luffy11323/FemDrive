@@ -1207,9 +1207,9 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
 // === SERVE trip.html STATICALLY ===
 const path = require('path');
 
-// Serve /trip/abc123 → web/trip.html
+// Serve /trip/abc123 → static/trip.html
 app.get('/trip/:shareId', (req, res) => {
-  const filePath = path.resolve(__dirname, '../web/trip.html');
+  const filePath = path.resolve(__dirname, '../static/trip.html');
   res.sendFile(filePath, (err) => {
     if (err) {
       console.error('File send error:', err);
