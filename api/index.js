@@ -1218,14 +1218,7 @@ app.get('/trip/:shareId', (req, res) => {
     }
   });
 });
-// === UPDATE THIS LINE ===
-const NETLIFY_TRACKER = "https://scintillating-alpaca-17a661.netlify.app";
 
-res.json({
-  ok: true,
-  shareId,
-  shareUrl: `${NETLIFY_TRACKER}/trip/${shareId}`
-});
 // Optional: with trailing slash
 app.get('/trip/:shareId/', (req, res) => {
   res.redirect('/trip/' + req.params.shareId);
