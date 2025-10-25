@@ -1161,7 +1161,37 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+apiRouter.post('/trip/share', async (req, res) => {
+  const { rideId, userId } = req.body;
+  if (!rideId || !userId) {
+    return res.status(400).json({ error: 'Missing rideId/userId' });
+  }
 
+  try {
+    // Generate unique shareId
+    const shareId = Math.random().toString(36).substring(2, 15);
+
+    // Validate ride exists
+    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    // Create trip_shares node
+    await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
+      rideId,
+      userId,
+      createdAt: admin.database.ServerValue.TIMESTAMP,
+    });
+
+    const shareUrl = `https://fem-drive.vercel.app/trip/${shareId}`;
+    res.json({ ok: true, shareId, shareUrl });
+  } catch (e) {
+    console.error('Trip share error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 // Optional: with trailing slash
 app.get('/trip/:shareId/', (req, res) => {
   res.redirect('/trip/' + req.params.shareId);
