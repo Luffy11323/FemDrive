@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Live Trip Tracker  FemDrive</title>
+  <title>Live Trip Tracker - FemDrive</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
     #map { width: 100%; height: 100%; }
-    #error {
+    #status {
       position: absolute; top: 16px; left: 16px; right: 16px;
       background: #ff4444; color: white; padding: 12px; border-radius: 8px;
       text-align: center; z-index: 1000; display: none; font-weight: 500;
@@ -16,16 +16,14 @@
   </style>
 </head>
 <body>
-  <div id="error"></div>
+  <div id="status"></div>
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
     import { getDatabase, ref, onValue, off } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
 
-    // Firebase configuration
     const firebaseConfig = {
       apiKey: "AIzaSyBEbRIB7WEQRE84HxH0CH_V8WOoHUnIPd8",
       authDomain: "ridesharefyp-0022.firebaseapp.com",
@@ -36,30 +34,21 @@
       appId: "1:278929890705:web:9066d1a6a34159ac3ece30"
     };
 
-    // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
-
-    // Get shareId from URL (e.g., /trip/abc123)
     const shareId = window.location.pathname.split('/').pop();
-    const errorDiv = document.getElementById('error');
+    const status = document.getElementById('status');
 
     if (!shareId || shareId === 'trip') {
-      errorDiv.innerText = 'Invalid trip link. Please check the shared URL.';
-      errorDiv.style.display = 'block';
+      status.innerText = 'Invalid trip link. Please check the shared URL.';
+      status.style.display = 'block';
       document.title = 'Invalid Trip';
       throw new Error('Invalid shareId');
     }
 
-    // Initialize Leaflet map
     const map = L.map('map', {
-      zoomControl: true,
-      dragging: true,
-      touchZoom: true,
-      doubleClickZoom: true,
-      scrollWheelZoom: true,
-      boxZoom: true,
-      keyboard: true
+      zoomControl: true, dragging: true, touchZoom: true, doubleClickZoom: true,
+      scrollWheelZoom: true, boxZoom: true, keyboard: true
     }).setView([33.6844, 73.0479], 6); // Default: Islamabad
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -70,86 +59,64 @@
     let marker = null;
     let firstLocation = true;
 
-    // Listen for location updates
     const locationRef = ref(db, `trip_shares/${shareId}`);
-    
     onValue(locationRef, (snapshot) => {
       const data = snapshot.val();
-
       if (!data || data.lat == null || data.lng == null) {
-        errorDiv.innerText = 'Waiting for location update...';
-        errorDiv.style.display = 'block';
+        status.innerText = 'Waiting for location update...';
+        status.style.display = 'block';
         return;
       }
 
-      // Check freshness: 5 minutes
       const now = Date.now();
       const updatedAt = data.updatedAt || 0;
-      if ((now - updatedAt) > 5 * 60 * 1000) {
-        errorDiv.innerText = 'Location is outdated (more than 5 minutes old)';
-        errorDiv.style.display = 'block';
+      const age = Math.floor((now - updatedAt) / (1000 * 60)); // Minutes
+      const speed = data.speed || 0;
+
+      if (age > 5) { // 5-minute timeout
+        status.innerText = 'Location outdated (>5 min)';
+        status.style.display = 'block';
         return;
       }
 
-      const latLng = [parseFloat(data.lat), parseFloat(data.lng)];
-
-      // Validate coordinates
-      if (isNaN(latLng[0]) || isNaN(latLng[1])) {
-        errorDiv.innerText = 'Invalid location data';
-        errorDiv.style.display = 'block';
+      const pos = [parseFloat(data.lat), parseFloat(data.lng)];
+      if (isNaN(pos[0]) || isNaN(pos[1])) {
+        status.innerText = 'Invalid location data';
+        status.style.display = 'block';
         return;
       }
 
-      // Update or create marker with smooth animation
       if (marker) {
-        marker.setLatLng(latLng);
+        marker.setLatLng(pos);
       } else {
-        marker = L.marker(latLng, {
-          title: 'Live Location',
-          riseOnHover: true
+        marker = L.marker(pos, {
+          icon: L.icon({
+            iconUrl: '/icons/driver-marker.png',  // Local asset
+            iconSize: [32, 32]
+          })
         }).addTo(map)
-          .bindPopup('<b>Live Location</b><br>Updated just now.')
+          .bindPopup(`<b>FemDrive Driver</b><br>${speed.toFixed(1)} km/h<br>${age === 0 ? 'Just now' : age + ' min ago'}`)
           .openPopup();
       }
 
-      // Fit map on first location
       if (firstLocation) {
-        map.setView(latLng, 16);
+        map.setView(pos, 16);
         firstLocation = false;
       } else {
-        map.panTo(latLng, { animate: true, duration: 1.5 });
+        map.panTo(pos, { animate: true, duration: 1.5 });
       }
 
-      // Update popup time
-      const timeAgo = formatTimeAgo(updatedAt);
-      marker.setPopupContent(`<b>Live Location</b><br>${timeAgo}`);
-
-      errorDiv.style.display = 'none';
-      document.title = `Trip • ${Math.round(data.speed || 0)} km/h`;
+      status.style.display = 'none';
+      document.title = `Trip • ${speed.toFixed(1)} km/h`;
     }, (err) => {
       console.error('RTDB Error:', err);
-      errorDiv.innerText = `Connection error: ${err.message}`;
-      errorDiv.style.display = 'block';
+      status.innerText = `Connection error: ${err.message}`;
+      status.style.display = 'block';
     });
 
-    // Format relative time
-    function formatTimeAgo(timestamp) {
-      const seconds = Math.floor((Date.now() - timestamp) / 1000);
-      if (seconds < 60) return `Just now`;
-      if (seconds < 120) return `1 minute ago`;
-      if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
-      if (seconds < 7200) return `1 hour ago`;
-      return `${Math.floor(seconds / 3600)} hours ago`;
-    }
-
-    // Cleanup on page unload
-    window.addEventListener('beforeunload', () => {
-      off(locationRef);
-    });
-
-    // Optional: Add loading state
-    errorDiv.innerText = 'Connecting to live location...';
-    errorDiv.style.display = 'block';
+    window.addEventListener('beforeunload', () => off(locationRef));
+    status.innerText = 'Connecting to live location...';
+    status.style.display = 'block';
   </script>
 </body>
 </html>

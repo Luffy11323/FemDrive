@@ -1142,10 +1142,7 @@ apiRouter.post('/trip/share', async (req, res) => {
       createdAt: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // RETURN NETLIFY TRACKER URL
-    const NETLIFY_URL = "https://magical-flan-a4e3e3.netlify.app";
-    const shareUrl = `${NETLIFY_URL}/trip/${shareId}`;
-
+    const shareUrl = `https://fem-drive.vercel.app/trip/${shareId}`;
     res.json({ ok: true, shareId, shareUrl });
   } catch (e) {
     console.error('Trip share error:', e);
@@ -1155,7 +1152,7 @@ apiRouter.post('/trip/share', async (req, res) => {
 // New: Update location for a shared trip
 apiRouter.post('/trip/:shareId/location', async (req, res) => {
   const { shareId } = req.params;
-  const { lat, lng, userId } = req.body;
+  const { lat, lng, userId, speed } = req.body;
   if (!shareId || !lat || !lng || !userId) {
     return res.status(400).json({ error: 'Missing shareId/lat/lng/userId' });
   }
@@ -1171,6 +1168,7 @@ apiRouter.post('/trip/:shareId/location', async (req, res) => {
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).update({
       lat,
       lng,
+      speed: speed || 0,
       updatedAt: admin.database.ServerValue.TIMESTAMP,
     });
 
@@ -1204,9 +1202,6 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
-// === SERVE trip.html STATICALLY ===
-const path = require('path');
 
 // Serve /trip/abc123 → static/trip.html
 app.get('/trip/:shareId', (req, res) => {
