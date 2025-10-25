@@ -5,9 +5,10 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash');
 const haversine = require('haversine-distance');
-/// ──────────────────────────────────────────────────────────────────────────
-///  Firebase Admin initialization
-/// ──────────────────────────────────────────────────────────────────────────
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 let adminCred;
 if (process.env.SERVICE_ACCOUNT_BASE64) {
   try {
@@ -1196,6 +1197,11 @@ apiRouter.post('/trip/share', async (req, res) => {
 app.get('/trip/:shareId/', (req, res) => {
   res.redirect('/trip/' + req.params.shareId);
 });
+
+app.get('/', (_, res) => {
+  res.sendFile(path.join(__dirname, 'trip.html'));
+});
+
 // Mount the API router at /api
 app.use('/api', apiRouter);
 
