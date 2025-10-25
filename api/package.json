@@ -2,13 +2,13 @@
   "name": "femdrive",
   "version": "1.0.0",
   "description": "FemDrive Backend API",
-  "main": "api/index.js",
+  "main": "index.js",
   "type": "commonjs",
   "engines": {
     "node": "18.x"
   },
   "scripts": {
-    "start": "node api/index.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

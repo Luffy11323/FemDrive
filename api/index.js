@@ -450,41 +450,53 @@ apiRouter.post('/accept/driver', async (req, res) => {
 
 // 4) Counter fare (driver → rider)
 apiRouter.post('/ride/counter-fare', async (req, res) => {
-  const { rideId, driverUid, counterFare } = req.body;
-  if (!rideId || !driverUid || typeof counterFare !== 'number') {
-    return res.status(400).json({ error: 'Missing rideId/driverUid/counterFare' });
+  const { rideId, driverUid, counterFare, riderId } = req.body;
+  if (!rideId || !driverUid || !counterFare || !riderId) {
+    return res.status(400).json({ error: 'Missing required fields' });
   }
+
   try {
-    const ref = db.collection(AppPaths.ridesCollection).doc(rideId);
-    await ref.set(
-      { counterFare, [AppFields.status]: 'pending_counter' },
-      { merge: true },
-    );
-    await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
-      [AppFields.status]: 'pending_counter',
-      updatedAt: admin.database.ServerValue.TIMESTAMP,
+    const rideRef = db.collection('rides').doc(rideId);
+    const rideSnap = await rideRef.get();
+    if (!rideSnap.exists) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const rideData = rideSnap.data();
+    if (rideData.status === 'cancelled' || rideData.status === 'completed') {
+      return res.status(400).json({ error: 'Ride is no longer active' });
+    }
+
+    // Update ride with counter offer
+    await rideRef.update({
+      counterFare: counterFare,
+      counterProposedAt: admin.firestore.FieldValue.serverTimestamp(),
+      counterDriverId: driverUid,
     });
 
-    const riderId = (await ref.get()).data()?.[AppFields.riderId];
-    if (riderId) {
-      await rtdb.child(`${AppPaths.notifications}/${riderId}`).push().set({
-        [AppFields.type]: 'counter_fare',
-        counterFare,
-        [AppFields.rideId]: rideId,
-        [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
-      });
-      await fcmToUser(riderId, {
-        notification: { title: 'Counter Fare', body: `Driver offered $${counterFare.toFixed(2)}` },
-        data: { rideId, action: 'COUNTER_FARE' },
-      }, {
-        androidSound: 'ride_accept_3s',
-        iosSound:     'ride_accept_3s.wav',
-        androidChannelId: 'ride_accept_ch',
+    // Notify rider via FCM
+    const userRef = db.collection('users').doc(riderId);
+    const userSnap = await userRef.get();
+    const fcmToken = userSnap.data()?.fcmToken;
+
+    if (fcmToken) {
+      await fcm.send({
+        token: fcmToken,
+        notification: {
+          title: 'Counter Offer Received',
+          body: `Driver proposed $${counterFare} for ride ${rideId}`,
+          sound: 'ride_cancel_2s',
+        },
+        data: { action: 'COUNTER_OFFER', rideId, counterFare },
+        android: { priority: 'high', notification: { channelId: 'ride_progress_ch' } },
+        apns: { payload: { aps: { sound: 'ride_cancel_2s.wav', contentAvailable: 1 } }, headers: { 'apns-priority': '10' } },
       });
     }
-    res.json({ ok: true });
+
+    res.json({ ok: true, counterFare });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('Error processing counter fare:', e);
+    res.status(500).json({ error: 'Failed to process counter fare' });
   }
 });
 
@@ -985,59 +997,6 @@ apiRouter.post('/rides/:rideId/messages', async (req, res) => {
   }
 });
 
-// NEW: Handle counter fare proposal
-apiRouter.post('/ride/counter-fare', async (req, res) => {
-  const { rideId, driverUid, counterFare, riderId } = req.body;
-
-  if (!rideId || !driverUid || !counterFare || !riderId) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  try {
-    const rideRef = db.collection('rides').doc(rideId);
-    const rideSnap = await rideRef.get();
-    if (!rideSnap.exists) {
-      return res.status(404).json({ error: 'Ride not found' });
-    }
-
-    const rideData = rideSnap.data();
-    if (rideData.status === 'cancelled' || rideData.status === 'completed') {
-      return res.status(400).json({ error: 'Ride is no longer active' });
-    }
-
-    // Update ride with counter offer
-    await rideRef.update({
-      counterFare: counterFare,
-      counterProposedAt: admin.firestore.FieldValue.serverTimestamp(),
-      counterDriverId: driverUid,
-    });
-
-    // Notify rider via FCM
-    const userRef = db.collection('users').doc(riderId);
-    const userSnap = await userRef.get();
-    const fcmToken = userSnap.data()?.fcmToken;
-
-    if (fcmToken) {
-      await fcm.send({
-        token: fcmToken,
-        notification: {
-          title: 'Counter Offer Received',
-          body: `Driver proposed $${counterFare} for ride ${rideId}`,
-          sound: 'ride_cancel_2s',
-        },
-        data: { action: 'COUNTER_OFFER', rideId, counterFare },
-        android: { priority: 'high', notification: { channelId: 'ride_progress_ch' } },
-        apns: { payload: { aps: { sound: 'ride_cancel_2s.wav', contentAvailable: 1 } }, headers: { 'apns-priority': '10' } },
-      });
-    }
-
-    res.json({ ok: true, counterFare });
-  } catch (e) {
-    console.error('Error processing counter fare:', e);
-    res.status(500).json({ error: 'Failed to process counter fare' });
-  }
-});
-
 // New: Update Location (from location_service.dart)
 apiRouter.post('/updateLocation', async (req, res) => {
   const { role, rideId, lat, lng, driverId } = req.body;
@@ -1200,21 +1159,6 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   } catch (e) {
     console.error('Stop trip share error:', e);
     res.status(500).json({ error: e.message });
-  }
-});
-
-// Serve static trip.html for /trip/:shareId
-app.get('/trip/:shareId', (req, res) => {
-  const filePath = path.resolve(__dirname, 'trip.html');
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath, (err) => {
-      if (err) {
-        console.error('File send error:', err);
-        res.status(500).send('Server error');
-      }
-    });
-  } else {
-    res.status(404).send('Trip page not found');
   }
 });
 

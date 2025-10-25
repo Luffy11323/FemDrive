@@ -1,13 +1,13 @@
 {
   "functions": {
-    "api/index.js": { 
+    "index.js": { 
       "maxDuration": 10 
     }
   },
   "rewrites": [
     { 
       "source": "/api/:path*", 
-      "destination": "/api/index" 
+      "destination": "/index.js" 
     },
     { 
       "source": "/trip/:shareId", 
