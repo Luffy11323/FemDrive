@@ -3,7 +3,7 @@
   "version": 2,
   "functions": {
     "index.js": {
-      "runtime": "@vercel/node@2.1.1" 
+      "runtime": "@vercel/node@2.1.1"
     }
   },
   "rewrites": [
