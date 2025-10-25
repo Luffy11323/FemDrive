@@ -6,14 +6,14 @@
       "use": "@vercel/node"
     }
   ],
-  "rewrites": [
-    { 
-      "source": "/api/:path*", 
-      "destination": "/index.js" 
+  "routes": [
+    {
+      "source": "/api/:path*",
+      "destination": "/index.js"
     },
-    { 
-      "source": "/trip/:shareId", 
-      "destination": "/trip.html" 
+    {
+      "source": "/trip/:shareId",
+      "destination": "/trip.html"
     }
   ],
   "headers": [
