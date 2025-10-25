@@ -1147,7 +1147,7 @@ apiRouter.get('/trip/:shareId', async (req, res) => {
 app.use('/api', apiRouter);
 
 // Serve trip.html for /trip/:shareId routes
-app.get('/trip/:shareId', (req, res) => {
+app.get('/trip/:shareId', (_req, res) => {
   res.sendFile(path.join(__dirname, 'trip.html'));
 });
 
@@ -1166,3 +1166,4 @@ if (require.main === module) {
 
 // Export for Vercel serverless
 module.exports = app;
+module.exports.default = app;
