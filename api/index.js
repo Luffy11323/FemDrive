@@ -1153,8 +1153,16 @@ app.get('/trip/:shareId', (req, res) => {
 
 // Root route
 app.get('/', (_, res) => {
-  res.sendFile(path.join(__dirname, 'trip.html'));
+  res.json({ message: 'FemDrive API is running', status: 'ok' });
 });
 
-// Export for Vercel
+// For local development
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+// Export for Vercel serverless
 module.exports = app;
