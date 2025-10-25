@@ -2,14 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "functions": {
-    "api/index.js": {
+    "index.js": {
       "runtime": "@vercel/node@2.1.1"
     }
   },
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api/index.js"
+      "destination": "/index.js"
     },
     {
       "source": "/trip/:shareId",
