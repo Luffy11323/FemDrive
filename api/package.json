@@ -1,5 +1,5 @@
 {
-  "name": "femdrive",
+  "name": "femdrive-api",
   "version": "1.0.0",
   "description": "FemDrive Backend API",
   "main": "index.js",

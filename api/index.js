@@ -6,8 +6,8 @@ const admin = require('firebase-admin');
 const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash');
 const haversine = require('haversine-distance');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// CommonJS __dirname is available by default
+const __dirname = __dirname || path.dirname(__filename);
 
 let adminCred;
 if (process.env.SERVICE_ACCOUNT_BASE64) {
@@ -141,7 +141,7 @@ const StatusTitles = {
   accepted:       { title: 'Ride Accepted',    body: 'Your driver has accepted your ride.' },
   driver_arrived: { title: 'Driver Arrived',   body: 'Your driver has arrived.' },
   in_progress:    { title: 'Ride Started',     body: 'Your ride has begun.' },
-  onTrip:         { title: 'Ride Started',     body: 'Your ride has begun.' }, // alias
+  onTrip:         { title: 'Ride Started',     body: 'Your ride has begun.' },
   completed:      { title: 'Ride Completed',   body: 'Thanks for riding with FemDrive!' },
   cancelled:      { title: 'Ride Cancelled',   body: 'This ride has been cancelled.' },
   no_drivers:     { title: 'No Drivers Available', body: 'Sorry, no drivers are currently available.' },
@@ -329,7 +329,6 @@ apiRouter.post('/pair/ride', async (req, res) => {
         updatedAt: admin.database.ServerValue.TIMESTAMP,
       });
 
-      // Notify rider (no drivers)
       const riderId = r[AppFields.riderId];
       if (riderId) {
         await fcmToUser(riderId, {
@@ -360,7 +359,6 @@ apiRouter.post('/pair/ride', async (req, res) => {
     }
     await rtdb.update(updates);
 
-    // Push FCM to top N drivers with ring
     const topN = Math.min(10, candidates.length);
     let fcmCount = 0;
     for (let i = 0; i < topN; i++) {
@@ -395,7 +393,7 @@ apiRouter.post('/accept/driver', async (req, res) => {
     const result = await db.runTransaction(async (t) => {
       const snap = await t.get(rideRef);
       const cur = snap.data() || {};
-      if (cur[AppFields.driverId]) return { assigned: false }; // already won elsewhere
+      if (cur[AppFields.driverId]) return { assigned: false };
       t.set(rideRef, {
         [AppFields.driverId]: driverUid,
         [AppFields.status]: RideStatus.accepted,
@@ -411,7 +409,6 @@ apiRouter.post('/accept/driver', async (req, res) => {
         updatedAt: admin.database.ServerValue.TIMESTAMP,
       });
 
-      // Clean driver notifications for this ride
       const all = await rtdb.child(AppPaths.driverNotifications).get();
       const del = {};
       all.forEach((driverSnap) => {
@@ -421,13 +418,11 @@ apiRouter.post('/accept/driver', async (req, res) => {
       });
       if (Object.keys(del).length) await rtdb.update(del);
 
-      // Remove legacy queues
       await Promise.all([
         rtdb.child(`${AppPaths.ridesPendingA}/${rideId}`).remove().catch(() => {}),
         rtdb.child(`${AppPaths.ridesPendingB}/${rideId}`).remove().catch(() => {}),
       ]);
 
-      // Notify rider (accepted)
       const snap = await rideRef.get();
       const riderId = snap.data()?.[AppFields.riderId];
       if (riderId) {
@@ -468,14 +463,12 @@ apiRouter.post('/ride/counter-fare', async (req, res) => {
       return res.status(400).json({ error: 'Ride is no longer active' });
     }
 
-    // Update ride with counter offer
     await rideRef.update({
       counterFare: counterFare,
       counterProposedAt: admin.firestore.FieldValue.serverTimestamp(),
       counterDriverId: driverUid,
     });
 
-    // Notify rider via FCM
     const userRef = db.collection('users').doc(riderId);
     const userSnap = await userRef.get();
     const fcmToken = userSnap.data()?.fcmToken;
@@ -514,7 +507,6 @@ apiRouter.post('/ride/counter-fare/resolve', async (req, res) => {
     const driverId = data[AppFields.driverId];
     if (!driverId) return res.json({ ok: true, skipped: 'no_driver' });
 
-    // Push to driver
     await fcmToUser(driverId, {
       notification: {
         title: accepted ? 'Counter Fare Accepted' : 'Counter Fare Rejected',
@@ -595,7 +587,6 @@ apiRouter.post('/ride/cancel', async (req, res) => {
       updatedAt: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // Remove pending notifications
     const all = await rtdb.child(AppPaths.driverNotifications).get();
     const del = {};
     all.forEach((driverSnap) => {
@@ -605,7 +596,6 @@ apiRouter.post('/ride/cancel', async (req, res) => {
     });
     if (Object.keys(del).length) await rtdb.update(del);
 
-    // Role-aware pushes
     const byIsRider  = byUid && riderId && byUid === riderId;
     const byIsDriver = byUid && driverId && byUid === driverId;
 
@@ -640,7 +630,7 @@ apiRouter.post('/ride/cancel', async (req, res) => {
   }
 });
 
-// 7) Emergency endpoint (also notifies reported user)
+// 7) Emergency endpoint
 apiRouter.post('/emergency', async (req, res) => {
   const { rideId, reportedBy, otherUid } = req.body;
   if (!rideId || !reportedBy || !otherUid) {
@@ -686,7 +676,6 @@ apiRouter.post('/emergency', async (req, res) => {
 
     await batch.commit();
 
-    // RTDB updates
     await rtdb.child(`${AppPaths.ridesLive}/${rideId}`).update({
       [AppFields.status]: RideStatus.cancelled,
       [AppFields.emergencyTriggered]: true,
@@ -698,7 +687,6 @@ apiRouter.post('/emergency', async (req, res) => {
       rtdb.child(`${AppPaths.ridesPendingB}/${rideId}`).remove(),
     ]);
 
-    // Clean driver notifications
     const notifsSnap = await rtdb.child(AppPaths.driverNotifications).get();
     if (notifsSnap.exists() && typeof notifsSnap.val() === 'object') {
       const updates = {};
@@ -711,7 +699,6 @@ apiRouter.post('/emergency', async (req, res) => {
       if (Object.keys(updates).length) await rtdb.update(updates);
     }
 
-    // Notify rider
     await rtdb.child(`${AppPaths.notifications}/${otherUid}`).push().set({
       [AppFields.type]: 'ride_cancelled',
       [AppFields.rideId]: rideId,
@@ -719,7 +706,6 @@ apiRouter.post('/emergency', async (req, res) => {
       [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // Notify admin
     await rtdb.child('notifications/admin').push().set({
       [AppFields.type]: 'emergency',
       [AppFields.rideId]: rideId,
@@ -728,7 +714,6 @@ apiRouter.post('/emergency', async (req, res) => {
       [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // FCM to admins
     const adminTokens = await getAdminTokens();
     if (adminTokens.length) {
       await fcm.sendMulticast({
@@ -744,15 +729,13 @@ apiRouter.post('/emergency', async (req, res) => {
       });
     }
 
-    // Notify the reported user
     await fcmToUser(otherUid, {
       notification: { title: 'Safety Report Filed', body: `A report was filed against you for ride ${rideId}.` },
       data: { action: 'REPORTED_AGAINST_YOU', rideId, reportedBy },
     }, { androidChannelId: 'ride_reports_ch' });
 
-    // Notify the reporter
     await fcmToUser(reportedBy, {
-      notification: { title: 'Emergency Sent', body: `We’ve notified support and the other party for ride ${rideId}.` },
+      notification: { title: 'Emergency Sent', body: `We've notified support and the other party for ride ${rideId}.` },
       data: { action: 'EMERGENCY', rideId },
     }, {
       androidChannelId: 'ride_incoming_ch',
@@ -760,7 +743,6 @@ apiRouter.post('/emergency', async (req, res) => {
       iosSound: 'ride_incoming_15s.wav',
     });
 
-    // Optional mail
     await db.collection('mail').add({
       to: 'ops@example.com',
       subject: '🚨 Emergency Triggered',
@@ -774,9 +756,9 @@ apiRouter.post('/emergency', async (req, res) => {
   }
 });
 
-// 8) Payments (optional hooks you can call from your PaymentService)
+// 8) Payments
 apiRouter.post('/notify/payment', async (req, res) => {
-  const { rideId, toUid, ok } = req.body; // ok=true/false
+  const { rideId, toUid, ok } = req.body;
   if (!rideId || !toUid || typeof ok !== 'boolean') {
     return res.status(400).json({ error: 'Missing rideId/toUid/ok' });
   }
@@ -794,7 +776,7 @@ apiRouter.post('/notify/payment', async (req, res) => {
   }
 });
 
-// New: User Signup (from signup_page.dart)
+// User Signup
 apiRouter.post('/signup', async (req, res) => {
   const {
     uid,
@@ -818,22 +800,18 @@ apiRouter.post('/signup', async (req, res) => {
   }
 
   try {
-    // Validate phone
     if (await validatePhone(phone)) {
       return res.status(400).json({ error: 'Phone number already registered' });
     }
 
-    // Validate CNIC
     if (await validateCnic(cnicNumber)) {
       return res.status(400).json({ error: 'CNIC already registered' });
     }
 
-    // Calculate trust score (placeholder; integrate ML if needed)
-    const trustScore = 0.7; // From document verification
+    const trustScore = 0.7;
     const verified = trustScore >= 0.6;
     const requiresManualReview = trustScore < 0.6;
 
-    // User document
     const userDoc = {
       [AppFields.uid]: uid,
       [AppFields.phone]: phone,
@@ -859,7 +837,6 @@ apiRouter.post('/signup', async (req, res) => {
       userDoc[AppFields.awaitingVerification] = awaitingVerification;
     }
 
-    // Batch write
     const batch = db.batch();
     batch.set(db.collection('users').doc(uid), userDoc);
     batch.set(db.collection('phones').doc(phone.replace(/\D/g, '')), { uid, type: 'primary' });
@@ -870,7 +847,6 @@ apiRouter.post('/signup', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    // Cleanup phones on failure
     await db.collection('phones').doc(phone.replace(/\D/g, '')).delete().catch(() => {});
     if (role === 'driver' && altContact) {
       await db.collection('phones').doc(altContact.replace(/\D/g, '')).delete().catch(() => {});
@@ -880,7 +856,7 @@ apiRouter.post('/signup', async (req, res) => {
   }
 });
 
-// New: Process Payment (from payment_services.dart)
+// Process Payment
 apiRouter.post('/processPayment', async (req, res) => {
   const { rideId, amount, paymentMethod, userId } = req.body;
   if (!rideId || !amount || !paymentMethod || !userId) {
@@ -888,7 +864,6 @@ apiRouter.post('/processPayment', async (req, res) => {
   }
 
   try {
-    // Validate payment method (placeholder; integrate real gateway)
     const validMethods = ['EasyPaisa', 'JazzCash', 'Card', 'Cash'];
     if (!validMethods.includes(paymentMethod)) {
       return res.status(400).json({ error: 'Invalid payment method' });
@@ -926,11 +901,10 @@ apiRouter.post('/processPayment', async (req, res) => {
 
     await batch.commit();
 
-    // Notify user
     await fcmToUser(userId, {
       notification: {
         title: 'Payment Processed',
-        body: `Your payment of $${amount.toFixed(2)} via ${paymentMethod} was successful.`,
+        body: `Your payment of ${amount.toFixed(2)} via ${paymentMethod} was successful.`,
       },
       data: { rideId, action: 'PAYMENT_CONFIRMED' },
     }, { androidChannelId: 'ride_payments_ch' });
@@ -942,7 +916,7 @@ apiRouter.post('/processPayment', async (req, res) => {
   }
 });
 
-// 9) Send Message → Store and notify recipient
+// 9) Send Message
 apiRouter.post('/rides/:rideId/messages', async (req, res) => {
   const rideId = req.params.rideId;
   const { senderId, text } = req.body;
@@ -952,7 +926,6 @@ apiRouter.post('/rides/:rideId/messages', async (req, res) => {
   }
   
   try {
-    // 1. Store message in Realtime Database
     const messageRef = await rtdb.child(`rides/${rideId}/messages`).push();
     await messageRef.set({
       [AppFields.senderId]: senderId,
@@ -960,7 +933,6 @@ apiRouter.post('/rides/:rideId/messages', async (req, res) => {
       [AppFields.timestamp]: admin.database.ServerValue.TIMESTAMP,
     });
 
-    // 2. Determine recipient (rider or driver)
     const rideSnap = await db.collection(AppPaths.ridesCollection).doc(rideId).get();
     const rideData = rideSnap.data() || {};
     const recipientId = senderId === rideData[AppFields.driverId] ? rideData[AppFields.riderId] : rideData[AppFields.driverId];
@@ -969,11 +941,9 @@ apiRouter.post('/rides/:rideId/messages', async (req, res) => {
       return res.status(400).json({ error: 'Recipient not found' });
     }
 
-    // 3. Fetch sender's username for notification
     const senderSnap = await db.collection('users').doc(senderId).get();
     const senderName = senderSnap.data()?.[AppFields.username] || 'User';
 
-    // 4. Send FCM notification with formatted message
     const notificationBody = `${senderName}: ${text.length > 50 ? `${text.substring(0, 47)}...` : text}`;
     const ok = await fcmToUser(recipientId, {
       notification: {
@@ -998,7 +968,7 @@ apiRouter.post('/rides/:rideId/messages', async (req, res) => {
   }
 });
 
-// New: Update Location (from location_service.dart)
+// Update Location
 apiRouter.post('/updateLocation', async (req, res) => {
   const { role, rideId, lat, lng, driverId } = req.body;
   if (!role || !lat || !lng) {
@@ -1023,7 +993,6 @@ apiRouter.post('/updateLocation', async (req, res) => {
 
     await rtdb.update(updates);
 
-    // Log to Firestore (background locations)
     if (driverId) {
       await db.collection('drivers').doc(driverId).collection('bg_locations').add({
         lat,
@@ -1077,7 +1046,7 @@ apiRouter.post('/housekeep/run', async (_req, res) => {
   }
 });
 
-// FINAL: Create shareable trip + return NETLIFY URL
+// Trip Share - Create
 apiRouter.post('/trip/share', async (req, res) => {
   const { rideId, userId } = req.body;
   if (!rideId || !userId) {
@@ -1085,17 +1054,14 @@ apiRouter.post('/trip/share', async (req, res) => {
   }
 
   try {
-    // Generate unique shareId
     const shareId = Math.random().toString(36).substring(2, 15);
 
-    // Validate ride exists
     const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
     const rideSnap = await rideRef.get();
     if (!rideSnap.exists) {
       return res.status(404).json({ error: 'Ride not found' });
     }
 
-    // Create trip_shares node
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
       rideId,
       userId,
@@ -1109,7 +1075,8 @@ apiRouter.post('/trip/share', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-// New: Update location for a shared trip
+
+// Trip Share - Update Location
 apiRouter.post('/trip/:shareId/location', async (req, res) => {
   const { shareId } = req.params;
   const { lat, lng, userId, speed } = req.body;
@@ -1118,13 +1085,11 @@ apiRouter.post('/trip/:shareId/location', async (req, res) => {
   }
 
   try {
-    // Verify the share exists and belongs to the user
     const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
     if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
       return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
     }
 
-    // Update location
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).update({
       lat,
       lng,
@@ -1139,7 +1104,7 @@ apiRouter.post('/trip/:shareId/location', async (req, res) => {
   }
 });
 
-// New: Stop sharing a trip
+// Trip Share - Stop
 apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   const { shareId } = req.params;
   const { userId } = req.body;
@@ -1148,13 +1113,11 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   }
 
   try {
-    // Verify the share exists and belongs to the user
     const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
     if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
       return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
     }
 
-    // Remove the share node
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).remove();
     res.json({ ok: true });
   } catch (e) {
@@ -1162,49 +1125,36 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-apiRouter.post('/trip/share', async (req, res) => {
-  const { rideId, userId } = req.body;
-  if (!rideId || !userId) {
-    return res.status(400).json({ error: 'Missing rideId/userId' });
-  }
 
+// Trip Share - Get (for viewing)
+apiRouter.get('/trip/:shareId', async (req, res) => {
+  const { shareId } = req.params;
+  
   try {
-    // Generate unique shareId
-    const shareId = Math.random().toString(36).substring(2, 15);
-
-    // Validate ride exists
-    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
-    const rideSnap = await rideRef.get();
-    if (!rideSnap.exists) {
-      return res.status(404).json({ error: 'Ride not found' });
+    const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
+    if (!shareSnap.exists()) {
+      return res.status(404).json({ error: 'Share not found' });
     }
 
-    // Create trip_shares node
-    await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
-      rideId,
-      userId,
-      createdAt: admin.database.ServerValue.TIMESTAMP,
-    });
-
-    const shareUrl = `https://fem-drive.vercel.app/trip/${shareId}`;
-    res.json({ ok: true, shareId, shareUrl });
+    res.json({ ok: true, data: shareSnap.val() });
   } catch (e) {
-    console.error('Trip share error:', e);
+    console.error('Get trip share error:', e);
     res.status(500).json({ error: e.message });
   }
-});
-// Optional: with trailing slash
-app.get('/trip/:shareId/', (req, res) => {
-  res.redirect('/trip/' + req.params.shareId);
-});
-
-app.get('/', (_, res) => {
-  res.sendFile(path.join(__dirname, 'trip.html'));
 });
 
 // Mount the API router at /api
 app.use('/api', apiRouter);
 
-module.exports = app;
+// Serve trip.html for /trip/:shareId routes
+app.get('/trip/:shareId', (req, res) => {
+  res.sendFile(path.join(__dirname, 'trip.html'));
+});
 
-module.exports.default = app;
+// Root route
+app.get('/', (_, res) => {
+  res.sendFile(path.join(__dirname, 'trip.html'));
+});
+
+// Export for Vercel
+module.exports = app;

@@ -2,23 +2,20 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "functions": {
-    "index.js": {
-      "runtime": "@vercel/node@2.1.1"
+    "api/index.js": {
+      "runtime": "@vercel/node@2.1.1",
+      "includeFiles": "api/trip.html"
     }
   },
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "/index.js"
-    },
-    {
-      "source": "/trip/:shareId",
-      "destination": "/trip.html"
+      "source": "/:path*",
+      "destination": "/api/index.js"
     }
   ],
   "headers": [
     {
-      "source": "/api/(.*)",
+      "source": "/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
