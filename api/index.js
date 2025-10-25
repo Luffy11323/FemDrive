@@ -1203,15 +1203,19 @@ apiRouter.post('/trip/:shareId/stop', async (req, res) => {
   }
 });
 
-// Serve /trip/abc123 → static/trip.html
+// Serve static trip.html for /trip/:shareId
 app.get('/trip/:shareId', (req, res) => {
-  const filePath = path.resolve(__dirname, '../static/trip.html');
-  res.sendFile(filePath, (err) => {
-    if (err) {
-      console.error('File send error:', err);
-      res.status(500).send('Server error');
-    }
-  });
+  const filePath = path.resolve(__dirname, 'trip.html');
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error('File send error:', err);
+        res.status(500).send('Server error');
+      }
+    });
+  } else {
+    res.status(404).send('Trip page not found');
+  }
 });
 
 // Optional: with trailing slash

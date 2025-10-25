@@ -6,12 +6,12 @@
   },
   "rewrites": [
     { 
-      "source": "/trip/:shareId", 
+      "source": "/api/:path*", 
       "destination": "/api/index" 
     },
     { 
-      "source": "/api/:path*", 
-      "destination": "/api/index" 
+      "source": "/trip/:shareId", 
+      "destination": "/trip.html" 
     }
   ],
   "headers": [
