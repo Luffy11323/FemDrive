@@ -1142,27 +1142,12 @@ apiRouter.get('/trip/:shareId', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
+// Test route for trip serving
+apiRouter.get('/test-trip', (_req, res) => {
+  res.send('<h1>Trip Page Would Load Here</h1><p>If static serving works.</p>');
+});
 // Mount the API router at /api
 app.use('/api', apiRouter);
-
-// Serve trip.html for /trip/:shareId routes
-app.get('/trip/:shareId', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'trip.html'));
-});
-
-// Root route
-app.get('/', (_, res) => {
-  res.json({ message: 'FemDrive API is running', status: 'ok' });
-});
-
-// For local development
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}
 
 // Export for Vercel serverless
 module.exports = app;
