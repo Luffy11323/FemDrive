@@ -1170,3 +1170,5 @@ app.get('/trip/:shareId/', (req, res) => {
 app.use('/api', apiRouter);
 
 module.exports = app;
+
+module.exports.default = app;
