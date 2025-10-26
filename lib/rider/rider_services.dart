@@ -995,7 +995,7 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
 }
 class ShareTripService {
   final _logger = Logger();
-  final String _apiBaseUrl = 'https://fem-drive.vercel.app/api';  // Vercel only
+  final String _apiBaseUrl = 'https://fem-drive.vercel.app/api/trip';
   String? _currentShareId;
   Timer? _expirationTimer;
   Timer? _locationUpdateTimer;
@@ -1003,51 +1003,74 @@ class ShareTripService {
   Future<String> startSharing(String rideId) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('User not logged in');
-    if (_currentShareId != null) return 'https://fem-drive.vercel.app/trip/$_currentShareId';
 
-    final response = await http.post(
-      Uri.parse('$_apiBaseUrl/trip/share'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'rideId': rideId, 'userId': userId}),
-    );
+    // Only return cached if actively sharing
+    if (_currentShareId != null && _locationUpdateTimer?.isActive == true) {
+      return 'https://fem-drive.vercel.app/trip/$_currentShareId';
+    }
 
-    if (response.statusCode != 200) throw Exception('Failed: ${response.body}');
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/share'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'rideId': rideId, 'userId': userId}),
+      );
 
-    final data = jsonDecode(response.body);
-    _currentShareId = data['shareId'];
-    final shareUrl = 'https://fem-drive.vercel.app/trip/$_currentShareId';
+      if (response.statusCode != 200) {
+        _currentShareId = null;
+        throw Exception('Failed: ${response.body}');
+      }
 
-    // Save shareId to ride document
-    await FirebaseFirestore.instance
-        .collection('rides')
-        .doc(rideId)
-        .update({'shareId': _currentShareId});
+      final data = jsonDecode(response.body);
+      _currentShareId = data['shareId'];
+      final shareUrl = 'https://fem-drive.vercel.app/trip/$_currentShareId';
 
-    // Start periodic location updates to Firebase
-    _startLocationUpdates();
+      // Save to ride
+      await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(rideId)
+          .update({'shareId': _currentShareId});
 
-    // Auto-stop after 3 hours
-    _expirationTimer = Timer(const Duration(hours: 3), () => stopSharing(userId));
+      _startLocationUpdates();
+      _expirationTimer = Timer(const Duration(hours: 3), () => stopSharing(userId));
 
-    return shareUrl;
+      return shareUrl;
+    } catch (e) {
+      _currentShareId = null;
+      _locationUpdateTimer?.cancel();
+      rethrow;
+    }
   }
 
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
 
+    final shareId = _currentShareId;
+    _currentShareId = null;
+
     try {
       await http.post(
-        Uri.parse('$_apiBaseUrl/trip/$_currentShareId/stop'),
+        Uri.parse('$_apiBaseUrl/$shareId/stop'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'userId': userId}),
       );
-      await FirebaseDatabase.instance.ref('trip_shares/$_currentShareId').remove();
+
+      // Clean up Firestore
+      final rideSnap = await FirebaseFirestore.instance
+          .collection('rides')
+          .where('shareId', isEqualTo: shareId)
+          .limit(1)
+          .get();
+      for (final doc in rideSnap.docs) {
+        await doc.reference.update({'shareId': FieldValue.delete()});
+      }
+
+      await FirebaseDatabase.instance.ref('trip_shares/$shareId').remove();
     } catch (e) {
       _logger.e('Stop sharing error: $e');
     } finally {
       _expirationTimer?.cancel();
       _locationUpdateTimer?.cancel();
-      _currentShareId = null;
       _logger.i('Stopped sharing');
     }
   }
@@ -1058,31 +1081,23 @@ class ShareTripService {
     _locationUpdateTimer?.cancel();
     _locationUpdateTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       try {
-        LocationPermission permission = await Geolocator.checkPermission();
+        final permission = await Geolocator.checkPermission();
         if (permission == LocationPermission.denied) {
-          permission = await Geolocator.requestPermission();
-          if (permission == LocationPermission.denied) {
-            _logger.e('Location permissions denied');
-            return;
-          }
+          final req = await Geolocator.requestPermission();
+          if (req == LocationPermission.denied) return;
         }
 
         final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-          ),
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
         );
-        final speed = position.speed * 3.6;  // Convert m/s to km/h
+        final speed = position.speed * 3.6;
 
-        await FirebaseDatabase.instance
-            .ref('trip_shares/$_currentShareId')
-            .update({
-              'lat': position.latitude,
-              'lng': position.longitude,
-              'speed': speed,
-              'updatedAt': ServerValue.timestamp,
-            });
-        _logger.i('Location updated: ${position.latitude}, ${position.longitude}');
+        await FirebaseDatabase.instance.ref('trip_shares/$_currentShareId').update({
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'speed': speed,
+          'updatedAt': ServerValue.timestamp,
+        });
       } catch (e) {
         _logger.e('Location update failed: $e');
       }
