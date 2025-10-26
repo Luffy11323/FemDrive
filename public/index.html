@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FemDrive • Live Trip Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; background: #111; color: #fff; }
+    #map { width: 100%; height: 100%; }
+    #fallback {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #111; z-index: 1000; padding: 2rem; text-align: center;
+    }
+    #fallback h1 { font-size: 1.8rem; margin-bottom: 1rem; }
+    #fallback p { opacity: 0.8; }
+    #status { position: absolute; top: 16px; left: 16px; right: 16px; background: #ff4444; color: white; padding: 12px; border-radius: 8px; text-align: center; z-index: 1000; display: none; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <!-- Fallback UI (shown if JS fails or no shareId) -->
+  <div id="fallback">
+    <h1>FemDrive API is running</h1>
+    <p>Share a trip link to start live tracking.</p>
+    <p><small>Status: <code id="api-status">checking...</code></small></p>
+  </div>
+
+  <!-- Live map (hidden until ready) -->
+  <div id="status"></div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
+    import { getDatabase, ref, onValue, off } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBEbRIB7WEQRE84HxH0CH_V8WOoHUnIPd8",
+      authDomain: "ridesharefyp-0022.firebaseapp.com",
+      databaseURL: "https://ridesharefyp-0022-default-rtdb.firebaseio.com",
+      projectId: "ridesharefyp-0022",
+      storageBucket: "ridesharefyp-0022.firebasestorage.app",
+      messagingSenderId: "278929890705",
+      appId: "1:278929890705:web:9066d1a6a34159ac3ece30"
+    };
+
+    // === 1. Test API Health ===
+    const apiStatus = document.getElementById('api-status');
+    fetch('/api/health')
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) apiStatus.textContent = 'API OK';
+        apiStatus.style.color = '#4ade80';
+      })
+      .catch(() => {
+        apiStatus.textContent = 'API down';
+        apiStatus.style.color = '#ef4444';
+      });
+
+    // === 2. Extract shareId from URL (e.g. ?share=abc123 or /trip/abc123) ===
+    const urlParams = new URLSearchParams(window.location.search);
+    let shareId = urlParams.get('share');
+    if (!shareId) {
+      const pathMatch = window.location.pathname.match(/\/trip\/(.+)/);
+      shareId = pathMatch ? pathMatch[1] : null;
+    }
+
+    // === 3. If no shareId → show fallback ===
+    if (!shareId) {
+      document.getElementById('fallback').style.display = 'flex';
+      return;
+    }
+
+    // === 4. Initialize Firebase & Map ===
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const status = document.getElementById('status');
+    const fallback = document.getElementById('fallback');
+
+    const map = L.map('map').setView([33.6844, 73.0479], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let marker = null;
+    let firstLocation = true;
+
+    const locationRef = ref(db, `trip_shares/${shareId}`);
+    onValue(locationRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data || !data.lat || !data.lng) {
+        status.innerText = 'Waiting for location...';
+        status.style.display = 'block';
+        return;
+      }
+
+      const age = Math.floor((Date.now() - (data.updatedAt || 0)) / 60000);
+      if (age > 5) {
+        status.innerText = 'Location outdated (>5 min)';
+        status.style.display = 'block';
+        return;
+      }
+
+      const pos = [parseFloat(data.lat), parseFloat(data.lng)];
+      if (isNaN(pos[0]) || isNaN(pos[1])) return;
+
+      if (!marker) {
+        marker = L.marker(pos).addTo(map)
+          .bindPopup(`<b>FemDrive</b><br>${data.speed || 0} km/h`)
+          .openPopup();
+      } else {
+        marker.setLatLng(pos);
+      }
+
+      if (firstLocation) {
+        map.setView(pos, 16);
+        firstLocation = false;
+      } else {
+        map.panTo(pos, { animate: true });
+      }
+
+      status.style.display = 'none';
+      fallback.style.display = 'none'; // Hide fallback
+    }, (err) => {
+      status.innerText = `Error: ${err.message}`;
+      status.style.display = 'block';
+    });
+
+    window.addEventListener('beforeunload', () => off(locationRef));
+  </script>
+</body>
+</html>

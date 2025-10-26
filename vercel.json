@@ -4,6 +4,6 @@
     { "src": "/api/(.*)", "dest": "/api/index.js" },
     { "src": "/trip/(.*)", "dest": "/trip.html" },
     { "src": "/trip", "dest": "/trip.html" },
-    { "src": "/(.*)", "dest": "/api/index.js" }
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
