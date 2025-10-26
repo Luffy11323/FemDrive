@@ -1,5 +1,5 @@
-const fs = require('fs');
-const path = require('path');
+// const fs = require('fs');
+// const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
@@ -7,32 +7,36 @@ const { encode: geohashEncode, neighbors: geohashNeighbors } = require('ngeohash
 const haversine = require('haversine-distance');
 
 // CommonJS __dirname is available by default
-const __dirname = __dirname || path.dirname(__filename);
+// const __dirname = __dirname || path.dirname(__filename);
 
+// ────────────────────────────────────────────────────────────────────────
+// Firebase Admin SDK – Vercel‑compatible credential loading
+// ────────────────────────────────────────────────────────────────────────
 let adminCred;
+
+// 1. Production (Vercel) – use the base64 env var you just added
 if (process.env.SERVICE_ACCOUNT_BASE64) {
   try {
-    const json = Buffer.from(process.env.SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8');
-    adminCred = admin.credential.cert(JSON.parse(json));
-    console.log('Using service account from SERVICE_ACCOUNT_BASE64');
+    const jsonString = Buffer.from(
+      process.env.SERVICE_ACCOUNT_BASE64,
+      'base64'
+    ).toString('utf8');
+
+    const serviceAccount = JSON.parse(jsonString);
+    adminCred = admin.credential.cert(serviceAccount);
+    console.log('Using SERVICE_ACCOUNT_BASE64 (Vercel)');
   } catch (err) {
-    console.error('Failed to parse SERVICE_ACCOUNT_BASE64:', err);
-    adminCred = admin.credential.applicationDefault();
-  }
-} else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  adminCred = admin.credential.applicationDefault();
-  console.log('Using application default credentials (GOOGLE_APPLICATION_CREDENTIALS)');
-} else {
-  const localPath = path.join(__dirname, 'serviceAccountKey.json');
-  if (fs.existsSync(localPath)) {
-    adminCred = admin.credential.cert(require(localPath));
-    console.log('Using local serviceAccountKey.json (dev)');
-  } else {
-    console.warn('No service account found. Falling back to applicationDefault()');
-    adminCred = admin.credential.applicationDefault();
+    console.error('Invalid SERVICE_ACCOUNT_BASE64:', err);
+    throw err; // Crash the function early – you’ll see the error in logs
   }
 }
 
+// 2. Local development fallback – only if you run `node index.js` locally
+else {
+  // In Vercel this branch will never run, but it keeps your local dev happy
+  adminCred = admin.credential.applicationDefault();
+  console.log('Using Application Default Credentials (local dev)');
+}
 const databaseURL = 'https://ridesharefyp-0022-default-rtdb.firebaseio.com';
 
 admin.initializeApp({ credential: adminCred, databaseURL });
