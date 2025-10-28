@@ -790,8 +790,7 @@ class MapService {
 }
 
 final riderServiceProvider = Provider<RideService>((ref) => RideService());
-final riderMessagesProvider =
-    StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
+final messagesProvider = StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
       final svc = ref.watch(
         riderServiceProvider,
       ); // you already expose RiderService
@@ -805,6 +804,7 @@ class ChatFields {
   static const senderId = 'senderId';
   static const text = 'text';
   static const timestamp = 'timestamp';
+  static const read = 'read';
 }
 
 extension RiderChat on RideService {
@@ -855,6 +855,29 @@ extension RiderChat on RideService {
       });
       return list;
     });
+  }
+  // rider_services.dart → Add to RideService class
+  Future<void> markMessagesAsRead(String rideId, String readerId) async {
+    try {
+      final ref = _db.child('rides/$rideId/messages');
+      final snap = await ref.get();
+      if (!snap.exists) return;
+
+      final updates = <String, dynamic>{};
+      final data = snap.value as Map<dynamic, dynamic>? ?? {};
+
+      data.forEach((key, msg) {
+        if (msg is Map && msg[ChatFields.senderId] != readerId && msg[ChatFields.read] != true) {
+          updates['$key/${ChatFields.read}'] = true;
+        }
+      });
+
+      if (updates.isNotEmpty) {
+        await ref.update(updates);
+      }
+    } catch (e) {
+      _logger.e('markMessagesAsRead failed: $e');
+    }
   }
 
 }
@@ -907,7 +930,7 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
   @override
   Widget build(BuildContext context) {
     final uid = ref.watch(riderCurrentUserIdProvider);
-    final msgs = ref.watch(riderMessagesProvider(widget.rideId));
+    final msgs = ref.watch(messagesProvider(widget.rideId));
     return Scaffold(
       appBar: AppBar(title: Text(widget.otherDisplayName ?? 'Chat')),
       body: Column(
@@ -951,6 +974,8 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
                                     .substring(11, 16),
                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
                               ),
+                              if (isMe && (m[ChatFields.read] == true) && i == list.length - 1)
+                                const Text('Read', style: TextStyle(fontSize: 10, color: Colors.green)),
                             ],
                           ),
                         ),
@@ -993,6 +1018,7 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
     );
   }
 }
+
 class ShareTripService {
   final _logger = Logger();
   final String _apiBaseUrl = 'https://fem-drive.vercel.app/api/trip';

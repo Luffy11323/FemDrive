@@ -1,19 +1,10 @@
 import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'driver_services.dart'
-    show
-        driverDashboardProvider,
-        AppFields,
-        RideStatus,
-        DriverMapWidget,
-        FeedbackDialog,
-        DriverService,
-        ridesLiveStream; // now exported by driver_services.dart
+import 'package:flutter_animate/flutter_animate.dart';
+import 'driver_services.dart';
 
 class RideStrings {
   static const noRide = 'No active ride';
@@ -32,32 +23,50 @@ class RideStrings {
 
 final riderInfoProvider = FutureProvider.autoDispose
     .family<Map<String, dynamic>?, String>((ref, riderId) async {
-      final snap = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(riderId)
-          .get();
-      return snap.data();
-    });
+  try {
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(riderId)
+        .get()
+        .timeout(const Duration(seconds: 5));
+    return snap.data();
+  } catch (e) {
+    debugPrint('Rider info error: $e');
+    return null;
+  }
+});
+
+final messagesProvider =
+    StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
+  return DriverService().listenMessages(rideId);
+});
 
 final _auth = FirebaseAuth.instance;
 
 class DriverRideDetailsPage extends ConsumerStatefulWidget {
   final String rideId;
-
   const DriverRideDetailsPage({super.key, required this.rideId});
-
   @override
-  ConsumerState<DriverRideDetailsPage> createState() =>
-      _DriverRideDetailsPageState();
+  ConsumerState<DriverRideDetailsPage> createState() => _DriverRideDetailsPageState();
 }
 
 class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
   final _messageController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
   void _openContactRiderSheet({
     required BuildContext context,
     required Map<String, dynamic> rideData,
     required String? riderId,
   }) {
+    if (riderId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Rider ID unavailable')),
+      );
+      return;
+    }
+    // Mark messages as read when opening chat
+    ref.read(driverDashboardProvider.notifier).markMessagesAsRead(widget.rideId, _auth.currentUser!.uid);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -67,10 +76,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
       ),
       builder: (_) {
         final messages = ref.watch(messagesProvider(widget.rideId));
-        final riderInfo = riderId != null
-            ? ref.watch(riderInfoProvider(riderId))
-            : const AsyncValue.data(null);
-
+        final riderInfo = ref.watch(riderInfoProvider(riderId));
         return DraggableScrollableSheet(
           expand: false,
           initialChildSize: 0.6,
@@ -81,91 +87,130 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Ride + rider quick info
                 riderInfo.when(
                   data: (info) => Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         '${rideData[AppFields.pickup] ?? '-'} → ${rideData[AppFields.dropoff] ?? '-'}',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(
                         'Fare: \$${rideData[AppFields.fare] is num ? (rideData[AppFields.fare] as num).toStringAsFixed(2) : '--'}',
+                        style: Theme.of(context).textTheme.bodyLarge,
                       ),
-                      const SizedBox(height: 6),
-                      Text('Rider: ${info?[AppFields.username] ?? '-'}'),
-                      Text('Phone: ${info?[AppFields.phone] ?? '-'}'),
+                      Text(
+                        'Rider: ${info?[AppFields.username] ?? 'Unknown'}',
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                      Text(
+                        'Phone: ${info?[AppFields.phone] ?? 'N/A'}',
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
                       const Divider(height: 20),
                     ],
-                  ),
+                  ).animate().fadeIn(duration: 300.ms),
                   loading: () => const LinearProgressIndicator(),
-                  error: (e, _) => Text('Rider info failed: $e'),
+                  error: (e, _) => const Text('Failed to load rider info'),
                 ),
-
-                // Messages list
                 Expanded(
                   child: messages.when(
-                    data: (list) => ListView.builder(
-                      controller: controller,
-                      itemCount: list.length,
-                      itemBuilder: (ctx, i) {
-                        final msg = list[i];
-                        final mine =
-                            msg[AppFields.senderId] == _auth.currentUser?.uid;
-                        return Align(
-                          alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: mine
-                                  ? Theme.of(
-                                      context,
-                                    ).colorScheme.primary.withValues(alpha: 25)
-                                  : Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(10),
+                    data: (list) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_scrollController.hasClients) {
+                          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+                        }
+                      });
+                      return ListView.builder(
+                        controller: _scrollController,
+                        reverse: true,
+                        itemCount: list.length,
+                        itemBuilder: (ctx, i) {
+                          final msg = list[i];
+                          final mine = msg[AppFields.senderId] == _auth.currentUser?.uid;
+                          final timestamp = (msg[AppFields.timestamp] as Timestamp?)?.toDate();
+                          return Align(
+                            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              padding: const EdgeInsets.all(12),
+                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                              decoration: BoxDecoration(
+                                color: mine
+                                    ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.8)
+                                    : Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(12).copyWith(
+                                  topLeft: mine ? const Radius.circular(12) : Radius.zero,
+                                  topRight: mine ? Radius.zero : const Radius.circular(12),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    msg[AppFields.text] ?? '',
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                  if (timestamp != null)
+                                    Text(
+                                      timestamp.toString().substring(11, 16),
+                                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                    ),
+                                  if (msg[AppFields.read] == true && mine)
+                                    Text(
+                                      'Read',
+                                      style: TextStyle(fontSize: 10, color: Colors.blue.shade300),
+                                    ),
+                                ],
+                              ),
                             ),
-                            child: Text(msg[AppFields.text] ?? ''),
-                          ),
-                        );
-                      },
-                    ),
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (e, _) =>
-                        Center(child: Text('Failed to load messages: $e')),
+                          ).animate().slideY(begin: 0.2, end: 0, duration: 200.ms);
+                        },
+                      );
+                    },
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('Failed to load messages: $e')),
                   ),
                 ),
-
-                // Composer
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
                       child: TextField(
                         controller: _messageController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           hintText: 'Write a message…',
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                         ),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.send),
-                      onPressed: () {
+                    FloatingActionButton(
+                      mini: true,
+                      onPressed: () async {
                         final t = _messageController.text.trim();
                         if (t.isEmpty) return;
-                        ref
-                            .read(driverDashboardProvider.notifier)
-                            .sendMessage(widget.rideId, t);
-                        _messageController.clear();
+                        try {
+                          await ref.read(driverDashboardProvider.notifier).sendMessage(
+                                widget.rideId,
+                                t,
+                                _auth.currentUser!.uid,
+                              );
+                          _messageController.clear();
+                          // ignore: use_build_context_synchronously
+                          FocusScope.of(context).unfocus();
+                        } catch (e) {
+                          // ignore: use_build_context_synchronously
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Failed to send message: $e')),
+                          );
+                        }
                       },
+                      child: const Icon(Icons.send),
                     ),
                   ],
                 ),
@@ -180,6 +225,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
   @override
   void dispose() {
     _messageController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -299,11 +345,6 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
     );
   }
 }
-
-final messagesProvider =
-    StreamProvider.family<List<Map<String, dynamic>>, String>((ref, rideId) {
-      return DriverService().listenMessages(rideId);
-    });
 
 final cancelRideProvider =
     AutoDisposeAsyncNotifierProviderFamily<_CancelRideNotifier, void, String>(

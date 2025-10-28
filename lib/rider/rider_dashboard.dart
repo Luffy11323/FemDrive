@@ -222,7 +222,213 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     brng = (brng + 360.0) % 360.0;
     return brng;
   }
+  void _openContactDriverSheet({
+    required BuildContext context,
+    required Map<String, dynamic> rideData,
+    required String rideId,
+    required String? driverId,
+  }) {
+    if (driverId == null || driverId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Driver ID unavailable')),
+      );
+      return;
+    }
 
+    final textCtrl = TextEditingController();
+    final scrollCtrl = ScrollController();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) {
+        final messages = ref.watch(messagesProvider(rideId));
+        final driverInfoFuture = FirebaseFirestore.instance
+            .collection('users')
+            .doc(driverId)
+            .get();
+
+        // Mark all messages as read when sheet opens
+        ref.read(riderServiceProvider).markMessagesAsRead(rideId, uid!);
+
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          minChildSize: 0.35,
+          maxChildSize: 0.95,
+          builder: (_, controller) => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Driver Info Header
+                FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  future: driverInfoFuture,
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const LinearProgressIndicator();
+                    }
+                    final info = snap.data?.data() ?? {};
+                    final pickup = (rideData['pickup'] ?? '-') as String;
+                    final dropoff = (rideData['dropoff'] ?? '-') as String;
+                    final fareRaw = rideData['fare'];
+                    final fare = fareRaw is num ? fareRaw.toStringAsFixed(2) : '--';
+                    final driverName = (info['username'] ?? 'Unknown') as String;
+                    final phone = (info['phone'] ?? 'N/A') as String;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$pickup → $dropoff',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text('Fare: \$$fare', style: Theme.of(context).textTheme.bodyLarge),
+                        Text('Driver: $driverName', style: Theme.of(context).textTheme.bodyLarge),
+                        Text('Phone: $phone', style: Theme.of(context).textTheme.bodyLarge),
+                        const Divider(height: 20),
+                      ],
+                    ).animate().fadeIn(duration: 300.ms);
+                  },
+                ),
+
+                // Messages List
+                Expanded(
+                  child: messages.when(
+                    data: (list) {
+                      // Auto-scroll to bottom on new message
+                      if (scrollCtrl.hasClients) {
+                        scrollCtrl.animateTo(
+                          scrollCtrl.position.maxScrollExtent,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOut,
+                        );
+                      }
+
+                      if (list.isEmpty) {
+                        return const Center(child: Text('Say hi'));
+                      }
+
+                      return ListView.builder(
+                        controller: scrollCtrl,
+                        itemCount: list.length,
+                        itemBuilder: (ctx, i) {
+                          final msg = list[i];
+                          final mine = msg[ChatFields.senderId] == uid;
+
+                          DateTime? ts;
+                          final rawTs = msg[ChatFields.timestamp];
+                          if (rawTs is Timestamp) {
+                            ts = rawTs.toDate();
+                          } else if (rawTs is int) {
+                            ts = DateTime.fromMillisecondsSinceEpoch(rawTs);
+                          }
+
+                          return Align(
+                            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              padding: const EdgeInsets.all(12),
+                              constraints: BoxConstraints(maxWidth: MediaQuery.of(ctx).size.width * 0.7),
+                              decoration: BoxDecoration(
+                                color: mine
+                                    ? Theme.of(ctx).colorScheme.primary.withValues(alpha: 0.8)
+                                    : Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(12).copyWith(
+                                  topLeft: mine ? const Radius.circular(12) : Radius.zero,
+                                  topRight: mine ? Radius.zero : const Radius.circular(12),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    (msg[ChatFields.text] ?? '') as String,
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                  if (ts != null)
+                                    Text(
+                                      ts.toString().substring(11, 16),
+                                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ).animate().slideY(begin: 0.2, end: 0, duration: 200.ms);
+                        },
+                      );
+                    },
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('Failed to load messages: $e')),
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+
+                // Send Input
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: textCtrl,
+                        decoration: InputDecoration(
+                          hintText: 'Write a message…',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _sendMessage(textCtrl, rideId, context),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final sending = ref.watch(riderChatControllerProvider).isLoading;
+                        return FloatingActionButton(
+                          mini: true,
+                          onPressed: sending ? null : () => _sendMessage(textCtrl, rideId, context),
+                          child: sending
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.send),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _sendMessage(TextEditingController ctrl, String rideId, BuildContext context) async {
+    final text = ctrl.text.trim();
+    if (text.isEmpty) return;
+
+    try {
+      await ref.read(riderServiceProvider).sendMessage(rideId, text);
+      ctrl.clear();
+      if(!context.mounted) return;
+      FocusScope.of(context).unfocus();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send: $e')),
+        );
+      }
+    }
+  }
+    
   Future<void> _followCamera(LatLng me) async {
     if (_driverLeg.length >= 2) {
       final idx = _nearestIndex(_driverLeg, me);
@@ -409,11 +615,9 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       final pLat = (rideDataa['pickupLat'] as num?)?.toDouble();
       final pLng = (rideDataa['pickupLng'] as num?)?.toDouble();
       if (pLat != null && pLng != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _mapController!.animateCamera(
+         _mapController!.animateCamera(
             CameraUpdate.newLatLngZoom(LatLng(pLat, pLng), 16),
           );
-        });
       }
     }
 
@@ -473,9 +677,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
         _pickupLatLng == null &&
         _dropoffLatLng == null &&
         _polylines.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _polylines = {});
-      });
     }
     final pLat2 = (rideData?['pickupLat'] as num?)?.toDouble();
     final pLng2 = (rideData?['pickupLng'] as num?)?.toDouble();
@@ -782,9 +984,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       setState(() => _isSharing = false);
                     }
                     if (_polylines.isNotEmpty) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _polylines = {});
-                      });
+                      if (mounted) setState(() => _polylines = {});
                     }
                     Future.delayed(const Duration(seconds: 4), () {
                       if (mounted) {
@@ -808,9 +1008,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                       showCancelled(rideId: ride['id']);
                     }
                     if (_polylines.isNotEmpty) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _polylines = {});
-                      });
+                      if (mounted) setState(() => _polylines = {});
                     }
                     break;
                   case 'driver_arrived':
@@ -928,30 +1126,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                         child: FilledButton.tonalIcon(
                           icon: const Icon(Icons.chat_bubble),
                           label: const Text('Chat'),
-                          onPressed: () async {
-                            String? driverName;
-                            try {
-                              if (driverId != null && driverId.isNotEmpty) {
-                                final doc = await FirebaseFirestore.instance
-                                    .collection('users')
-                                    .doc(driverId)
-                                    .get();
-                                driverName =
-                                    (doc.data()?['username'] as String?)
-                                        ?.trim();
-                              }
-                            } catch (_) {}
-                            if (rideId != null && rideId.isNotEmpty) {
-                              if (!context.mounted) return;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => RiderChatPage(
-                                    rideId: rideId,
-                                    otherDisplayName: driverName,
-                                  ),
-                                ),
-                              );
-                            }
+                          onPressed: () {
+                            _openContactDriverSheet(
+                              context: context,
+                              rideData: ride,
+                              rideId: rideId!,
+                              driverId: driverId,
+                            );
                           },
                         ),
                       ),
@@ -1970,13 +2151,13 @@ class _CounterFareModalLauncherState extends State<CounterFareModalLauncher> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShow());
+    _maybeShow();
   }
 
   @override
   void didUpdateWidget(covariant CounterFareModalLauncher oldWidget) {
     super.didUpdateWidget(oldWidget);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShow());
+    _maybeShow();
   }
 
   void _maybeShow() {
@@ -2028,6 +2209,7 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog>
     with SingleTickerProviderStateMixin {
   late int _remaining;
   Timer? _timer;
+  BuildContext? _dialogContext;
 
   // slide-in from right
   late final AnimationController _slideCtl = AnimationController(
@@ -2056,11 +2238,11 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog>
               .read(riderDashboardProvider.notifier)
               .expireCounterFare(widget.ride['id']);
         } catch (_) {}
-        if (mounted && Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
+        if (_dialogContext != null && Navigator.of(_dialogContext!).canPop()) {
+          Navigator.of(_dialogContext!).pop();
         }
-      }
-    });
+       }
+     });
 
     // start slide-in
     _slideCtl.forward();
@@ -2078,6 +2260,7 @@ class _CounterFareDialogState extends ConsumerState<_CounterFareDialog>
     final cf = (widget.ride['counterFare'] as num?)?.toDouble() ?? 0;
     final baseFare = (widget.ride['fare'] as num?)?.toDouble() ?? 0;
     final rid = (widget.ride['id'] ?? '').toString();
+    _dialogContext = context;
 
     // live node for ETA and (counter) driverId
     final liveRef = FirebaseDatabase.instance.ref('ridesLive/$rid');

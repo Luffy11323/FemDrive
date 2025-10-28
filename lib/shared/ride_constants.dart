@@ -42,6 +42,7 @@ class AppFields {
   static const trip_shares = 'trip_shares';
   static const ridesCollection = 'rides';
   static const locationsCollection = 'locations';
+  static const read = 'read';
 }
 
 class RideStatus {

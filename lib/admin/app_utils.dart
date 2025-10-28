@@ -72,6 +72,7 @@ class AppFields {
   static const String updatedAt = 'updatedAt';
   static const String rating = 'rating';
   static const String comment = 'comment';
+  static const read = 'read';
 }
 
 class RideStatus {

@@ -76,6 +76,7 @@ class AppFields {
   static const reportedBy = 'reportedBy';
   static const otherUid = 'otherUid';
   static const etaSecs = 'etaSecs';
+  static const read = 'read';
 }
 
 /// Unified (matches DriverDashboard)
@@ -764,48 +765,78 @@ class DriverService {
     // 4) DO NOT remove from global pending queues or other drivers’ notifications
   }
 
-  // RTDB chat under /rides/{rideId}/messages
-  Future<void> sendMessage(
-    String rideId,
-    String message,
-    String senderId,
-  ) async {
-    if (rideId.isEmpty || message.trim().isEmpty) return;
+// === SEND MESSAGE (UNIFIED) ===
+  Future<void> sendMessage(String rideId, String message, [String? senderId]) async {
+    final uid = _auth.currentUser?.uid ?? senderId;
+    if (uid == null) throw Exception('Not authenticated');
+    if (message.trim().isEmpty) return;
 
     try {
+      await _rtdb.child('rides/$rideId/messages').push().set({
+        AppFields.senderId: uid,
+        AppFields.text: message.trim(),
+        AppFields.timestamp: ServerValue.timestamp,
+        AppFields.read: false, // default
+      });
+
       final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/rides/$rideId/messages'),
+        Uri.parse('https://fem-drive.vercel.app/api/rides/$rideId/messages'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'senderId': senderId,
-          'text': message.trim(),
-        }),
+        body: jsonEncode({'senderId': uid, 'text': message.trim()}),
       );
 
       if (response.statusCode != 200) {
-        throw Exception('Failed to send message: ${response.body}');
+        throw Exception('FCM failed: ${response.body}');
       }
     } catch (e) {
-      debugPrint('Error sending message: $e');
+      debugPrint('sendMessage error: $e');
       rethrow;
     }
   }
 
-  // Stream of messages (unchanged)
+  // === LISTEN MESSAGES (RTDB) ===
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {
-    return _rtdb
-        .child('rides/$rideId/messages')
-        .onValue
-        .map((event) {
-          final v = event.snapshot.value as Map?;
-          if (v == null) return [];
-          return v.entries
-              .map(
-                (e) =>
-                    Map<String, dynamic>.from(e.value as Map)..['id'] = e.key,
-              )
-              .toList();
-        });
+    return _rtdb.child('rides/$rideId/messages').onValue.map((event) {
+      final raw = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (raw == null) return [];
+
+      final messages = raw.entries.map((e) {
+        final map = Map<String, dynamic>.from(e.value as Map);
+        map['id'] = e.key;
+        return map;
+      }).toList();
+
+      messages.sort((a, b) => 
+          (b[AppFields.timestamp] ?? 0).compareTo(a[AppFields.timestamp] ?? 0));
+
+      return messages;
+    });
+  }
+  // === MARK AS READ (RTDB) ===
+  Future<void> markMessagesAsRead(String rideId, String userId) async {
+    try {
+      final snapshot = await _rtdb.child('rides/$rideId/messages').get();
+      if (!snapshot.exists) return;
+
+      final updates = <String, dynamic>{};
+      final data = snapshot.value as Map<dynamic, dynamic>;
+
+      data.forEach((key, value) {
+        final msg = value as Map;
+        final senderId = msg[AppFields.senderId];
+        final isRead = msg[AppFields.read] == true;
+
+        if (senderId != userId && !isRead) {
+          updates['$key/${AppFields.read}'] = true;
+        }
+      });
+
+      if (updates.isNotEmpty) {
+        await _rtdb.child('rides/$rideId/messages').update(updates);
+      }
+    } catch (e) {
+      debugPrint('markMessagesAsRead error: $e');
+    }
   }
 }
 
@@ -816,7 +847,6 @@ final driverDashboardProvider =
       AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>
     >((ref) => DriverDashboardController(ref));
 
-final _authGlobal = FirebaseAuth.instance;
 
 class DriverDashboardController
     extends StateNotifier<AsyncValue<DocumentSnapshot<Map<String, dynamic>>?>> {
@@ -863,12 +893,14 @@ class DriverDashboardController
   Future<void> completeRide(String rideId, double finalFare) =>
       _service.completeRide(rideId, finalFare);
 
-  Future<void> sendMessage(String rideId, String message) async {
-    final uid = _authGlobal.currentUser?.uid;
-    if (uid != null) await _service.sendMessage(rideId, message, uid);
+  Future<void> sendMessage(String rideId, String message, String senderId) async {
+    await _service.sendMessage(rideId, message, senderId);
+  }
+
+  Future<void> markMessagesAsRead(String rideId, String userId) async {
+    await _service.markMessagesAsRead(rideId, userId);
   }
 }
-
 // ---------------- Driver Map widget (polyline adapter added) -----------------
 class DriverMapWidget extends ConsumerStatefulWidget {
   final Map<String, dynamic> rideData;
