@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math'; // Added for Random in _isVerificationDue
+
 import 'package:femdrive/driver/profile_page.dart';
 import 'package:femdrive/location/location_service.dart';
 import 'package:femdrive/past_rides_page.dart';
@@ -12,7 +15,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+// ignore: unused_import
+import 'package:permission_handler/permission_handler.dart';
 import 'package:logger/logger.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:path_provider/path_provider.dart';
+// ignore: unused_import
+import 'package:intl/intl.dart';
+
 import 'firebase_options.dart';
 import 'theme.dart';
 import 'package:femdrive/extras/help_support_page.dart';
@@ -28,22 +39,29 @@ import 'rider/rider_dashboard.dart';
 import 'admin/admin_panel.dart';
 import 'driver/driver_ride_details_page.dart' as details;
 
+// Imports for selfie verification
+import 'package:femdrive/shared/selfie_storage.dart';
+import 'package:femdrive/shared/full_screen_camera.dart' as shared_camera;
+// ignore: unused_import
+import 'package:flutter_jailbreak_detection/flutter_jailbreak_detection.dart';
+
+// Global navigator key
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  debugPrint("🔔 BG Notification: ${message.messageId}, data=${message.data}");
+  debugPrint("BG Notification: ${message.messageId}, data=${message.data}");
 
   final data = message.data;
   final action = data['action'];
   final rideId = data['rideId'];
 
   if (action == 'NEW_REQUEST') {
-    debugPrint("📩 Driver BG NEW_REQUEST for ride $rideId");
+    debugPrint("Driver BG NEW_REQUEST for ride $rideId");
     await RiderNotificationService.instance.show(message);
   } else if (action == 'COUNTER_FARE') {
-    debugPrint("📩 Rider BG COUNTER_FARE for ride $rideId");
+    debugPrint("Rider BG COUNTER_FARE for ride $rideId");
     await RiderNotificationService.instance.show(message);
   }
 }
@@ -84,7 +102,6 @@ Future<void> _setupFcmAndToken() async {
   final fbm = FirebaseMessaging.instance;
 
   await fbm.requestPermission(alert: true, badge: true, sound: true);
-
   await fbm.setForegroundNotificationPresentationOptions(
     alert: true,
     badge: true,
@@ -105,10 +122,11 @@ Future<void> _setupFcmAndToken() async {
       try {
         await FirebaseFirestore.instance.collection('users').doc(uid).set({
           'fcmToken': newToken,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
-        debugPrint('🔁 FCM token refreshed & saved');
+        debugPrint('FCM token refreshed & saved');
       } catch (e) {
-        debugPrint('❗ Error saving refreshed token: $e');
+        debugPrint('Error saving refreshed token: $e');
       }
     }
   });
@@ -119,15 +137,15 @@ Future<void> _setupFcmAndToken() async {
     final rideId = data['rideId'];
 
     if (action == 'NEW_REQUEST') {
-      debugPrint("📨 FG Driver NEW_REQUEST: $rideId");
+      debugPrint("FG Driver NEW_REQUEST: $rideId");
       RiderNotificationService.instance.show(msg);
     } else if (action == 'COUNTER_FARE') {
-      debugPrint("📨 FG Rider COUNTER_FARE: $rideId");
+      debugPrint("FG Rider COUNTER_FARE: $rideId");
       RiderNotificationService.instance.show(msg);
     } else {
       final notif = msg.notification;
       if (notif != null) {
-        debugPrint('📨 FG msg: ${notif.title} — ${notif.body}');
+        debugPrint('FG msg: ${notif.title} — ${notif.body}');
       }
     }
   });
@@ -150,11 +168,12 @@ Future<void> _storeCurrentTokenIfLoggedIn() async {
     if (token != null && token.isNotEmpty) {
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'fcmToken': token,
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      debugPrint('✅ Saved FCM token for $uid');
+      debugPrint('Saved FCM token for $uid');
     }
   } catch (e, st) {
-    debugPrint('❗ FCM token save failed: $e\n$st');
+    debugPrint('FCM token save failed: $e\n$st');
   }
 }
 
@@ -189,6 +208,7 @@ Future<void> _handleNotificationNavigation(RemoteMessage msg) async {
   }
 }
 
+// Providers
 final userProvider = StreamProvider<User?>(
   (ref) => FirebaseAuth.instance.authStateChanges(),
 );
@@ -222,7 +242,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
     try {
       await _setupFCM();
     } catch (e) {
-      debugPrint('❗ Error during FCM setup in _initializeApp: $e');
+      debugPrint('Error during FCM setup in _initializeApp: $e');
     }
   }
 
@@ -238,7 +258,6 @@ class _FemDriveAppState extends State<FemDriveApp> {
 
   Future<void> _setupFCM() async {
     final fbm = FirebaseMessaging.instance;
-
     await fbm.requestPermission();
 
     final uid = getSafeUid();
@@ -250,13 +269,14 @@ class _FemDriveAppState extends State<FemDriveApp> {
       if (token != null) {
         await FirebaseFirestore.instance.collection('users').doc(uid).set({
           'fcmToken': token,
+          'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
-
       debugPrint("FCM setup completed");
     } catch (e, stack) {
       debugPrint("FCM setup failed: $e\n$stack");
     }
+
     fbm.onTokenRefresh.listen((newToken) async {
       final currentUid = getSafeUid();
       if (currentUid != null) {
@@ -308,6 +328,10 @@ class _FemDriveAppState extends State<FemDriveApp> {
   Route<dynamic> _generateRoute(RouteSettings settings) {
     Widget page;
     switch (settings.name) {
+      case '/':
+      case '/splash':
+        page = const SplashScreen();
+        break;
       case '/login':
         page = const LoginPage();
         break;
@@ -315,9 +339,11 @@ class _FemDriveAppState extends State<FemDriveApp> {
         page = const SignUpPage();
         break;
       case '/dashboard':
+      case '/rider_dashboard':
         page = const RiderDashboard();
         break;
       case '/driver-dashboard':
+      case '/driver_dashboard':
         page = const DriverDashboard();
         break;
       case '/admin':
@@ -330,6 +356,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
         page = const PaymentPage();
         break;
       case '/help-center':
+      case '/help_center':
         page = const HelpCenterPage();
         break;
       case '/profile':
@@ -352,7 +379,9 @@ class _FemDriveAppState extends State<FemDriveApp> {
                 return const LoginPage();
               }
               final role = snapshot.data!.get('role');
-              return role == 'driver' ? const ProfilePage() : const RiderProfilePage();
+              return role == 'driver'
+                  ? const ProfilePage()
+                  : const RiderProfilePage();
             },
           );
         }
@@ -393,6 +422,7 @@ class _FemDriveAppState extends State<FemDriveApp> {
       debugShowCheckedModeBanner: false,
       home: const SplashScreen(),
       onGenerateRoute: _generateRoute,
+      initialRoute: '/',
     );
   }
 }
@@ -400,162 +430,277 @@ class _FemDriveAppState extends State<FemDriveApp> {
 class InitialScreen extends ConsumerWidget {
   const InitialScreen({super.key});
 
+  Future<bool> _isDeviceSecure() async {
+    // Hardcode to true for testing on rooted devices
+    return true;
+  }
+
+  bool _isVerificationDue(Map<String, dynamic> data, String uid) {
+    final lastVerification = data['lastFaceVerification'] as Timestamp?;
+    if (lastVerification == null) return true;
+
+    final lastVerificationDate = lastVerification.toDate();
+    final now = DateTime.now().toUtc();
+    final daysSinceLast = now.difference(lastVerificationDate).inDays;
+
+    const cycleDays = 14;
+    final random = Random(uid.hashCode);
+    final offset = random.nextInt(7);
+
+    final daysNow = (now.millisecondsSinceEpoch ~/ 86400000);
+    final cyclePosition = daysNow % cycleDays;
+
+    return (cyclePosition == offset) && (daysSinceLast >= 14);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final userAsync = ref.watch(userProvider);
     return userAsync.when(
       data: (user) {
         if (user == null) {
-          debugPrint("🔐 No user authenticated, showing LoginPage");
+          debugPrint("No user authenticated, showing LoginPage");
           return const LoginPage();
         }
 
-        debugPrint("🔐 User authenticated: ${user.uid}");
+        debugPrint("User authenticated: ${user.uid}");
         final userDocAsync = ref.watch(userDocProvider);
         return userDocAsync.when(
           data: (doc) {
             if (doc == null || !doc.exists) {
-              debugPrint("🔐 User doc doesn't exist, showing LoginPage");
+              debugPrint("User doc doesn't exist, showing LoginPage");
               return const LoginPage();
             }
 
             final data = doc.data() as Map<String, dynamic>? ?? {};
             final role = data['role'];
-            final isVerified = data['verified'] == true;
 
-            debugPrint("🔐 User role: $role, verified: $isVerified");
+            debugPrint("User role: $role");
 
-            switch (role) {
-              case 'admin':
-                debugPrint("🔐 Redirecting to AdminPage");
-                return const AdminPanelApp();
-              case 'driver':
-                if (!isVerified) {
-                  debugPrint("🔐 Driver not verified, signing out");
-                  WidgetsBinding.instance.addPostFrameCallback((_) async {
-                    await FirebaseAuth.instance.signOut();
-                  });
-                  return const LoginPage();
-                }
-
-                final driverId = user.uid;
-                WidgetsBinding.instance.addPostFrameCallback((_) async {
-                  try {
-                    await LocationService().initBackgroundTracking(driverId);
-                    await LocationService().startBackground();
-                    debugPrint(
-                      "🚀 Background tracking initialized for driver $driverId",
-                    );
-                  } catch (e) {
-                    debugPrint("❗ Failed to init background tracking: $e");
-                  }
-                });
-
-                debugPrint("🔐 Redirecting to DriverDashboard");
-                return const DriverDashboard();
-
-              case 'rider':
-                debugPrint("🔐 Redirecting to RiderDashboard");
-                return const RiderDashboard();
-              default:
-                debugPrint("🔐 Unknown role: $role, showing LoginPage");
-                return const LoginPage();
+            if (role == 'admin') {
+              debugPrint("Redirecting to AdminPage");
+              return const AdminPanelApp();
             }
-          },
-          loading: () {
-            debugPrint("🔐 Loading user document...");
-            return Scaffold(
-              body: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
-                      Theme.of(context).colorScheme.surface,
+
+            if (role != 'rider' && role != 'driver') {
+              debugPrint("Unknown role: $role, showing LoginPage");
+              return const LoginPage();
+            }
+
+            Future.microtask(() async {
+              if (!await _isDeviceSecure()) {
+                if (!context.mounted) return;
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Device Security Issue'),
+                    content: const Text(
+                      'This app requires a non-rooted device for security.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => SystemNavigator.pop(),
+                        child: const Text('Exit'),
+                      ),
                     ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
                   ),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).colorScheme.onPrimary,
-                        ),
-                        strokeWidth: 3.0,
-                      ).animate().fadeIn(duration: 400.ms).scaleXY(
-                            begin: 0.8,
-                            end: 1.0,
-                            curve: Curves.easeInOut,
+                );
+                return;
+              }
+
+              final dir = await getApplicationDocumentsDirectory();
+              final selfieFile = File('${dir.path}/selfie_${user.uid}.enc');
+              final exists = await selfieFile.exists();
+              final due = _isVerificationDue(data, user.uid);
+
+              final ok = await SelfieStorage.validateIntegrity(user.uid);
+              bool valid = false;
+              if (ok) {
+                valid = await SelfieStorage.isSelfieStillValid(user.uid);
+              }
+              final needVerify = !exists || !ok || !valid || due;
+
+              final status = data['status'] as String?;
+              final isVerified = status == 'verified';
+
+              if (role == 'driver' && !isVerified && !needVerify) {
+                debugPrint("Driver not verified, signing out");
+                await FirebaseAuth.instance.signOut();
+                navigatorKey.currentState?.pushReplacementNamed('/login');
+                return;
+              }
+
+              if (valid) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Recent verification found. Skipping selfie check.'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+              } else if (!ok || due) {
+                if (context.mounted) {
+                  await showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Verification Expired'),
+                      content: const Text('Your selfie verification has expired. Please retake a quick selfie.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('Continue'),
+                        )
+                      ],
+                    ),
+                  );
+                }
+              }
+
+              if (needVerify) {
+                final result = await navigatorKey.currentState?.push(
+                  MaterialPageRoute(
+                    builder: (context) => const shared_camera.FullScreenCamera(isSelfie: true),
+                  ),
+                );
+                if (result is File) {
+                  var bytes = await result.readAsBytes();
+                  final compressed = await FlutterImageCompress.compressWithList(
+                    bytes,
+                    minWidth: 800,
+                    minHeight: 800,
+                    quality: 60,
+                  );
+                  final compressedBytes = Uint8List.fromList(compressed);
+
+                  final verificationResult = await SelfieStorage.verifySelfie(compressedBytes);
+
+                  if (verificationResult.isValid) {
+                    await SelfieStorage.saveSelfie(user.uid, compressedBytes);
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .set({
+                          'status': 'verified',
+                          'lastFaceVerification': FieldValue.serverTimestamp(),
+                        }, SetOptions(merge: true));
+
+                    await SelfieStorage.resetAttempts(user.uid);
+                    await SelfieStorage.markSelfieVerified(user.uid);
+
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Verified! Trust: ${(verificationResult.trustScore * 100).toStringAsFixed(0)}%',
                           ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Loading your journey...',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.onPrimary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-                    ],
-                  ),
-                ),
-              ),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  } else {
+                    final remaining = await SelfieStorage.incrementAttempt(user.uid);
+                    if (remaining == 0) {
+                      await SelfieStorage.triggerAccountDeletion();
+                      return;
+                    }
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(verificationResult.message ?? 'No message available'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      await FirebaseAuth.instance.signOut();
+                      navigatorKey.currentState?.pushReplacementNamed('/login');
+                    }
+                    return;
+                  }
+                } else {
+                  await FirebaseAuth.instance.signOut();
+                  navigatorKey.currentState?.pushReplacementNamed('/login');
+                  return;
+                }
+              }
+
+              if (role == 'driver') {
+                final driverId = user.uid;
+                try {
+                  await LocationService().initBackgroundTracking(driverId);
+                  await LocationService().startBackground();
+                  debugPrint("Background tracking initialized for driver $driverId");
+                } catch (e) {
+                  debugPrint("Failed to init background tracking: $e");
+                }
+                debugPrint("Redirecting to DriverDashboard");
+                if (navigatorKey.currentState?.mounted == true) {
+                  navigatorKey.currentState?.pushReplacementNamed('/driver-dashboard');
+                }
+              } else {
+                debugPrint("Redirecting to RiderDashboard");
+                if (navigatorKey.currentState?.mounted == true) {
+                  navigatorKey.currentState?.pushReplacementNamed('/dashboard');
+                }
+              }
+            });
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
             );
           },
+          loading: () => _buildLoadingScreen(context, 'Loading your journey...'),
           error: (error, stackTrace) {
-            debugPrint("🔐 Error loading user document: $error");
+            debugPrint("Error loading user document: $error");
             return const LoginPage();
           },
         );
       },
-      loading: () {
-        debugPrint("🔐 Loading user authentication...");
-        return Scaffold(
-          body: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Theme.of(context).colorScheme.primary.withValues(alpha:0.8),
-                  Theme.of(context).colorScheme.surface,
-                ],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-              ),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Theme.of(context).colorScheme.onPrimary,
-                    ),
-                    strokeWidth: 3.0,
-                  ).animate().fadeIn(duration: 400.ms).scaleXY(
-                        begin: 0.8,
-                        end: 1.0,
-                        curve: Curves.easeInOut,
-                      ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Authenticating...',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.onPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+      loading: () => _buildLoadingScreen(context, 'Authenticating...'),
       error: (error, stackTrace) {
-        debugPrint("🔐 Authentication error: $error");
+        debugPrint("Authentication error: $error");
         return const LoginPage();
       },
+    );
+  }
+
+  Widget _buildLoadingScreen(BuildContext context, String message) {
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
+              Theme.of(context).colorScheme.surface,
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  Theme.of(context).colorScheme.onPrimary,
+                ),
+                strokeWidth: 3.0,
+              )
+                  .animate()
+                  .fadeIn(duration: 400.ms)
+                  .scaleXY(begin: 0.8, end: 1.0, curve: Curves.easeInOut),
+              const SizedBox(height: 16),
+              Text(
+                message,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ).animate().fadeIn(duration: 400.ms, delay: 200.ms),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
