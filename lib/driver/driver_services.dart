@@ -908,6 +908,8 @@ class DriverMapWidget extends ConsumerStatefulWidget {
   final Function(String newStatus) onStatusChange;
   final VoidCallback onComplete;
   final VoidCallback onContactRider; // NEW
+  final bool canShowImHere;
+  final VoidCallback? onImHerePressed;
 
   const DriverMapWidget({
     super.key,
@@ -916,6 +918,8 @@ class DriverMapWidget extends ConsumerStatefulWidget {
     required this.onStatusChange,
     required this.onComplete,
     required this.onContactRider,
+    this.canShowImHere = false,
+    this.onImHerePressed,
   });
 
   @override
@@ -978,7 +982,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
       _status == RideStatus.onTrip;
 
   String _primaryLabel() {
-    if (_status == RideStatus.accepted) return "I'm here";
+    if (_status == RideStatus.accepted) return widget.canShowImHere ? 'I’m Here' : 'Move to Pickup';
     if (_status == RideStatus.driverArrived) return 'Start Ride';
     return 'Complete Ride';
   }
@@ -996,7 +1000,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
 
   bool _primaryEnabled() {
     if (_statusBusy) return false;
-    if (_status == RideStatus.accepted) return _nearPickup();
+    if (_status == RideStatus.accepted) return widget.canShowImHere;
     return true;
   }
 
@@ -1364,6 +1368,7 @@ class _DriverMapWidgetState extends ConsumerState<DriverMapWidget> {
     if (_status == RideStatus.accepted) {
       next = RideStatus.driverArrived;
       _startPickupTimer();
+      widget.onImHerePressed?.call();
     } else if (_status == RideStatus.driverArrived) {
       next = RideStatus.inProgress;
       _pickupTimer?.cancel();

@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:geolocator/geolocator.dart';
 import 'driver_services.dart';
 
 class RideStrings {
@@ -53,7 +54,11 @@ class DriverRideDetailsPage extends ConsumerStatefulWidget {
 class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
   final _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-
+  Timer? _locationTimer;
+  bool _canShowImHere = false;
+  // ignore: unused_field
+  Position? _currentPosition;
+  
   void _openContactRiderSheet({
     required BuildContext context,
     required Map<String, dynamic> rideData,
@@ -227,11 +232,54 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
       },
     );
   }
+  Future<void> _startLocationPolling(Map<String, dynamic> rideData) async {
+    _locationTimer?.cancel();
+    final status = rideData[AppFields.status] as String?;
+    if (status != RideStatus.accepted) return;
 
+    final pickupLat = rideData[AppFields.pickupLat] as num?;
+    final pickupLng = rideData[AppFields.pickupLng] as num?;
+    if (pickupLat == null || pickupLng == null) return;
+
+    _locationTimer?.cancel();
+    _locationTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+            locationSettings: LocationSettings(
+              accuracy: LocationAccuracy.high,
+          ),
+        );
+        if (!mounted) return;
+
+        setState(() => _currentPosition = pos);
+
+        final distance = Geolocator.distanceBetween(
+          pos.latitude,
+          pos.longitude,
+          pickupLat.toDouble(),
+          pickupLng.toDouble(),
+        );
+
+        if (distance <= 500 && !_canShowImHere) {
+          setState(() => _canShowImHere = true);
+          timer.cancel(); // Stop polling once inside radius
+        }
+      } catch (e) {
+        debugPrint('Location poll error: $e');
+      }
+    });
+  }
+  void _stopLocationPolling() {
+    _locationTimer?.cancel();
+    _locationTimer = null;
+    _canShowImHere = false;
+    _currentPosition = null;
+  }
   @override
   void dispose() {
     _messageController.dispose();
     _scrollController.dispose();
+    _stopLocationPolling();
     super.dispose();
   }
 
@@ -277,7 +325,19 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
             if (isCompleted || isCancelled) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+                _stopLocationPolling();
               });
+            }
+            // Start polling when ride is accepted and not already started
+            if (liveStatus == RideStatus.accepted && _locationTimer == null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _startLocationPolling(data);
+              });
+            }
+
+            // Stop polling on status change to non-accepted
+            if (liveStatus != RideStatus.accepted && _locationTimer != null) {
+              _stopLocationPolling();
             }
 
             // --- paste-ready replacement for the whole `return Scaffold(...)` block ---
@@ -304,6 +364,13 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                   rideData: data,
                   riderId: riderId,
                 ),
+               canShowImHere: _canShowImHere,
+               onImHerePressed: () {
+                 _stopLocationPolling();
+                 ref
+                     .read(driverDashboardProvider.notifier)
+                     .updateStatus(widget.rideId, RideStatus.driverArrived);
+               },                
               ),
             );
           },
