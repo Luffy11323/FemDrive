@@ -100,7 +100,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   double licenseTrustScore = 0.0;
   double selfieTrustScore = 0.0;
   bool requiresLivenessCheck = false;
-
+  bool waitingForOtp = false;
   bool isOtpSent = false;
   bool isSubmitting = false;
   String? verificationId;
@@ -459,7 +459,10 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     try {
       final formatted = formatPhoneNumber(phoneController.text);
-
+      setState(() {
+        isSubmitting = true;
+        waitingForOtp = true;
+      });
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
@@ -477,11 +480,13 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             errorMsg = e.message!;
           }
           showError(errorMsg);
+          setState(() => waitingForOtp = false);
         },
         codeSent: (id, _) {
           setState(() {
             verificationId = id;
             isOtpSent = true;
+            waitingForOtp = false;
           });
           startResendTimer();
           showSuccess('OTP sent successfully to ${phoneController.text}');
@@ -490,6 +495,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       );
     } catch (e) {
       showError('Unexpected error: ${e.toString()}');
+      setState(() => waitingForOtp = false);
     } finally {
       setState(() => isSubmitting = false);
     }
@@ -2317,16 +2323,22 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           duration: 250.ms,
                           transitionBuilder: (child, anim) =>
                               FadeTransition(opacity: anim, child: child),
-                          child: (isSubmitting || isOtpSent)
+                          child: (isSubmitting || isOtpSent || waitingForOtp)
                               ? _LoadingCar(
                                   key: ValueKey(
-                                    isSubmitting ? 'sending' : 'awaiting_otp',
+                                    waitingForOtp
+                                        ? 'waiting'
+                                        : (isSubmitting
+                                              ? (isOtpSent ? 'verifying' : 'sending')
+                                              : 'awaiting_otp'),
                                   ),
-                                  label: isSubmitting
-                                      ? (isOtpSent
-                                            ? 'Verifying & Registering...'
-                                            : 'Sending OTP...')
-                                      : 'Enter OTP to register',
+                                  label: waitingForOtp
+                                      ? 'Waiting for OTP...'
+                                      : (isSubmitting
+                                            ? (isOtpSent
+                                                  ? 'Verifying & Registering...'
+                                                  : 'Sending OTP...')
+                                            : 'Enter OTP to register'),
                                 )
                               : const Text('Send OTP', key: ValueKey('idle')),
                         ),
@@ -2588,18 +2600,16 @@ class _LoadingCar extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
+        Animate(
+          onPlay: (controller) => controller.repeat(reverse: true),
+          child: const Icon(Icons.directions_car, size: 20),
+        ).moveX(begin: -12, end: 12, duration: 1000.ms),
         const SizedBox(width: 12),
         Text(label),
       ],
     );
   }
 }
-
 class FullScreenCamera extends StatefulWidget {
   final bool isSelfie;
 
