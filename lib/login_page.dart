@@ -49,7 +49,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
   bool loading = false;
   bool otpSent = false;
   String? verificationId;
-
+  bool waitingForOtp = false;
   @override
   void initState() {
     super.initState();
@@ -170,6 +170,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
       setState(() {
         loading = true;
         otpSent = false;
+        waitingForOtp = true;
       });
 
       await FirebaseAuth.instance.verifyPhoneNumber(
@@ -185,6 +186,7 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
           setState(() {
             verificationId = id;
             otpSent = true;
+            waitingForOtp = false;
           });
           startTimer();
         },
@@ -413,14 +415,18 @@ class _LoginPageState extends State<LoginPage> with CodeAutoFill {
                       duration: 250.ms,
                       transitionBuilder: (child, anim) =>
                           FadeTransition(opacity: anim, child: child),
-                      child: (loading || otpSent)
+                      child: (loading || otpSent || waitingForOtp)
                           ? _LoadingCar(
                               key: ValueKey(
-                                loading ? 'sending' : 'awaiting_otp',
+                                waitingForOtp
+                                    ? 'waiting'
+                                    : (loading ? 'sending' : 'awaiting_otp'),
                               ),
-                              label: loading
-                                  ? 'Sending OTP...' // sending state
-                                  : 'Enter OTP to verify', // waiting-for-otp state (fields visible)
+                              label: waitingForOtp
+                                  ? 'Waiting for OTP...'
+                                  : (loading
+                                      ? 'Sending OTP...'
+                                      : 'Enter OTP to verify'),
                             )
                           : const Text('Send OTP', key: ValueKey('idle')),
                     ),
