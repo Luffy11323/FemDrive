@@ -157,6 +157,26 @@ const DRIVER_STALE_MS = 12 * 60 * 60 * 1000;
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Verify Firebase ID Token (Bearer token in Authorization header)
+async function verifyFirebaseToken(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.split('Bearer ')[1]
+    : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Missing Authorization header' });
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded; // Attach decoded user data
+    next();
+  } catch (err) {
+    console.error('Auth verify failed:', err.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
 
 // Create a router for all /api/* routes
 const apiRouter = express.Router();
@@ -1051,10 +1071,13 @@ apiRouter.post('/housekeep/run', async (_req, res) => {
 });
 
 // Trip Share - Create
-apiRouter.post('/trip/share', async (req, res) => {
+apiRouter.post('/trip/share', verifyFirebaseToken, async (req, res) => {
   const { rideId, userId } = req.body;
   if (!rideId || !userId) {
     return res.status(400).json({ error: 'Missing rideId/userId' });
+  }
+  if (req.user.uid !== userId) {
+    return res.status(403).json({ error: 'User ID mismatch with token' });
   }
 
   try {
@@ -1081,7 +1104,7 @@ apiRouter.post('/trip/share', async (req, res) => {
 });
 
 // Trip Share - Update Location
-apiRouter.post('/trip/:shareId/location', async (req, res) => {
+apiRouter.post('/trip/:shareId/location', verifyFirebaseToken, async (req, res) => {
   const { shareId } = req.params;
   const { lat, lng, userId, speed } = req.body;
   if (!shareId || !lat || !lng || !userId) {
@@ -1109,7 +1132,7 @@ apiRouter.post('/trip/:shareId/location', async (req, res) => {
 });
 
 // Trip Share - Stop
-apiRouter.post('/trip/:shareId/stop', async (req, res) => {
+apiRouter.post('/trip/:shareId/stop', verifyFirebaseToken, async (req, res) => {
   const { shareId } = req.params;
   const { userId } = req.body;
   if (!shareId || !userId) {

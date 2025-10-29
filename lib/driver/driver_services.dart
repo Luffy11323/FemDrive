@@ -637,7 +637,7 @@ class DriverService {
         'rideId': rideId,
         'action': 'COUNTER',
         'counterFare': newFare,
-        'timestamp': now,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
     }
   }

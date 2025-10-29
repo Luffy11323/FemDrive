@@ -129,7 +129,13 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                         itemBuilder: (ctx, i) {
                           final msg = list[i];
                           final mine = msg[AppFields.senderId] == _auth.currentUser?.uid;
-                          final timestamp = (msg[AppFields.timestamp] as Timestamp?)?.toDate();
+                          final rawTs = msg[AppFields.timestamp];
+                          final timestamp = rawTs is Timestamp
+                              ? rawTs.toDate()
+                              : rawTs is int
+                                  ? DateTime.fromMillisecondsSinceEpoch(rawTs)
+                                  : null;
+
                           return Align(
                             alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                             child: Container(

@@ -1029,7 +1029,8 @@ class ShareTripService {
   Future<String> startSharing(String rideId) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('User not logged in');
-
+    final user = FirebaseAuth.instance.currentUser;
+    final idToken = await user!.getIdToken();
     // Only return cached if actively sharing
     if (_currentShareId != null && _locationUpdateTimer?.isActive == true) {
       return 'https://fem-drive.vercel.app/trip/$_currentShareId';
@@ -1038,7 +1039,10 @@ class ShareTripService {
     try {
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/share'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $idToken'
+          },
         body: jsonEncode({'rideId': rideId, 'userId': userId}),
       );
 
@@ -1070,6 +1074,8 @@ class ShareTripService {
 
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
+    final user = FirebaseAuth.instance.currentUser;
+    final idToken = await user!.getIdToken();
 
     final shareId = _currentShareId;
     _currentShareId = null;
@@ -1077,7 +1083,10 @@ class ShareTripService {
     try {
       await http.post(
         Uri.parse('$_apiBaseUrl/$shareId/stop'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $idToken',
+          },
         body: jsonEncode({'userId': userId}),
       );
 
