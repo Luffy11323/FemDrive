@@ -1,8 +1,6 @@
 // ignore_for_file: avoid_print, use_build_context_synchronously
 
 import 'dart:async';
-// ignore: unused_import
-import 'package:femdrive/shared/full_screen_camera.dart';
 import 'package:femdrive/shared/selfie_storage.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -97,7 +95,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
   Map<String, dynamic>? cnicVerification;
   Map<String, dynamic>? licenseVerification;
-  Map<String, dynamic>? selfieVerification;
   bool documentsValid = false;
   double cnicTrustScore = 0.0;
   double licenseTrustScore = 0.0;
@@ -1657,17 +1654,14 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
         'licenseTrustScore': role == 'driver' ? licenseTrustScore : null,
         'requiresManualReview': requiresManualReview,
         'awaitingVerification': requiresManualReview,
-        'faceVerified': selfieTrustScore >= 0.7, // NEW: Admin can flip this
       };
 
       if (extractedCnic != null) {
-        doc.addAll({
-          'cnicNumber': extractedCnic,
-          'cnicBase64': cnicBase64!,
-          'verifiedCnic': autoApproved,
-          'documentsUploaded': true,
-          'uploadTimestamp': FieldValue.serverTimestamp(),
-        });
+        doc['cnicNumber'] = extractedCnic;
+        doc['cnicBase64'] = cnicBase64!;
+        doc['verifiedCnic'] = autoApproved;
+        doc['documentsUploaded'] = true;
+        doc['uploadTimestamp'] = FieldValue.serverTimestamp();
       }
 
       if (role == 'driver') {
@@ -1683,6 +1677,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
       if (autoApproved) {
         doc['fcmToken'] = '';
+        // Add any other fields that indicate full approval
       }
 
       await FirebaseFirestore.instance
@@ -1830,74 +1825,74 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   }
 
   Future<void> _captureSelfie() async {
-    if (isSubmitting) return;
-
-    final file = await Navigator.push<File?>(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const FullScreenCamera(isSelfie: true),
       ),
     );
 
-    if (file == null) return;
-
-    final bytes = await file.readAsBytes();
-    final compressed = await FlutterImageCompress.compressWithList(
-      bytes,
-      minWidth: 800,
-      minHeight: 800,
-      quality: 60,
-    );
-    final compressedBytes = Uint8List.fromList(compressed);
-
-    final result = await SelfieStorage.verifySelfie(compressedBytes);
-    setState(() {
-      selfieImage = file;
-      selfieBase64 = base64Encode(compressedBytes);
-      selfieTrustScore = result.trustScore;
-      selfieVerification = {
-        'valid': result.isValid,
-        'female': result.isFemale,
-        'message': result.message,
-      };
-    });
-
-    if (result.isValid) {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        await SelfieStorage.saveSelfie(user.uid, compressedBytes);
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set({
-              'status': 'verified',
-              'lastFaceVerification': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-        await SelfieStorage.resetAttempts(user.uid);
-        await SelfieStorage.markSelfieVerified(user.uid);
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Selfie verified! Trust: ${(result.trustScore * 100).toStringAsFixed(0)}%',
-          ),
-          backgroundColor: Colors.green,
-        ),
+    if (result is File) {
+      final bytes = await result.readAsBytes();
+      final compressed = await FlutterImageCompress.compressWithList(
+        bytes,
+        minWidth: 800,
+        minHeight: 800,
+        quality: 60,
       );
-    } else {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final remaining = await SelfieStorage.incrementAttempt(user.uid);
-        if (remaining == 0) {
-          await SelfieStorage.triggerAccountDeletion();
-          return;
+      final compressedBytes = Uint8List.fromList(compressed);
+
+      // 🔍 Step 1: Verify selfie using MLKit-based SelfieStorage
+      final verificationResult = await SelfieStorage.verifySelfie(
+        compressedBytes,
+      );
+
+      setState(() {
+        selfieImage = result;
+        selfieBase64 = base64Encode(bytes);
+        selfieTrustScore = verificationResult.trustScore;
+      });
+
+      if (verificationResult.isValid) {
+        // ✅ Step 2: Save encrypted selfie locally
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          await SelfieStorage.saveSelfie(user.uid, compressedBytes);
+
+          // ✅ Step 3: Write verification info to Firestore
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .set({
+                'status': 'verified',
+                'lastFaceVerification': FieldValue.serverTimestamp(),
+                'faceVerified':
+                    true, // ✅ NEW: Admin-controllable verification flag
+              }, SetOptions(merge: true));
+
+          // ✅ Step 4: Reset verification attempts and mark timestamp locally
+          await SelfieStorage.resetAttempts(user.uid);
+          await SelfieStorage.markSelfieVerified(user.uid);
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result.message ?? 'Verification failed'),
-            backgroundColor: Colors.red,
-          ),
+
+        showSuccess(
+          'Selfie verified successfully! '
+          'Trust Score: ${(verificationResult.trustScore * 100).toStringAsFixed(0)}%',
+        );
+      } else {
+        // ❌ Step 5: Handle failed verification and increment attempts
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          final remaining = await SelfieStorage.incrementAttempt(user.uid);
+          if (remaining == 0) {
+            await SelfieStorage.triggerAccountDeletion();
+            return;
+          }
+        }
+
+        showError(
+          verificationResult.message ??
+              'Invalid selfie. Attempts remaining: ${user != null ? await SelfieStorage.incrementAttempt(user.uid) : 0}',
         );
       }
     }
@@ -2374,86 +2369,96 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
     return Column(
       children: [
         if (cnicTrustScore > 0)
-          _buildDocumentTrustIndicator('CNIC', cnicTrustScore, cnicVerification?['valid'] ?? false),
-        if (role == 'driver' && licenseTrustScore > 0)
-          _buildDocumentTrustIndicator('License', licenseTrustScore, licenseVerification?['valid'] ?? false),
-        if (selfieTrustScore > 0)
-          _buildDocumentTrustIndicator('Selfie', selfieTrustScore, selfieVerification?['valid'] ?? false),
+          _buildDocumentTrustIndicator(
+            'CNIC',
+            cnicTrustScore,
+            cnicVerification?['valid'] ?? false,
+          ),
+        if (role == 'driver' && licenseTrustScore > 0) ...[
+          const SizedBox(height: 8),
+          _buildDocumentTrustIndicator(
+            'License',
+            licenseTrustScore,
+            licenseVerification?['valid'] ?? false,
+          ),
+        ],
       ],
-    ).animate().fadeIn(duration: 400.ms);
+    );
   }
 
   Widget _buildDocumentTrustIndicator(
-  String document,
-  double trustScore,
-  bool isValid,
-) {
-  final theme = Theme.of(context);
-  final colorScheme = theme.colorScheme;
+    String document,
+    double trustScore,
+    bool isValid,
+  ) {
+    final color = trustScore >= 0.7
+        ? Colors.green
+        : trustScore >= 0.56
+        ? Colors.orange
+        : Colors.red;
 
-  final Color color = trustScore >= 0.7
-      ? colorScheme.primary
-      : trustScore >= 0.56
-          ? colorScheme.tertiary
-          : colorScheme.error;
+    final icon = trustScore >= 0.7
+        ? Icons.verified_user
+        : trustScore >= 0.56
+        ? Icons.warning
+        : Icons.error;
 
-  final IconData icon = trustScore >= 0.7
-      ? Icons.verified_user
-      : trustScore >= 0.56
-          ? Icons.warning
-          : Icons.error;
+    final message = trustScore >= 0.7
+        ? '$document verified with high confidence'
+        : trustScore >= 0.56
+        ? '$document verified - may require manual review'
+        : '$document - low confidence, retake required';
 
-  final message = isValid
-      ? '$document verified'
-      : 'Low $document trust — please retake';
-
-  return Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      border: Border.all(color: color.withValues(alpha: 0.4)),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(
-      children: [
-        Icon(icon, color: color),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                message,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.bold,
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color, width: 2),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  LinearProgressIndicator(
-                    value: trustScore,
-                    backgroundColor: color.withValues(alpha: 0.2),
-                    valueColor: AlwaysStoppedAnimation<Color>(color),
-                    minHeight: 10,
-                  ),
-                  Text(
-                    '${(trustScore * 100).toStringAsFixed(0)}%',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: colorScheme.onPrimary,
-                      fontWeight: FontWeight.bold,
+                const SizedBox(height: 4),
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    LinearProgressIndicator(
+                      value: trustScore,
+                      backgroundColor: color.withValues(alpha: 0.2),
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                      minHeight: 10,
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    Text(
+                      '${(trustScore * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
-    ),
-  ).animate().fadeIn(duration: 400.ms);
-}
+        ],
+      ),
+    ).animate().fadeIn(duration: 400.ms);
+  }
 
   Widget _buildSelfieButton() {
     return Column(
