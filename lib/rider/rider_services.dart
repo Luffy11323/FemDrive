@@ -1069,23 +1069,37 @@ class ShareTripService {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw Exception('User not logged in');
 
-    final idToken = await user.getIdToken(true); // ✅ force refresh
+    String? idToken = await user.getIdToken(true); // force-refresh at start
     final userId = user.uid;
 
-    // Already sharing? Return cached link.
+    // Return cached share if active
     if (_currentShareId != null && _locationUpdateTimer?.isActive == true) {
       return 'https://fem-drive.vercel.app/trip/$_currentShareId';
     }
 
     try {
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/share'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $idToken',
-        },
-        body: jsonEncode({'rideId': rideId}),
-      );
+      Future<http.Response> sendRequest(String token) {
+        return http.post(
+          Uri.parse('$_apiBaseUrl/share'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({'rideId': rideId}),
+        );
+      }
+
+      // First attempt
+      var response = await sendRequest(idToken!);
+
+      // 🔁 Handle expired/unauthenticated token
+      if (response.statusCode == 401 ||
+          response.body.contains('UNAUTHENTICATED') ||
+          response.body.contains('Invalid or expired token')) {
+        _logger.w('Token might be expired, retrying...');
+        idToken = await user.getIdToken(true); // Force refresh again
+        response = await sendRequest(idToken!);
+      }
 
       if (response.statusCode != 200) {
         throw Exception('Failed to start sharing: ${response.body}');
@@ -1110,13 +1124,12 @@ class ShareTripService {
 
       _startLocationUpdates();
 
-      // Auto-stop after 3h (silent)
-      _expirationTimer =
-          Timer(const Duration(hours: 3), () => stopSharing(userId));
+      // Auto-stop after 3h
+      _expirationTimer = Timer(const Duration(hours: 3), () => stopSharing(userId));
 
       return shareUrl;
-    } catch (e) {
-      _logger.e('startSharing failed: $e');
+    } catch (e, st) {
+      _logger.e('startSharing failed: $e', stackTrace: st);
       _currentShareId = null;
       _locationUpdateTimer?.cancel();
       rethrow;

@@ -170,13 +170,26 @@ async function verifyFirebaseToken(req, res, next) {
 
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.user = decoded; // Attach decoded user data
-    next();
+    req.user = decoded;
+    return next();
   } catch (err) {
+    // 👇 Handle token expiry gracefully
+    if (err.code === 'auth/id-token-expired') {
+      console.warn('⚠️ Firebase ID token expired');
+      return res.status(401).json({ refresh: true });
+    }
+
+    // 👇 Handle invalid signature or malformed token
+    if (err.code === 'auth/argument-error' || err.message?.includes('JWT')) {
+      console.warn('⚠️ Invalid or malformed ID token');
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
     console.error('Auth verify failed:', err.message);
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
+
 
 // Create a router for all /api/* routes
 const apiRouter = express.Router();
