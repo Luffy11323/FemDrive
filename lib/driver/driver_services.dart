@@ -310,32 +310,49 @@ class PendingRequest {
 }
 
 class DriverLocationService {
-  final DatabaseReference _rtdb = FirebaseDatabase.instance.ref();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  // ───────────────────────────────────────────────
+  // 🔁 SINGLETON (Global Instance)
+  // ───────────────────────────────────────────────
+  static final DriverLocationService instance = DriverLocationService._internal();
 
-  StreamSubscription<Position>? _positionSub;
-  final GeoHasher _geoHasher = GeoHasher();
+  factory DriverLocationService() => instance;
 
-  LocationSettings locationSettings;
-
-  String? _activeRideId;
-  String? _activeShareId;
-  bool _isPaused = false;
-
-  final StreamController<Position> _positionController =
-      StreamController<Position>.broadcast();
-  Stream<Position> get positionStream => _positionController.stream;
-
-  DriverLocationService({
-    LocationSettings? locationSettings,
-  }) : locationSettings = locationSettings ??
+  DriverLocationService._internal({LocationSettings? locationSettings})
+      : locationSettings = locationSettings ??
             const LocationSettings(
               accuracy: LocationAccuracy.high,
               distanceFilter: 10,
             );
 
-  // === PERMISSIONS ===
+  // ───────────────────────────────────────────────
+  // 🔧 Core Fields
+  // ───────────────────────────────────────────────
+  final DatabaseReference _rtdb = FirebaseDatabase.instance.ref();
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final GeoHasher _geoHasher = GeoHasher();
+
+  StreamSubscription<Position>? _positionSub;
+  final StreamController<Position> _positionController =
+      StreamController<Position>.broadcast();
+
+  Stream<Position> get positionStream => _positionController.stream;
+
+  String? _activeRideId;
+  String? _activeShareId;
+
+  bool _isPaused = false;
+  bool _backgroundLoopActive = false;
+
+  Timer? _backgroundTimer;
+  DateTime? _lastWriteTime;
+  Position? _lastPosition;
+  String? _lastGeoHash;
+
+  final LocationSettings locationSettings;
+
+  // ───────────────────────────────────────────────
+  // 🧭 Permissions
+  // ───────────────────────────────────────────────
   Future<bool> _checkAndRequestPermissions() async {
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -346,7 +363,9 @@ class DriverLocationService {
     return true;
   }
 
-  // === START ONLINE MODE ===
+  // ───────────────────────────────────────────────
+  // 🚗 Start Online Mode
+  // ───────────────────────────────────────────────
   Future<void> startOnlineMode({String? rideId}) async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -355,49 +374,57 @@ class DriverLocationService {
     _activeRideId = rideId;
     _isPaused = false;
 
-    if (!await _checkAndRequestPermissions()) return;
+    if (!await _checkAndRequestPermissions()) {
+      debugPrint('[Location] Permission denied');
+      return;
+    }
 
     await _positionSub?.cancel();
-
     _positionSub = Geolocator.getPositionStream(locationSettings: locationSettings)
         .listen(
       (pos) async {
         if (_isPaused) return;
-
         _positionController.add(pos);
-
-        final hash = _geoHasher.encode(pos.latitude, pos.longitude, precision: 9);
-
-        // Fetch shareId once
-        if (_activeRideId != null && _activeShareId == null) {
-          try {
-            final rideSnap = await _firestore
-                .collection('rides')
-                .doc(_activeRideId)
-                .get();
-            _activeShareId = rideSnap.data()?['shareId'] as String?;
-          } catch (e) {
-            if (kDebugMode) debugPrint('[Location] Failed to get shareId: $e');
-          }
-        }
-
-        _debouncedWrite(uid, pos, hash);
+        _updateAll(uid, pos);
       },
-      onError: (err) {
-        if (kDebugMode) debugPrint('[Location] Stream error: $err');
-      },
+      onError: (err) => debugPrint('[Location] Stream error: $err'),
+      cancelOnError: false,
     );
+
+    // Start fallback background polling loop (works when stream is paused by Android)
+    _startBackgroundLoop(uid);
+
+    debugPrint('✅ DriverLocationService online. rideId=$_activeRideId');
   }
 
-  // === DEBOUNCED WRITE ===
-  Timer? _debounceTimer;
-  Position? _lastPosition;
-  String? _lastGeoHash;
-  DateTime? _lastWriteTime;
+  // ───────────────────────────────────────────────
+  // ♻️ Background Polling Loop (Fallback for Android)
+  // ───────────────────────────────────────────────
+  void _startBackgroundLoop(String uid) {
+    if (_backgroundLoopActive) return;
+    _backgroundLoopActive = true;
 
-  void _debouncedWrite(String uid, Position pos, String hash) {
+    _backgroundTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (_isPaused) return;
+      try {
+        final pos = await Geolocator.getCurrentPosition();
+        await _updateAll(uid, pos);
+      } catch (e) {
+        debugPrint('[Location] Polling update failed: $e');
+      }
+    });
+
+    debugPrint('📡 Background tracking loop started (10s interval)');
+  }
+
+  // ───────────────────────────────────────────────
+  // 💾 Unified Firebase Update
+  // ───────────────────────────────────────────────
+  Future<void> _updateAll(String uid, Position pos) async {
+    final hash = _geoHasher.encode(pos.latitude, pos.longitude, precision: 9);
     final now = DateTime.now();
 
+    // Skip redundant updates
     if (_lastWriteTime != null &&
         now.difference(_lastWriteTime!).inSeconds < 3 &&
         _lastPosition != null &&
@@ -406,67 +433,62 @@ class DriverLocationService {
       return;
     }
 
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(seconds: 1), () async {
-      try {
-        final timestamp = ServerValue.timestamp;
-        final updates = <String, dynamic>{};
+    try {
+      final timestamp = ServerValue.timestamp;
+      final updates = <String, dynamic>{};
 
-        // 1. drivers_online
-        updates['drivers_online/$uid'] = {
-          'uid': uid,
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'geohash': hash,
+      // 1️⃣ drivers_online
+      updates['drivers_online/$uid'] = {
+        'uid': uid,
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'geohash': hash,
+        'updatedAt': timestamp,
+      };
+
+      // 2️⃣ driverLocations (RTDB marker)
+      updates['driverLocations/$uid'] = {
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'updatedAt': timestamp,
+      };
+
+      // 3️⃣ ridesLive/{rideId}
+      if (_activeRideId != null) {
+        updates['ridesLive/$_activeRideId'] = {
+          'driverLat': pos.latitude,
+          'driverLng': pos.longitude,
+          'driverTs': timestamp,
           'updatedAt': timestamp,
         };
-
-        // 2. driverLocations
-        updates['driverLocations/$uid'] = {
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'updatedAt': timestamp,
-        };
-
-        // 3. ridesLive/{rideId}
-        if (_activeRideId != null) {
-          updates['ridesLive/$_activeRideId'] = {
-            'driverLat': pos.latitude,
-            'driverLng': pos.longitude,
-            'driverTs': timestamp,
-            'status': 'in_progress',
-            'updatedAt': timestamp,
-          };
-        }
-
-        // 4. trip_shares/{shareId} → PUBLIC TRACKER
-        if (_activeShareId != null) {
-          updates['trip_shares/$_activeShareId'] = {
-            'lat': pos.latitude,
-            'lng': pos.longitude,
-            'updatedAt': timestamp,
-          };
-        }
-
-        await _rtdb.update(updates);
-
-        _lastPosition = pos;
-        _lastGeoHash = hash;
-        _lastWriteTime = now;
-      } catch (e) {
-        if (kDebugMode) debugPrint('[Location] Write failed: $e');
       }
-    });
+
+      // 4️⃣ trip_shares/{shareId} (public tracker)
+      if (_activeShareId != null) {
+        updates['trip_shares/$_activeShareId'] = {
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'updatedAt': timestamp,
+        };
+      }
+
+      await _rtdb.update(updates);
+
+      _lastPosition = pos;
+      _lastGeoHash = hash;
+      _lastWriteTime = now;
+
+      debugPrint('✅ Location updated: ${pos.latitude}, ${pos.longitude}');
+    } catch (e) {
+      debugPrint('[Location] Write failed: $e');
+    }
   }
 
+  // ───────────────────────────────────────────────
+  // ⚙️ Helpers
+  // ───────────────────────────────────────────────
   bool _isPositionClose(Position a, Position b, [double threshold = 5]) {
-    return Geolocator.distanceBetween(
-          a.latitude,
-          a.longitude,
-          b.latitude,
-          b.longitude,
-        ) <
-        threshold;
+    return Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude) < threshold;
   }
 
   void pause() => _isPaused = true;
@@ -477,6 +499,9 @@ class DriverLocationService {
     _activeShareId = shareId;
   }
 
+  // ───────────────────────────────────────────────
+  // 📴 Go Offline / Cleanup
+  // ───────────────────────────────────────────────
   Future<void> goOffline() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
@@ -487,22 +512,28 @@ class DriverLocationService {
 
     await _positionSub?.cancel();
     _positionSub = null;
-    _debounceTimer?.cancel();
+    _backgroundTimer?.cancel();
+    _backgroundLoopActive = false;
 
     try {
       await _rtdb.child('drivers_online/$uid').remove();
       await _rtdb.child('driverLocations/$uid').remove();
+      debugPrint('🛑 Driver offline and cleaned up');
     } catch (e) {
-      if (kDebugMode) debugPrint('[Location] Cleanup failed: $e');
+      debugPrint('[Location] Cleanup failed: $e');
     }
   }
 
+  // ───────────────────────────────────────────────
+  // 🧹 Dispose
+  // ───────────────────────────────────────────────
   Future<void> dispose() async {
     await _positionSub?.cancel();
     await _positionController.close();
     await goOffline();
   }
 }
+
 class DriverService {
   final _fire = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
@@ -525,6 +556,7 @@ class DriverService {
   }
 
   // ACCEPT
+    // ACCEPT
   Future<void> acceptRide(String rideId, PendingRequest? contextData) async {
     final user = _auth.currentUser;
     if (user == null) {
@@ -536,7 +568,7 @@ class DriverService {
     final userDoc = await _fire.collection('users').doc(driverId).get();
     final driverName = userDoc.data()?[AppFields.username] ?? 'Unknown Driver';
 
-    // 1) Atomic accept in Firestore
+    // 1️⃣ Atomic accept in Firestore
     await _fire.runTransaction((tx) async {
       final docRef = _fire.collection(AppPaths.ridesCollection).doc(rideId);
       final snap = await tx.get(docRef);
@@ -560,37 +592,41 @@ class DriverService {
       });
     });
 
-    // 2) Mirror to RTDB live node
+    // 2️⃣ Mirror to RTDB live node
     await _rtdb.child('${AppPaths.ridesLive}/$rideId').update({
       AppFields.status: RideStatus.accepted,
       'driverId': driverId,
       'updatedAt': ServerValue.timestamp,
     });
 
-    // 3) Remove from pending queues
+    // 3️⃣ Remove from pending queues
     await _rtdb.child('${AppPaths.ridesPendingA}/$rideId').remove();
     await _rtdb.child('${AppPaths.ridesPendingB}/$rideId').remove();
 
-    // 4) Notify rider
-    final riderId = (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-        .data()?[AppFields.riderId];
+    // 4️⃣ Notify rider
+    final rideDoc = await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
+    final riderId = rideDoc.data()?[AppFields.riderId];
+    final shareId = rideDoc.data()?['shareId'] as String?;
+
     if (riderId != null) {
       await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: 'ride_accepted',
+        AppFields.type: OfferType.rideAccepted,
         AppFields.rideId: rideId,
         AppFields.timestamp: ServerValue.timestamp,
       });
     }
 
-    // 5) READ shareId FROM RIDE DOC
-    final rideSnap = await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
-    final shareId = rideSnap.data()?['shareId'] as String?;
-
-    // 6) START LOCATION TRACKING WITH shareId
-    final locationService = DriverLocationService();
-    await locationService.startOnlineMode(rideId: rideId);
-    locationService.setActiveRide(rideId, shareId: shareId);
+    // 5️⃣ Start driver location tracking
+    try {
+      final loc = DriverLocationService();
+      loc.setActiveRide(rideId, shareId: shareId);
+      await loc.startOnlineMode(rideId: rideId);
+      debugPrint("📡 DriverLocationService started for ride $rideId");
+    } catch (e) {
+      debugPrint("⚠️ Failed to start DriverLocationService: $e");
+    }
   }
+
   // COUNTER
   Future<void> proposeCounterFare(String rideId, double newFare) async {
     final fire = FirebaseFirestore.instance;
@@ -654,16 +690,41 @@ class DriverService {
       'updatedAt': ServerValue.timestamp,
     });
 
-    final riderId =
-        (await _fire.collection(AppPaths.ridesCollection).doc(rideId).get())
-            .data()?[AppFields.riderId];
+    final riderId = (await _fire
+            .collection(AppPaths.ridesCollection)
+            .doc(rideId)
+            .get())
+        .data()?[AppFields.riderId];
+
     if (riderId != null) {
       await _rtdb.child('${AppPaths.notifications}/$riderId').push().set({
-        AppFields.type: 'status_update',
+        AppFields.type: OfferType.statusUpdate,
         AppFields.status: newStatus,
         AppFields.rideId: rideId,
         AppFields.timestamp: ServerValue.timestamp,
       });
+    }
+
+    // 6️⃣ Sync background tracking
+    try {
+      final loc = DriverLocationService();
+
+      if (newStatus == RideStatus.accepted ||
+          newStatus == RideStatus.driverArrived ||
+          newStatus == RideStatus.inProgress ||
+          newStatus == RideStatus.onTrip) {
+        // ensure ride stays active
+        loc.setActiveRide(rideId);
+        await loc.startOnlineMode(rideId: rideId);
+        debugPrint("🚗 Tracking active (status=$newStatus)");
+      }
+
+      if (newStatus == RideStatus.completed || newStatus == RideStatus.cancelled) {
+        await loc.goOffline();
+        debugPrint("🛑 Tracking stopped (ride ended)");
+      }
+    } catch (e) {
+      debugPrint("⚠️ updateRideStatus tracking error: $e");
     }
   }
 

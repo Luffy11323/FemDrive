@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui; // for BackdropFilter blur
 
 import 'package:femdrive/driver/driver_services.dart';
+import 'package:femdrive/location/location_service.dart';
 import 'package:femdrive/shared/emergency_service.dart';
 import 'package:femdrive/rider/rider_dashboard_controller.dart';
 import 'package:femdrive/rider/rider_services.dart'; // MapService, GeocodingService
@@ -429,22 +430,28 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     }
   }
     
+  // -- Follow camera (driver heading) with safe guards
   Future<void> _followCamera(LatLng me) async {
-    if (_driverLeg.length >= 2) {
-      final idx = _nearestIndex(_driverLeg, me);
-      final next = _driverLeg[(idx + 1).clamp(0, _driverLeg.length - 1)];
-      final bearing = _bearingBetween(me, next);
-      await _mapController?.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: me, zoom: 17.0, tilt: 45.0, bearing: bearing),
-        ),
-      );
-    } else {
-      await _mapController?.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: me, zoom: 17.0, tilt: 45.0),
-        ),
-      );
+    try {
+      if (_driverLeg.length >= 2) {
+        final idx = _nearestIndex(_driverLeg, me);
+        final next = _driverLeg[(idx + 1).clamp(0, _driverLeg.length - 1)];
+        final bearing = _bearingBetween(me, next);
+        await _mapController?.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: me, zoom: 17.0, tilt: 45.0, bearing: bearing),
+          ),
+        );
+      } else {
+        await _mapController?.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: me, zoom: 17.0, tilt: 45.0),
+          ),
+        );
+      }
+    } catch (e) {
+      // Ignore transient camera exceptions
+      _logger.w('followCamera skipped: $e');
     }
   }
 
@@ -463,12 +470,47 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     super.initState();
     _loadCurrentLocation();
     _loadDriverIcon();
+    Future.microtask(() async {
+      final rider = FirebaseAuth.instance.currentUser;
+      if (rider != null) {
+        try {
+          await RiderLocationService.instance.init(rider.uid);
+          await RiderLocationService.instance.startBackground();
+        } catch (e) {
+          debugPrint('Silent init background tracking failed: $e');
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
     _pickupController.dispose();
     _dropoffController.dispose();
+
+    // --- 🧹 Background & Foreground tracking cleanup ---
+    try {
+      RiderLocationService.instance.stopForegroundUpdates();
+      RiderLocationService.instance.stopBackground();
+    } catch (e) {
+      debugPrint('Silent RiderLocationService dispose cleanup error: $e');
+    }
+
+    // --- 🧹 Optional: stop ongoing trip share if still active ---
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        ShareTripService().stopSharing(uid);
+      }
+    } catch (e) {
+      debugPrint('Silent ShareTripService cleanup error: $e');
+    }
+
+    // --- 🧹 Clear map controller reference safely ---
+    try {
+      _mapController?.dispose();
+    } catch (_) {}
+
     super.dispose();
   }
 
@@ -491,6 +533,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     } catch (_) {}
   }
 
+  // -- Draw a route (robust, timeout, silent failure)
   Future<void> _drawRoute({
     required LatLng from,
     required LatLng to,
@@ -499,11 +542,13 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     int width = 6,
   }) async {
     try {
-      final points = await MapService().getRoute(from, to);
-      _logger.i(
-        '[route] ${from.latitude},${from.longitude} -> ${to.latitude},${to.longitude} | pts=${points.length}',
-      );
+      final points = await MapService()
+          .getRoute(from, to)
+          .timeout(const Duration(seconds: 10));
+
+      _logger.i('[route] ${from.latitude},${from.longitude} -> ${to.latitude},${to.longitude} | pts=${points.length}');
       if (!mounted || points.isEmpty) return;
+
       setState(() {
         _polylines = {
           Polyline(
@@ -517,7 +562,11 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
           ),
         };
       });
-      await _fitToBounds(from, to);
+
+      // Fit silently (ignore camera errors)
+      try {
+        await _fitToBounds(from, to);
+      } catch (_) {}
     } catch (e) {
       _logger.e('Failed to draw route "$id": $e');
     }
@@ -558,46 +607,97 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
     await _fitToBounds(from, to);
   }
 
+  // -- Safe current location with fallbacks & silent guards
   Future<void> _loadCurrentLocation() async {
     try {
-      final loc = await MapService().currentLocation();
-      String? addr = await GeocodingService.reverseGeocode(
-        lat: loc.latitude,
-        lng: loc.longitude,
-      );
+      // Quick permission check (does not prompt)
+      final perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        final req = await Geolocator.requestPermission();
+        if (req == LocationPermission.denied) {
+          _logger.w("Location permission denied");
+          return;
+        }
+      }
+      if (perm == LocationPermission.deniedForever) {
+        _logger.w("Location permission denied forever");
+        return;
+      }
+
+      // Try high-accuracy fast call with timeout
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        ).timeout(const Duration(seconds: 7));
+      } catch (_) {
+        // Fallback to last known (may be null)
+        pos ??= await Geolocator.getLastKnownPosition();
+      }
+      if (pos == null) {
+        _logger.w("No current or last known position");
+        return;
+      }
+
+      final loc = LatLng(pos.latitude, pos.longitude);
+
+      // Best-effort reverse geocode; swallow failures
+      String? addr;
+      try {
+        addr = await GeocodingService.reverseGeocode(
+          lat: loc.latitude,
+          lng: loc.longitude,
+        );
+      } catch (_) {}
       addr ??= 'My location';
+
+      if (!mounted) return;
       setState(() {
         _currentLocation = loc;
-        _pickupLatLng = loc;
+        _pickupLatLng ??= loc;
         _pickupController.text = addr!;
       });
-      ref.read(driverSearchCenterProvider.notifier).state = loc;
+
+      // Seed nearby drivers center silently
+      try {
+        ref.read(driverSearchCenterProvider.notifier).state = loc;
+      } catch (_) {}
     } catch (e) {
       _logger.e("Failed to fetch current location: $e");
     }
   }
 
+  // -- Camera fit with bounds (tolerant & silent)
   Future<void> _fitToBounds(LatLng a, LatLng b) async {
     if (_mapController == null) return;
-    var sw = LatLng(
-      a.latitude < b.latitude ? a.latitude : b.latitude,
-      a.longitude < b.longitude ? a.longitude : b.longitude,
-    );
-    var ne = LatLng(
-      a.latitude > b.latitude ? a.latitude : b.latitude,
-      a.longitude > b.longitude ? a.longitude : b.longitude,
-    );
-    if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
-      const d = 0.0005;
-      sw = LatLng(sw.latitude - d, sw.longitude - d);
-      ne = LatLng(ne.latitude + d, ne.longitude + d);
+    try {
+      var sw = LatLng(
+        a.latitude < b.latitude ? a.latitude : b.latitude,
+        a.longitude < b.longitude ? a.longitude : b.longitude,
+      );
+      var ne = LatLng(
+        a.latitude > b.latitude ? a.latitude : b.latitude,
+        a.longitude > b.longitude ? a.longitude : b.longitude,
+      );
+      if (sw.latitude == ne.latitude && sw.longitude == ne.longitude) {
+        const d = 0.0005;
+        sw = LatLng(sw.latitude - d, sw.longitude - d);
+        ne = LatLng(ne.latitude + d, ne.longitude + d);
+      }
+
+      // Wrap animate in a timeout to avoid hanging
+      await _mapController!
+          .animateCamera(
+            CameraUpdate.newLatLngBounds(
+              LatLngBounds(southwest: sw, northeast: ne),
+              72,
+            ),
+          )
+          .timeout(const Duration(seconds: 6));
+    } catch (e) {
+      // Camera can throw on invalid bounds or if map not ready; ignore
+      _logger.w('fitToBounds skipped: $e');
     }
-    await _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        LatLngBounds(southwest: sw, northeast: ne),
-        72,
-      ),
-    );
   }
 
   @override
@@ -1285,10 +1385,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               ),
               child: Row(
                 children: const [
-                  Icon(
-                    Icons.directions_car_filled_rounded,
-                    color: Colors.white,
-                  ),
+                  Icon(Icons.directions_car_filled_rounded, color: Colors.white),
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -1344,11 +1441,31 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
               },
             ),
             const Divider(),
+            
+            // 🔻 FINAL LOGOUT TILE (updated)
             _DrawerTile(
               icon: Icons.logout_rounded,
               title: 'Logout',
               onTap: () async {
+                try {
+                  // stop any active background or foreground tracking silently
+                  await RiderLocationService.instance.stopForegroundUpdates();
+                  await RiderLocationService.instance.stopBackground();
+                } catch (e) {
+                  // ignore errors quietly (service might not be active)
+                  debugPrint("Silent cleanup error: $e");
+                }
+
+                try {
+                  // Optional: stop ongoing trip share service (if active)
+                  final uid = FirebaseAuth.instance.currentUser?.uid;
+                  if (uid != null) {
+                    await ShareTripService().stopSharing(uid);
+                  }
+                } catch (_) {}
+
                 await FirebaseAuth.instance.signOut();
+
                 if (context.mounted) {
                   Navigator.of(context).pushReplacementNamed('/');
                 }
@@ -1360,6 +1477,7 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
       ),
     );
   }
+
 }
 
 /// ---------------- Ride Form (restored here) ----------------
@@ -1814,7 +1932,7 @@ class _RideStatusWidgetState extends ConsumerState<RideStatusWidget>
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) _controller.reverse();
     });
-    _controller.forward(); // Trigger fade-in on build
+    _controller.forward(); // fade-in animation
   }
 
   @override
@@ -1907,29 +2025,30 @@ class _RideStatusWidgetState extends ConsumerState<RideStatusWidget>
   }
 
   Future<void> _submitRating(String driverId, double rating) async {
-    if ((driverId).isEmpty || rating <= 0) return;
+    if (driverId.isEmpty || rating <= 0) return;
 
-    final driverRef = FirebaseFirestore.instance
-        .collection('drivers')
-        .doc(driverId);
+    final driverRef = FirebaseFirestore.instance.collection('drivers').doc(driverId);
 
-    await FirebaseFirestore.instance.runTransaction((transaction) async {
-      final snapshot = await transaction.get(driverRef);
-      if (!snapshot.exists) {
-        throw Exception("Driver not found");
-      }
-      final data = snapshot.data()!;
-      final int ratingCount = (data['ratingCount'] ?? 0) as int;
-      final double avgRating = (data['avgRating'] ?? 0.0).toDouble();
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final snapshot = await transaction.get(driverRef);
+        if (!snapshot.exists) throw Exception("Driver not found");
+        final data = snapshot.data()!;
+        final int ratingCount = (data['ratingCount'] ?? 0) as int;
+        final double avgRating = (data['avgRating'] ?? 0.0).toDouble();
 
-      final newCount = ratingCount + 1;
-      final newAvg = ((avgRating * ratingCount) + rating) / newCount;
+        final newCount = ratingCount + 1;
+        final newAvg = ((avgRating * ratingCount) + rating) / newCount;
 
-      transaction.update(driverRef, {
-        'ratingCount': newCount,
-        'avgRating': newAvg,
+        transaction.update(driverRef, {
+          'ratingCount': newCount,
+          'avgRating': newAvg,
+        });
       });
-    });
+    } catch (e) {
+      Logger().w('Rating submit failed (silent fallback): $e');
+      // No crash, just log silently — will retry next app start if needed
+    }
   }
 }
 
@@ -2979,15 +3098,12 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
   final _log = Logger();
 
   GoogleMapController? _ctrl;
-
-  // Route
-  List<LatLng> _route = <LatLng>[];
-  List<LatLng> _covered = <LatLng>[];
-  List<LatLng> _remaining = <LatLng>[];
+  List<LatLng> _route = [];
+  List<LatLng> _covered = [];
+  List<LatLng> _remaining = [];
   Polyline? _polyCovered;
   Polyline? _polyRemaining;
 
-  // Follow-cam & reroute guards
   DateTime _lastBuiltAt = DateTime.fromMillisecondsSinceEpoch(0);
   int _offRouteHits = 0;
   static const _offRouteThresholdM = 30.0;
@@ -2997,7 +3113,6 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
   @override
   void initState() {
     super.initState();
-    // Seed route from pickup→dropoff if pickup provided; else from dropoff→dropoff (no-op) until first driver point arrives.
     final seedStart = widget.pickup ?? widget.dropoff;
     _buildRoute(from: seedStart, to: widget.dropoff);
     _loadDriverIcon();
@@ -3015,15 +3130,17 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
         const ImageConfiguration(size: Size(48, 48)),
         'assets/images/bike_marker.png',
       );
-      if (mounted) {}
-      // ignore: empty_catches
-    } catch (e) {}
+    } catch (e) {
+      _log.w('Driver icon load failed silently: $e');
+    }
   }
 
-  // -------- Route building / trimming ---------------------------------------
+  // -- Robust route builder with cooldown + silent error handling
   Future<void> _buildRoute({required LatLng from, required LatLng to}) async {
     try {
-      final pts = await MapService().getRoute(from, to);
+      final pts = await MapService()
+          .getRoute(from, to)
+          .timeout(const Duration(seconds: 10));
       if (!mounted || pts.isEmpty) return;
 
       setState(() {
@@ -3050,23 +3167,27 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
         );
       });
 
-      // Fit initial bounds
+      // Fit initial bounds, ignore camera issues
       if (_ctrl != null && _route.length >= 2) {
-        final a = _route.first, b = _route.last;
-        final sw = LatLng(
-          (a.latitude < b.latitude) ? a.latitude : b.latitude,
-          (a.longitude < b.longitude) ? a.longitude : b.longitude,
-        );
-        final ne = LatLng(
-          (a.latitude > b.latitude) ? a.latitude : b.latitude,
-          (a.longitude > b.longitude) ? a.longitude : b.longitude,
-        );
-        await _ctrl!.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(southwest: sw, northeast: ne),
-            60,
-          ),
-        );
+        try {
+          final a = _route.first, b = _route.last;
+          final sw = LatLng(
+            (a.latitude < b.latitude) ? a.latitude : b.latitude,
+            (a.longitude < b.longitude) ? a.longitude : b.longitude,
+          );
+          final ne = LatLng(
+            (a.latitude > b.latitude) ? a.latitude : b.latitude,
+            (a.longitude > b.longitude) ? a.longitude : b.longitude,
+          );
+          await _ctrl!
+              .animateCamera(
+                CameraUpdate.newLatLngBounds(
+                  LatLngBounds(southwest: sw, northeast: ne),
+                  60,
+                ),
+              )
+              .timeout(const Duration(seconds: 6));
+        } catch (_) {}
       }
 
       _lastBuiltAt = DateTime.now();
@@ -3079,44 +3200,25 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
   void _trimWith(LatLng cur) {
     if (_route.length < 2) return;
 
-    final idx = _nearestIndex(cur, startFrom: 0);
+    final idx = _nearestIndex(cur);
     final safeIdx = idx.clamp(0, _route.length - 1);
 
     final newCovered = _route.sublist(0, safeIdx + 1);
     final newRemaining = [cur, ..._route.sublist(safeIdx + 1)];
 
+    if (!mounted) return;
     setState(() {
       _covered = newCovered;
       _remaining = newRemaining;
-      _polyCovered =
-          _polyCovered?.copyWith(pointsParam: _covered) ??
-          Polyline(
-            polylineId: const PolylineId('covered'),
-            points: _covered,
-            color: Colors.grey,
-            width: 10,
-            startCap: Cap.roundCap,
-            endCap: Cap.roundCap,
-            jointType: JointType.round,
-          );
-      _polyRemaining =
-          _polyRemaining?.copyWith(pointsParam: _remaining) ??
-          Polyline(
-            polylineId: const PolylineId('remaining'),
-            points: _remaining,
-            color: Colors.blueAccent,
-            width: 10,
-            startCap: Cap.roundCap,
-            endCap: Cap.roundCap,
-            jointType: JointType.round,
-          );
+      _polyCovered = _polyCovered?.copyWith(pointsParam: _covered);
+      _polyRemaining = _polyRemaining?.copyWith(pointsParam: _remaining);
     });
   }
 
-  int _nearestIndex(LatLng p, {int startFrom = 0}) {
+  int _nearestIndex(LatLng p) {
     double best = double.infinity;
-    int bestIdx = startFrom.clamp(0, _route.length - 1);
-    for (int i = startFrom; i < _route.length; i++) {
+    int bestIdx = 0;
+    for (int i = 0; i < _route.length; i++) {
       final d = Geolocator.distanceBetween(
         p.latitude,
         p.longitude,
@@ -3127,67 +3229,59 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
         best = d;
         bestIdx = i;
       }
-      if (i - startFrom > 200) break; // cheap early-exit
+      if (i > 200) break; // early exit
     }
     return bestIdx;
   }
 
   double _bearing(LatLng a, LatLng b) {
-    double toRad(double d) => d * (3.141592653589793 / 180.0);
-    double toDeg(double r) => r * (180.0 / 3.141592653589793);
+    double toRad(double d) => d * (math.pi / 180.0);
+    double toDeg(double r) => r * (180.0 / math.pi);
     final lat1 = toRad(a.latitude), lat2 = toRad(b.latitude);
     final dLon = toRad(b.longitude - a.longitude);
     final y = math.sin(dLon) * math.cos(lat2);
-    final x =
-        math.cos(lat1) * math.sin(lat2) -
-        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
     return (toDeg(math.atan2(y, x)) + 360.0) % 360.0;
   }
 
   void _maybeReroute(LatLng cur) {
     if (_route.isEmpty) return;
-
     final idx = _nearestIndex(cur);
     final nearest = _route[idx];
-    final dist = Geolocator.distanceBetween(
-      cur.latitude,
-      cur.longitude,
-      nearest.latitude,
-      nearest.longitude,
-    );
-
+    final dist = Geolocator.distanceBetween(cur.latitude, cur.longitude, nearest.latitude, nearest.longitude);
     _offRouteHits = dist > _offRouteThresholdM ? _offRouteHits + 1 : 0;
 
-    final cooldownOk =
-        DateTime.now().difference(_lastBuiltAt).inSeconds > _rebuildCooldownSec;
+    final cooldownOk = DateTime.now().difference(_lastBuiltAt).inSeconds > _rebuildCooldownSec;
     if (_offRouteHits >= _offRouteHitsToReroute && cooldownOk) {
       _offRouteHits = 0;
+      _log.i('[RiderNavMap] rerouting...');
       _buildRoute(from: cur, to: widget.dropoff);
     }
   }
 
-  // -------- Build ------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final driverPos = ref.watch(driverLocationProvider(widget.driverId)).value;
 
-    // Smooth follow + trim each time driver moves
     if (driverPos != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
 
-        // Follow-cam with tilt & bearing
         double br = 0;
         if (_remaining.length >= 2) {
           br = _bearing(_remaining.first, _remaining[1]);
         }
-        await _ctrl?.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(target: driverPos, zoom: 17, tilt: 45, bearing: br),
-          ),
-        );
 
-        // Trim and maybe reroute
+        try {
+          await _ctrl?.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(target: driverPos, zoom: 17, tilt: 45, bearing: br),
+            ),
+          );
+        } catch (e) {
+          _log.w('Camera follow failed silently: $e');
+        }
+
         _trimWith(driverPos);
         _maybeReroute(driverPos);
       });
@@ -3205,7 +3299,6 @@ class _RiderNavMapState extends ConsumerState<_RiderNavMap> {
           Marker(
             markerId: const MarkerId('driver'),
             position: driverPos,
-            rotation: 0,
             icon: widget.driverIcon,
             anchor: const Offset(0.5, 0.5),
             flat: true,

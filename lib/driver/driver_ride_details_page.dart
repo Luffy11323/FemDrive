@@ -150,7 +150,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                               decoration: BoxDecoration(
                                 color: mine
                                     ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.8)
-                                    : Colors.grey.shade200,
+                                    : const Color.fromARGB(255, 48, 183, 236),
                                 borderRadius: BorderRadius.circular(12).copyWith(
                                   topLeft: mine ? const Radius.circular(12) : Radius.zero,
                                   topRight: mine ? Radius.zero : const Radius.circular(12),

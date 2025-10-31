@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math'; // Added for Random in _isVerificationDue
 import 'package:femdrive/driver/profile_page.dart';
-import 'package:femdrive/location/location_service.dart';
 import 'package:femdrive/past_rides_page.dart';
 import 'package:femdrive/rider/rider_notification_service.dart';
 import 'package:femdrive/rider/rider_profile_page.dart';
@@ -608,21 +607,9 @@ class InitialScreen extends ConsumerWidget {
               }
 
               if (role == 'driver') {
-                final driverId = user.uid;
-                try {
-                  await LocationService().initBackgroundTracking(driverId);
-                  await LocationService().startBackground();
-                  debugPrint(
-                    "🚀 Background tracking initialized for driver $driverId",
-                  );
-                } catch (e) {
-                  debugPrint("⚠️ Failed to init background tracking: $e");
-                }
                 debugPrint("🔀 Redirecting to DriverDashboard");
                 if (navigatorKey.currentState?.mounted == true) {
-                  navigatorKey.currentState?.pushReplacementNamed(
-                    '/driver-dashboard',
-                  );
+                  navigatorKey.currentState?.pushReplacementNamed('/driver-dashboard');
                 }
               } else {
                 debugPrint("🔀 Redirecting to RiderDashboard");

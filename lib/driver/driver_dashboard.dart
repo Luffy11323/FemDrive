@@ -470,6 +470,8 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
   final bool _mapError = false;
   final String _mapErrorMessage = '';
   int _selectedIndex = 0;
+  Timer? _backgroundLocationTimer;
+  bool _backgroundTrackingActive = false;
 
   @override
   void initState() {
@@ -528,6 +530,47 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
       debugPrint('[DriverMapWidget] initial position failed: $e');
     }
   }
+  // 🔁 Background polling-based location update loop
+  Future<void> _startBackgroundTracking() async {
+    if (_backgroundTrackingActive) return;
+    _backgroundTrackingActive = true;
+    debugPrint('📡 Starting background location tracking...');
+    final uid = await getDriverUid();
+    if (uid == null) return;
+
+    _backgroundLocationTimer =
+        Timer.periodic(const Duration(seconds: 10), (_) async {
+      try {
+        final pos = await Geolocator.getCurrentPosition();
+        await FirebaseDatabase.instance
+            .ref('driverLocations/$uid')
+            .update({
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'updatedAt': ServerValue.timestamp,
+        });
+        if (_liveWatchingRideId != null) {
+          await FirebaseDatabase.instance
+              .ref('ridesLive/${_liveWatchingRideId!}/driver')
+              .update({
+            'lat': pos.latitude,
+            'lng': pos.longitude,
+            'updatedAt': ServerValue.timestamp,
+          });
+        }
+        debugPrint('📍 Background update sent: ${pos.latitude}, ${pos.longitude}');
+      } catch (e) {
+        debugPrint('⚠️ Background location update failed: $e');
+      }
+    });
+  }
+
+  Future<void> _stopBackgroundTracking() async {
+    if (!_backgroundTrackingActive) return;
+    _backgroundLocationTimer?.cancel();
+    _backgroundTrackingActive = false;
+    debugPrint('🛑 Background location tracking stopped.');
+  }
 
   void _attachLiveRide(String rideId) {
     _liveRideSub?.cancel();
@@ -536,7 +579,7 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
 
     _detailsPushed = false;
 
-    _liveRideSub = ridesLiveStream(rideId).listen((live) {
+    _liveRideSub = ridesLiveStream(rideId).listen((live) async {
       if (!mounted) return;
       final status = (live?['status'] ?? '').toString();
       final driverId = (live?['driverId'] ?? '').toString();
@@ -570,11 +613,13 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
             builder: (_) => DriverRideDetailsPage(rideId: rideId),
           ),
         );
+        await _startBackgroundTracking();
       }
 
       if (status == RideStatus.completed || status == RideStatus.cancelled) {
         _loc.setActiveRide(null);
         _detailsPushed = false;
+        await _stopBackgroundTracking();
       }
     });
   }
@@ -585,16 +630,22 @@ class _DriverDashboardState extends ConsumerState<DriverDashboard> {
     _mapController?.dispose();
     _liveRideSub?.cancel();
     _posSub?.cancel();
+    _backgroundLocationTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _toggleOnline(bool v) async {
     setState(() => _isOnline = v);
     if (v) {
-      await _loc.startOnlineMode();
+      await _loc.startOnlineMode(); 
+     await _startBackgroundTracking(); 
+     debugPrint("🚀 Driver went online — background tracking active.");
     } else {
-      await _loc.goOffline();
-      _shownRequestIds.clear();
+      await _loc.goOffline(); 
+      _shownRequestIds.clear(); 
+      // 🛑 Stop background tracking loop 
+      await _stopBackgroundTracking(); 
+      debugPrint("🛑 Driver went offline — background tracking stopped.");
     }
   }
 

@@ -237,7 +237,7 @@ class RideService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       if (currentUid == null) throw Exception('User not logged in');
 
-      // --- 1) Firestore ride doc (canonical) ---
+      // --- 1) Firestore canonical record ---
       final firestoreRide = {
         ...rideData,
         'riderId': currentUid,
@@ -246,7 +246,8 @@ class RideService {
       };
       final rideRef = await _firestore.collection('rides').add(firestoreRide);
       final rideId = rideRef.id;
-      // --- 2) RTDB mirrors for fast UI / dispatch ---
+
+      // --- 2) RTDB live mirrors for dispatch & live tracking ---
       await _rtdb.child('rides/$currentUid/$rideId').set({
         'id': rideId,
         ...rideData,
@@ -267,7 +268,7 @@ class RideService {
         'createdAt': ServerValue.timestamp,
       });
 
-      // --- 3) Nearby drivers (single snapshot) & fan-out notifications ---
+      // --- 3) Search nearby drivers and fan-out notifications ---
       final pickupLoc = LatLng(
         (rideData['pickupLat'] as num).toDouble(),
         (rideData['pickupLng'] as num).toDouble(),
@@ -276,12 +277,8 @@ class RideService {
       final drivers = await NearbyDriversService()
           .streamNearbyDriversFast(pickupLoc)
           .first
-          .timeout(
-            const Duration(seconds: 5),
-            onTimeout: () => <Map<String, dynamic>>[],
-          );
+          .timeout(const Duration(seconds: 5), onTimeout: () => []);
 
-      // 🔒 Filter drivers by the selected rideType
       String norm(String s) => s.toLowerCase().trim();
       final wantedType = norm((rideData['rideType'] ?? '').toString());
       final filteredDrivers = drivers
@@ -317,9 +314,18 @@ class RideService {
         if (updates.isNotEmpty) {
           await _rtdb.update(updates);
         }
-        _logger.i(
-          '[RideService] ✅ Notified $count "$wantedType" drivers for ride $rideId',
-        );
+        _logger.i('[RideService] ✅ Notified $count drivers for ride $rideId');
+      }
+
+      // --- 4) Background sync trigger ---
+      try {
+        // Mark this ride live for background update service (trip share)
+        await _rtdb.child('ridesLive/$rideId').update({
+          'trackingEnabled': true,
+          'updatedAt': ServerValue.timestamp,
+        });
+      } catch (e) {
+        _logger.w('[RideService] tracking flag failed silently: $e');
       }
 
       return rideId;
@@ -990,7 +996,7 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
                       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: isMe ? Theme.of(context).colorScheme.primaryContainer : Colors.grey.shade200,
+                          color: isMe ? Theme.of(context).colorScheme.primaryContainer : const Color.fromARGB(255, 48, 183, 236),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Padding(
@@ -1058,12 +1064,14 @@ class ShareTripService {
   Timer? _expirationTimer;
   Timer? _locationUpdateTimer;
 
+  /// 🚀 Start trip sharing (auto-syncs with driver background updates)
   Future<String> startSharing(String rideId) async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) throw Exception('User not logged in');
     final user = FirebaseAuth.instance.currentUser;
-    final idToken = await user!.getIdToken();
-    // Only return cached if actively sharing
+    if (user == null) throw Exception('User not logged in');
+    final userId = user.uid;
+    final idToken = await user.getIdToken();
+
+    // Return cached link if already sharing
     if (_currentShareId != null && _locationUpdateTimer?.isActive == true) {
       return 'https://fem-drive.vercel.app/trip/$_currentShareId';
     }
@@ -1073,13 +1081,12 @@ class ShareTripService {
         Uri.parse('$_apiBaseUrl/share'),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $idToken'
-          },
+          'Authorization': 'Bearer $idToken',
+        },
         body: jsonEncode({'rideId': rideId, 'userId': userId}),
       );
 
       if (response.statusCode != 200) {
-        _currentShareId = null;
         throw Exception('Failed: ${response.body}');
       }
 
@@ -1087,17 +1094,28 @@ class ShareTripService {
       _currentShareId = data['shareId'];
       final shareUrl = 'https://fem-drive.vercel.app/trip/$_currentShareId';
 
-      // Save to ride
+      // ✅ Sync to Firestore + RTDB
       await FirebaseFirestore.instance
           .collection('rides')
           .doc(rideId)
           .update({'shareId': _currentShareId});
 
+      await FirebaseDatabase.instance.ref('trip_shares/$_currentShareId').set({
+        'rideId': rideId,
+        'userId': userId,
+        'startedAt': ServerValue.timestamp,
+        'active': true,
+      });
+
       _startLocationUpdates();
-      _expirationTimer = Timer(const Duration(hours: 3), () => stopSharing(userId));
+
+      // Auto-stop after 3h (silent)
+      _expirationTimer =
+          Timer(const Duration(hours: 3), () => stopSharing(userId));
 
       return shareUrl;
     } catch (e) {
+      _logger.e('startSharing failed: $e');
       _currentShareId = null;
       _locationUpdateTimer?.cancel();
       rethrow;
@@ -1106,11 +1124,10 @@ class ShareTripService {
 
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
-    final user = FirebaseAuth.instance.currentUser;
-    final idToken = await user!.getIdToken();
 
+    final user = FirebaseAuth.instance.currentUser;
+    final idToken = await user?.getIdToken();
     final shareId = _currentShareId;
-    _currentShareId = null;
 
     try {
       await http.post(
@@ -1118,11 +1135,17 @@ class ShareTripService {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $idToken',
-          },
+        },
         body: jsonEncode({'userId': userId}),
       );
 
-      // Clean up Firestore
+      // Mark inactive in RTDB
+      await FirebaseDatabase.instance.ref('trip_shares/$shareId').update({
+        'active': false,
+        'stoppedAt': ServerValue.timestamp,
+      });
+
+      // Clean up Firestore reference
       final rideSnap = await FirebaseFirestore.instance
           .collection('rides')
           .where('shareId', isEqualTo: shareId)
@@ -1132,21 +1155,23 @@ class ShareTripService {
         await doc.reference.update({'shareId': FieldValue.delete()});
       }
 
-      await FirebaseDatabase.instance.ref('trip_shares/$shareId').remove();
+      _logger.i('Trip share $shareId stopped.');
     } catch (e) {
       _logger.e('Stop sharing error: $e');
     } finally {
       _expirationTimer?.cancel();
       _locationUpdateTimer?.cancel();
-      _logger.i('Stopped sharing');
+      _currentShareId = null;
     }
   }
 
+  /// Background-safe polling for rider live updates (5s interval)
   void _startLocationUpdates() {
     if (_currentShareId == null) return;
 
     _locationUpdateTimer?.cancel();
-    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+    _locationUpdateTimer =
+        Timer.periodic(const Duration(seconds: 5), (timer) async {
       try {
         final permission = await Geolocator.checkPermission();
         if (permission == LocationPermission.denied) {
@@ -1155,18 +1180,22 @@ class ShareTripService {
         }
 
         final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
         );
         final speed = position.speed * 3.6;
 
-        await FirebaseDatabase.instance.ref('trip_shares/$_currentShareId').update({
+        await FirebaseDatabase.instance
+            .ref('trip_shares/$_currentShareId')
+            .update({
           'lat': position.latitude,
           'lng': position.longitude,
           'speed': speed,
           'updatedAt': ServerValue.timestamp,
         });
       } catch (e) {
-        _logger.e('Location update failed: $e');
+        _logger.w('Location update failed: $e');
       }
     });
   }

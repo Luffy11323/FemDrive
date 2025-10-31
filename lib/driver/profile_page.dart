@@ -80,7 +80,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
   final _nameController = TextEditingController();
   final _homeController = TextEditingController();
   final _workController = TextEditingController();
-  final _carNumberController = TextEditingController();
   final _phoneController = TextEditingController();
   final _altContactController = TextEditingController();
   bool _isEditing = false;
@@ -90,6 +89,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
   String? _cnicNumber;
   String? _carModel;
   String? _carType;
+  String? _licenseNumber;
   String? _originalPhone;
   String? _originalAltContact;
   bool _isOtpSent = false;
@@ -541,7 +541,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
     _nameController.dispose();
     _homeController.dispose();
     _workController.dispose();
-    _carNumberController.dispose();
     _phoneController.dispose();
     _altContactController.dispose();
     _resendTimer?.cancel();
@@ -650,16 +649,14 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
                   _originalAltContact = data['altContact'] ?? '';
                 }
 
+                // Extract CNIC data
                 _cnicNumber = data['cnicNumber'] ?? '';
-                _carModel = data['vehicle'] is Map
-                    ? data['vehicle']['model'] ?? data['vehicle']['make'] ?? ''
-                    : data['vehicle']?.toString() ?? '';
-                _carNumberController.text = data['vehicle'] is Map
-                    ? data['vehicle']['plateNumber'] ?? ''
-                    : '';
-                _carType = data['vehicle'] is Map
-                    ? data['vehicle']['type'] ?? ''
-                    : '';
+                
+                // Extract vehicle information - FIXED to match signup structure
+                // Vehicle data is stored as direct fields, not nested
+                _carType = data['carType']?.toString() ?? '';
+                _carModel = data['carModel']?.toString() ?? '';
+                _licenseNumber = data['licenseNumber']?.toString() ?? '';
 
                 return SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -887,11 +884,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> with CodeAutoFill {
                               ),
                               const SizedBox(height: 12),
                               TextField(
-                                controller: _carNumberController,
+                                controller: TextEditingController(text: _licenseNumber),
                                 decoration: const InputDecoration(
-                                  labelText: 'Car Number Plate',
+                                  labelText: 'Driving License Number',
                                   border: OutlineInputBorder(),
-                                  prefixIcon: Icon(Icons.local_offer),
+                                  prefixIcon: Icon(Icons.card_membership),
                                 ),
                                 enabled: false,
                               ),
