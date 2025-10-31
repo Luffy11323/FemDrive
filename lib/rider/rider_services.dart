@@ -815,22 +815,50 @@ extension RiderChat on RideService {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw Exception('Not logged in');
     if (rideId.isEmpty || message.trim().isEmpty) return;
+
     try {
+      // 1️⃣ Push to Realtime Database (chat sync)
       await _db.child('rides/$rideId/messages').push().set({
         ChatFields.senderId: uid,
         ChatFields.text: message.trim(),
         ChatFields.timestamp: ServerValue.timestamp,
+        ChatFields.read: false,
       });
+
+      // 2️⃣ Fetch ride info from Firestore
+      final rideSnap =
+          await FirebaseFirestore.instance.collection('rides').doc(rideId).get();
+      final data = rideSnap.data();
+      if (data == null) return;
+
+      final riderId = data['riderId'];
+      final driverId = data['driverId'];
+      final receiverId = uid == riderId ? driverId : riderId;
+      if (receiverId == null) return;
+
+      // 3️⃣ Fetch receiver’s FCM token
+      final receiverSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(receiverId)
+          .get();
+      final receiverToken = receiverSnap.data()?['fcmToken'];
+      if (receiverToken == null || receiverToken.isEmpty) {
+        debugPrint('⚠️ No FCM token for receiver $receiverId');
+        return;
+      }
+
+      // 4️⃣ Notify backend (Express endpoint)
       final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/rides/$rideId/messages'),
+        Uri.parse('https://femdrive-server.vercel.app/api/rides/$rideId/messages'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'senderId': uid,
+          'senderId': driverId,
           'text': message.trim(),
         }),
       );
+
       if (response.statusCode != 200) {
-        throw Exception('Failed to notify: ${response.body}');
+        throw Exception('Notification failed: ${response.body}');
       }
     } catch (e) {
       debugPrint('Error sending message: $e');
@@ -917,15 +945,19 @@ class _RiderChatPageState extends ConsumerState<RiderChatPage> {
     final t = _text.text.trim();
     if (t.isEmpty) return;
     await ref.read(riderChatControllerProvider.notifier).send(widget.rideId, t);
-    _text.clear();
-    await Future.delayed(const Duration(milliseconds: 40));
-    if (_scroll.hasClients) {
-      _scroll.animateTo(
-        _scroll.position.maxScrollExtent + 72,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
-      );
-    }
+      if (mounted) { 
+        WidgetsBinding.instance.addPostFrameCallback((_) { 
+          _text.clear(); 
+          FocusManager.instance.primaryFocus?.unfocus(); 
+          if (_scroll.hasClients) { 
+            _scroll.animateTo( 
+              _scroll.position.maxScrollExtent + 72, 
+              duration: const Duration(milliseconds: 200), 
+              curve: Curves.easeOut, 
+            ); 
+          } 
+        }); 
+      } 
   }
   @override
   Widget build(BuildContext context) {

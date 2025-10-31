@@ -765,34 +765,61 @@ class DriverService {
     // 4) DO NOT remove from global pending queues or other drivers’ notifications
   }
 
-// === SEND MESSAGE (UNIFIED) ===
+  // === SEND MESSAGE (UNIFIED) ===
   Future<void> sendMessage(String rideId, String message, [String? senderId]) async {
     final uid = _auth.currentUser?.uid ?? senderId;
     if (uid == null) throw Exception('Not authenticated');
     if (message.trim().isEmpty) return;
 
     try {
+      // 1️⃣ Push message to RTDB (ensures live chat updates)
       await _rtdb.child('rides/$rideId/messages').push().set({
         AppFields.senderId: uid,
         AppFields.text: message.trim(),
         AppFields.timestamp: ServerValue.timestamp,
-        AppFields.read: false, // default
+        AppFields.read: false,
       });
 
+      // 2️⃣ Fetch ride info (to identify receiver)
+      final rideDoc =
+          await _fire.collection(AppPaths.ridesCollection).doc(rideId).get();
+      final data = rideDoc.data();
+      if (data == null) return;
+
+      final riderId = data[AppFields.riderId];
+      final driverId = data[AppFields.driverId];
+      final receiverId = uid == driverId ? riderId : driverId;
+
+      if (receiverId == null) return;
+
+      // 3️⃣ Fetch receiver FCM token
+      final receiverDoc =
+          await _fire.collection('users').doc(receiverId).get();
+      final receiverToken = receiverDoc.data()?[AppFields.fcmToken];
+      if (receiverToken == null || receiverToken.isEmpty) {
+        debugPrint('⚠️ No FCM token found for receiver $receiverId');
+        return;
+      }
+
+      // 4️⃣ Notify server (Express endpoint)
       final response = await http.post(
-        Uri.parse('https://fem-drive.vercel.app/api/rides/$rideId/messages'),
+        Uri.parse('https://femdrive-server.vercel.app/api/rides/$rideId/messages'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'senderId': uid, 'text': message.trim()}),
+        body: jsonEncode({
+          'senderId': uid,
+          'text': message.trim(),
+        }),
       );
 
       if (response.statusCode != 200) {
-        throw Exception('FCM failed: ${response.body}');
+        throw Exception('Notification failed: ${response.body}');
       }
     } catch (e) {
       debugPrint('sendMessage error: $e');
       rethrow;
     }
   }
+
 
   // === LISTEN MESSAGES (RTDB) ===
   Stream<List<Map<String, dynamic>>> listenMessages(String rideId) {

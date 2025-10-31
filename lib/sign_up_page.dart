@@ -10,12 +10,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:camera/camera.dart';
 import 'package:sms_autofill/sms_autofill.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:femdrive/shared/full_screen_camera.dart';
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -100,7 +100,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
   double licenseTrustScore = 0.0;
   double selfieTrustScore = 0.0;
   bool requiresLivenessCheck = false;
-  bool waitingForOtp = false;
+
   bool isOtpSent = false;
   bool isSubmitting = false;
   String? verificationId;
@@ -459,10 +459,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
 
     try {
       final formatted = formatPhoneNumber(phoneController.text);
-      setState(() {
-        isSubmitting = true;
-        waitingForOtp = true;
-      });
+
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: formatted,
         timeout: const Duration(seconds: 60),
@@ -480,13 +477,11 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
             errorMsg = e.message!;
           }
           showError(errorMsg);
-          setState(() => waitingForOtp = false);
         },
         codeSent: (id, _) {
           setState(() {
             verificationId = id;
             isOtpSent = true;
-            waitingForOtp = false;
           });
           startResendTimer();
           showSuccess('OTP sent successfully to ${phoneController.text}');
@@ -495,7 +490,6 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       );
     } catch (e) {
       showError('Unexpected error: ${e.toString()}');
-      setState(() => waitingForOtp = false);
     } finally {
       setState(() => isSubmitting = false);
     }
@@ -1751,9 +1745,7 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
       setState(() => isSubmitting = true);
       final file = await Navigator.push<File?>(
         context,
-        MaterialPageRoute(
-          builder: (_) => const FullScreenCamera(isSelfie: true),
-        ),
+        MaterialPageRoute(builder: (_) => const DocumentCameraScreen()),
       );
 
       if (file == null) return;
@@ -2323,22 +2315,16 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
                           duration: 250.ms,
                           transitionBuilder: (child, anim) =>
                               FadeTransition(opacity: anim, child: child),
-                          child: (isSubmitting || isOtpSent || waitingForOtp)
+                          child: (isSubmitting || isOtpSent)
                               ? _LoadingCar(
                                   key: ValueKey(
-                                    waitingForOtp
-                                        ? 'waiting'
-                                        : (isSubmitting
-                                              ? (isOtpSent ? 'verifying' : 'sending')
-                                              : 'awaiting_otp'),
+                                    isSubmitting ? 'sending' : 'awaiting_otp',
                                   ),
-                                  label: waitingForOtp
-                                      ? 'Waiting for OTP...'
-                                      : (isSubmitting
-                                            ? (isOtpSent
-                                                  ? 'Verifying & Registering...'
-                                                  : 'Sending OTP...')
-                                            : 'Enter OTP to register'),
+                                  label: isSubmitting
+                                      ? (isOtpSent
+                                            ? 'Verifying & Registering...'
+                                            : 'Sending OTP...')
+                                      : 'Enter OTP to register',
                                 )
                               : const Text('Send OTP', key: ValueKey('idle')),
                         ),
@@ -2508,41 +2494,15 @@ class _SignUpPageState extends State<SignUpPage> with CodeAutoFill {
           ).animate().fadeIn(duration: 400.ms),
 
           // === SELFIE TRUST SCORE BAR (INDEPENDENT) ===
-          const SizedBox(height: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Selfie Trust Score",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              const SizedBox(height: 4),
-              LinearProgressIndicator(
-                value: selfieTrustScore,
-                backgroundColor: Colors.grey[300],
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  selfieTrustScore > 0.7
-                      ? Colors.green
-                      : (selfieTrustScore > 0.4 ? Colors.orange : Colors.red),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                selfieTrustScore > 0.7
-                    ? "Verified"
-                    : (selfieTrustScore > 0.4
-                          ? "Improve face position"
-                          : "Selfie rejected"),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: selfieTrustScore > 0.7
-                      ? Colors.green
-                      : (selfieTrustScore > 0.4 ? Colors.orange : Colors.red),
-                ),
-              ),
-            ],
-          ),
-          // === END OF SELFIE TRUST SCORE ===
+          if (selfieTrustScore > 0) ...[
+            const SizedBox(height: 8),
+            _buildDocumentTrustIndicator(
+              'Selfie',
+              selfieTrustScore,
+              selfieTrustScore >=
+                  0.56, // This bool isn't used by the UI, but it's good practice
+            ),
+          ],
         ],
       ],
     );
@@ -2600,397 +2560,14 @@ class _LoadingCar extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Animate(
-          onPlay: (controller) => controller.repeat(reverse: true),
-          child: const Icon(Icons.directions_car, size: 20),
-        ).moveX(begin: -12, end: 12, duration: 1000.ms),
+        const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
         const SizedBox(width: 12),
         Text(label),
       ],
-    );
-  }
-}
-class FullScreenCamera extends StatefulWidget {
-  final bool isSelfie;
-
-  const FullScreenCamera({super.key, this.isSelfie = false});
-
-  @override
-  State<FullScreenCamera> createState() => _FullScreenCameraState();
-}
-
-class _FullScreenCameraState extends State<FullScreenCamera> {
-  CameraController? _controller;
-  List<CameraDescription>? _cameras;
-  late CameraDescription _currentCamera;
-  bool _isInitialized = false;
-  final bool _isTakingPicture = false;
-
-  // Existing members you already had
-  final List<String> _instructions = <String>[
-    'Center your face in the frame',
-    'Keep steady',
-  ];
-  int _currentStep = 0;
-  bool _isCapturing = false;
-  final List<File> _frames = [];
-  Timer? _captureTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    try {
-      _cameras = await availableCameras();
-      if (_cameras == null || _cameras!.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
-          Navigator.pop(context);
-        }
-        return;
-      }
-
-      // Choose initial camera based on selfie mode
-      final front = _cameras!
-          .where((c) => c.lensDirection == CameraLensDirection.front)
-          .toList();
-      final back = _cameras!
-          .where((c) => c.lensDirection == CameraLensDirection.back)
-          .toList();
-
-      _currentCamera = widget.isSelfie
-          ? (front.isNotEmpty ? front.first : _cameras!.first)
-          : (back.isNotEmpty ? back.first : _cameras!.first);
-
-      _controller?.dispose();
-      _controller = CameraController(
-        _currentCamera,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-
-      await _controller!.initialize();
-      if (!mounted) return;
-
-      setState(() => _isInitialized = true);
-      _startCaptureSequence(); // keep your existing sequence (if any)
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
-        Navigator.pop(context);
-      }
-    }
-  }
-
-  Future<void> _flipCamera() async {
-    if (_cameras == null || _cameras!.length < 2 || _isTakingPicture) return;
-
-    final wantBack = _currentCamera.lensDirection == CameraLensDirection.front;
-
-    final fallback = _cameras!.first;
-    final next = wantBack
-        ? (_cameras!.firstWhere(
-            (c) => c.lensDirection == CameraLensDirection.back,
-            orElse: () => fallback,
-          ))
-        : (_cameras!.firstWhere(
-            (c) => c.lensDirection == CameraLensDirection.front,
-            orElse: () => fallback,
-          ));
-
-    setState(() => _isInitialized = false);
-    _controller?.dispose();
-    _controller = CameraController(
-      next,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    await _controller!.initialize();
-    if (!mounted) return;
-
-    setState(() {
-      _currentCamera = next;
-      _isInitialized = true;
-    });
-  }
-
-  // your existing sequence logic kept intact
-  void _startCaptureSequence() {
-    _captureTimer?.cancel();
-    _currentStep = 0;
-    _frames.clear();
-    _captureTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (!mounted || !_isInitialized) return;
-      if (_currentStep >= _instructions.length) {
-        timer.cancel();
-        if (mounted) {
-          Navigator.pop(context, _frames.isNotEmpty ? _frames.last : null);
-        }
-        return;
-      }
-
-      if (_isCapturing) return;
-      setState(() => _isCapturing = true);
-      try {
-        final XFile photo = await _controller!.takePicture();
-        _frames.add(File(photo.path));
-        setState(() => _currentStep++);
-      } catch (_) {
-        // best-effort; you already show errors elsewhere
-      } finally {
-        if (mounted) setState(() => _isCapturing = false);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _captureTimer?.cancel();
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_isInitialized || _controller == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          CameraPreview(_controller!),
-
-          // Close
-          Positioned(
-            top: 40,
-            left: 16,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white, size: 30),
-              onPressed: () {
-                _captureTimer?.cancel();
-                Navigator.pop(context);
-              },
-            ),
-          ),
-
-          // Flip Button (only if device has 2+ cameras)
-          if (_cameras != null && _cameras!.length > 1)
-            Positioned(
-              top: 40,
-              right: 16,
-              child: IconButton(
-                icon: Icon(
-                  _currentCamera.lensDirection == CameraLensDirection.front
-                      ? Icons.flip_camera_android
-                      : Icons.flip_camera_ios,
-                  color: Colors.white,
-                  size: 30,
-                ),
-                tooltip: 'Switch camera',
-                onPressed: _flipCamera,
-              ),
-            ),
-
-          // Instruction banner (you already had this)
-          Positioned(
-            top: 100,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              color: Colors.black54,
-              child: Text(
-                _currentStep < _instructions.length
-                    ? _instructions[_currentStep]
-                    : 'Capturing...',
-                style: const TextStyle(color: Colors.white),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class LivenessCamera extends StatefulWidget {
-  const LivenessCamera({super.key});
-
-  @override
-  State<LivenessCamera> createState() => _LivenessCameraState();
-}
-
-class _LivenessCameraState extends State<LivenessCamera> {
-  CameraController? _controller;
-  List<CameraDescription>? _cameras;
-  bool _isInitialized = false;
-  bool _isCapturing = false;
-  final List<File> _frames = [];
-  int _currentStep = 0;
-  final _instructions = [
-    'Hold card flat',
-    'Tilt card left',
-    'Tilt card right',
-    'Move card closer',
-  ];
-  Timer? _captureTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    try {
-      _cameras = await availableCameras();
-      if (_cameras == null || _cameras!.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
-          Navigator.pop(context);
-        }
-        return;
-      }
-
-      _controller = CameraController(
-        _cameras!.first,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-
-      await _controller!.initialize();
-      if (mounted) {
-        setState(() => _isInitialized = true);
-        _startCaptureSequence();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
-        Navigator.pop(context);
-      }
-    }
-  }
-
-  void _startCaptureSequence() {
-    _captureTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (_currentStep >= _instructions.length || !mounted) {
-        timer.cancel();
-        if (_frames.isNotEmpty) {
-          Navigator.pop(context, _frames);
-        }
-        return;
-      }
-
-      setState(() => _isCapturing = true);
-      try {
-        final XFile photo = await _controller!.takePicture();
-        _frames.add(File(photo.path));
-        setState(() => _currentStep++);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error capturing frame: $e')));
-        }
-      } finally {
-        if (mounted) {
-          setState(() => _isCapturing = false);
-        }
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _captureTimer?.cancel();
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_isInitialized || _controller == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          CameraPreview(_controller!),
-          Positioned(
-            top: 40,
-            left: 16,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white, size: 30),
-              onPressed: () {
-                _captureTimer?.cancel();
-                Navigator.pop(context);
-              },
-            ),
-          ),
-          Positioned(
-            top: 100,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              color: Colors.black54,
-              child: Text(
-                _currentStep < _instructions.length
-                    ? _instructions[_currentStep]
-                    : 'Processing...',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-          Center(
-            child: Container(
-              width: MediaQuery.of(context).size.width * 0.9,
-              height: MediaQuery.of(context).size.height * 0.4,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          if (_isCapturing)
-            Positioned(
-              bottom: 40,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.black54,
-                  child: const Text(
-                    'Capturing...',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 }

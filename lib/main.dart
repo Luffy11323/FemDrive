@@ -34,6 +34,7 @@ import 'driver/driver_ride_details_page.dart' as details;
 import 'package:femdrive/shared/selfie_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:femdrive/shared/full_screen_camera.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -505,7 +506,7 @@ class InitialScreen extends ConsumerWidget {
             Future.microtask(() async {
               // Check device security
               if (!await _isDeviceSecure()) {
-                 if(!context.mounted) return;
+                if (!context.mounted) return;
                 showDialog(
                   context: context,
                   barrierDismissible: false,
@@ -575,7 +576,7 @@ class InitialScreen extends ConsumerWidget {
                               true, // ✅ new admin-controllable verification flag
                         }, SetOptions(merge: true));
                     await SelfieStorage.resetAttempts(user.uid);
-                    if(!context.mounted) return;
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
@@ -592,7 +593,7 @@ class InitialScreen extends ConsumerWidget {
                       await SelfieStorage.triggerAccountDeletion();
                       return;
                     }
-                    if(!context.mounted) return;
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('${verificationResult.message}'),

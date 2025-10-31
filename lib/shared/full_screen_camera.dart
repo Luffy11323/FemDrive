@@ -3,8 +3,9 @@
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
+import 'dart:async';
+
+// --- Camera Class 1: For Selfies ---
 
 class FullScreenCamera extends StatefulWidget {
   final bool isSelfie;
@@ -15,234 +16,443 @@ class FullScreenCamera extends StatefulWidget {
   State<FullScreenCamera> createState() => _FullScreenCameraState();
 }
 
-class _FullScreenCameraState extends State<FullScreenCamera>
-    with WidgetsBindingObserver, TickerProviderStateMixin {
+class _FullScreenCameraState extends State<FullScreenCamera> {
   CameraController? _controller;
-  late List<CameraDescription> _cameras;
-  bool _isCameraReady = false;
-  bool _isCapturing = false;
-  bool _frontCamera = true;
+  List<CameraDescription>? _cameras;
+  late CameraDescription _currentCamera;
+  bool _isInitialized = false;
+  bool _isTakingPicture = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      // --- Selects FRONT camera for selfies ---
+      final front = _cameras!
+          .where((c) => c.lensDirection == CameraLensDirection.front)
+          .toList();
+      final back = _cameras!
+          .where((c) => c.lensDirection == CameraLensDirection.back)
+          .toList();
+
+      _currentCamera = widget.isSelfie
+          ? (front.isNotEmpty ? front.first : _cameras!.first)
+          : (back.isNotEmpty ? back.first : _cameras!.first);
+      // --- End of camera selection ---
+
+      _controller?.dispose();
+      _controller = CameraController(
+        _currentCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
+      await _controller!.initialize();
+      if (!mounted) return;
+
+      setState(() => _isInitialized = true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  Future<void> _takePicture() async {
+    if (_isTakingPicture || !_isInitialized || _controller == null) return;
+
+    setState(() => _isTakingPicture = true);
+    try {
+      final XFile photo = await _controller!.takePicture();
+      final File file = File(photo.path);
+      if (mounted) {
+        Navigator.pop(context, file); // Returns the captured image file
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error capturing photo: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isTakingPicture = false);
+      }
+    }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
   }
 
-  Future<void> _initCamera() async {
-    try {
-      final status = await Permission.camera.request();
-      if (!status.isGranted) {
-        _showPermissionDialog();
-        return;
-      }
-
-      _cameras = await availableCameras();
-
-      // ✅ Default to front camera for selfies
-      CameraDescription camera = _cameras.firstWhere(
-        (c) =>
-            c.lensDirection ==
-            (widget.isSelfie
-                ? CameraLensDirection.front
-                : CameraLensDirection.back),
-        orElse: () => _cameras.first,
-      );
-
-      _controller = CameraController(
-        camera,
-        ResolutionPreset.high,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await _controller!.initialize();
-      setState(() => _isCameraReady = true);
-    } catch (e) {
-      print('Camera initialization error: $e');
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized || _controller == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-  }
 
-  void _showPermissionDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Camera Permission Required'),
-        content: const Text(
-          'Please enable camera access in settings to take your selfie.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              openAppSettings();
-              Navigator.pop(context);
-            },
-            child: const Text('Open Settings'),
+    return Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            top: 40,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 30),
+              onPressed: () {
+                Navigator.pop(context);
+              },
+            ),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: FloatingActionButton(
+                onPressed: _isTakingPicture ? null : _takePicture,
+                child: _isTakingPicture
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Icon(Icons.camera),
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              height: MediaQuery.of(context).size.height * 0.4,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
+}
 
-  Future<void> _flipCamera() async {
-    if (_cameras.length < 2 || _controller == null) return;
+// --- Camera Class 2: For Liveness Check ---
 
-    setState(() => _isCameraReady = false);
+class LivenessCamera extends StatefulWidget {
+  const LivenessCamera({super.key});
 
-    _frontCamera = !_frontCamera;
+  @override
+  State<LivenessCamera> createState() => _LivenessCameraState();
+}
 
-    final newCamera = _cameras.firstWhere(
-      (c) =>
-          c.lensDirection ==
-          (_frontCamera ? CameraLensDirection.front : CameraLensDirection.back),
-      orElse: () => _cameras.first,
-    );
+class _LivenessCameraState extends State<LivenessCamera> {
+  CameraController? _controller;
+  List<CameraDescription>? _cameras;
+  bool _isInitialized = false;
+  bool _isCapturing = false;
+  final List<File> _frames = [];
+  int _currentStep = 0;
+  final _instructions = [
+    'Hold card flat',
+    'Tilt card left',
+    'Tilt card right',
+    'Move card closer',
+  ];
+  Timer? _captureTimer;
 
-    _controller = CameraController(
-      newCamera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-
-    await _controller!.initialize();
-    setState(() => _isCameraReady = true);
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
   }
 
-  Future<void> _captureImage() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
-    if (_isCapturing) return;
-
-    setState(() => _isCapturing = true);
-
+  Future<void> _initializeCamera() async {
     try {
-      final file = await _controller!.takePicture();
-      final directory = await getApplicationDocumentsDirectory();
-      final savedPath =
-          '${directory.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      await file.saveTo(savedPath);
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
+          Navigator.pop(context);
+        }
+        return;
+      }
 
-      Navigator.pop(context, File(savedPath));
-    } catch (e) {
-      print('Error capturing image: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to capture image')));
-    } finally {
-      setState(() => _isCapturing = false);
-    }
-  }
-
-  Widget _buildCameraPreview() {
-    if (!_isCameraReady || _controller == null) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 12),
-            Text('Accessing front camera…'),
-          ],
-        ),
+      _controller = CameraController(
+        _cameras!.first,
+        ResolutionPreset.high,
+        enableAudio: false,
       );
-    }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        CameraPreview(_controller!),
-        Positioned(
-          top: 40,
-          left: 16,
-          child: IconButton(
-            icon: const Icon(Icons.close, color: Colors.white, size: 30),
-            onPressed: () => Navigator.pop(context),
-          ),
-        ),
-        Positioned(
-          top: 40,
-          right: 16,
-          child: IconButton(
-            icon: const Icon(
-              Icons.flip_camera_android,
-              color: Colors.white,
-              size: 28,
-            ),
-            tooltip: 'Flip Camera',
-            onPressed: _flipCamera,
-          ),
-        ),
-        Positioned(
-          bottom: 80,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: GestureDetector(
-              onTap: _captureImage,
-              child: Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 4),
-                ),
-                child: AnimatedOpacity(
-                  opacity: _isCapturing ? 0.4 : 1.0,
-                  duration: const Duration(milliseconds: 300),
-                  child: const Icon(
-                    Icons.camera_alt,
-                    color: Colors.white,
-                    size: 40,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() => _isInitialized = true);
+        _startCaptureSequence();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+        Navigator.pop(context);
+      }
+    }
   }
 
-  Widget _buildPrivacyNotice() {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.6),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(16),
-          ),
-        ),
-        child: const Text(
-          '🔒 Your selfie is used only for identity verification and stored securely on your device.',
-          style: TextStyle(color: Colors.white, fontSize: 13),
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
+  void _startCaptureSequence() {
+    _captureTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      if (_currentStep >= _instructions.length || !mounted) {
+        timer.cancel();
+        if (_frames.isNotEmpty) {
+          Navigator.pop(context, _frames);
+        }
+        return;
+      }
+
+      setState(() => _isCapturing = true);
+      try {
+        final XFile photo = await _controller!.takePicture();
+        _frames.add(File(photo.path));
+        setState(() => _currentStep++);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error capturing frame: $e')));
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isCapturing = false);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _captureTimer?.cancel();
+    _controller?.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_isInitialized || _controller == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
-      backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
-        children: [_buildCameraPreview(), _buildPrivacyNotice()],
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            top: 40,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 30),
+              onPressed: () {
+                _captureTimer?.cancel();
+                Navigator.pop(context);
+              },
+            ),
+          ),
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.black54,
+              child: Text(
+                _currentStep < _instructions.length
+                    ? _instructions[_currentStep]
+                    : 'Processing...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              height: MediaQuery.of(context).size.height * 0.4,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          if (_isCapturing)
+            Positioned(
+              bottom: 40,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  color: Colors.black54,
+                  child: const Text(
+                    'Capturing...',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- Camera Class 3: For Documents (CNIC/License) ---
+
+class DocumentCameraScreen extends StatefulWidget {
+  const DocumentCameraScreen({super.key});
+
+  @override
+  State<DocumentCameraScreen> createState() => _DocumentCameraScreenState();
+}
+
+class _DocumentCameraScreenState extends State<DocumentCameraScreen> {
+  CameraController? _controller;
+  List<CameraDescription>? _cameras;
+  bool _isInitialized = false;
+  bool _isTakingPicture = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras == null || _cameras!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('No cameras available')));
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      _controller = CameraController(
+        _cameras!.first, // Uses the first available camera (usually the back)
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() => _isInitialized = true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _takePicture() async {
+    if (_isTakingPicture || !_isInitialized || _controller == null) return;
+
+    setState(() => _isTakingPicture = true);
+    try {
+      final XFile photo = await _controller!.takePicture();
+      final File file = File(photo.path);
+      if (mounted) {
+        Navigator.pop(context, file); // Returns the captured image file
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error capturing photo: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isTakingPicture = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized || _controller == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    return Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            top: 40,
+            left: 16,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 30),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: FloatingActionButton(
+                onPressed: _isTakingPicture ? null : _takePicture,
+                child: _isTakingPicture
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Icon(Icons.camera),
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.9,
+              height: MediaQuery.of(context).size.height * 0.4,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

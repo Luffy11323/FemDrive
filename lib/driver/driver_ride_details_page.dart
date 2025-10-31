@@ -211,9 +211,12 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
                                 t,
                                 _auth.currentUser!.uid,
                               );
-                          _messageController.clear();
-                          // ignore: use_build_context_synchronously
-                          FocusScope.of(context).unfocus();
+                            if (context.mounted) { 
+                              WidgetsBinding.instance.addPostFrameCallback((_) { 
+                                _messageController.clear(); 
+                                FocusManager.instance.primaryFocus?.unfocus(); 
+                              }); 
+                            }
                         } catch (e) {
                           // ignore: use_build_context_synchronously
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -232,6 +235,7 @@ class _DriverRideDetailsPageState extends ConsumerState<DriverRideDetailsPage> {
       },
     );
   }
+  
   Future<void> _startLocationPolling(Map<String, dynamic> rideData) async {
     _locationTimer?.cancel();
     final status = rideData[AppFields.status] as String?;
