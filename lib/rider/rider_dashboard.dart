@@ -1306,18 +1306,17 @@ class _RiderDashboardState extends ConsumerState<RiderDashboard> {
                     ],
                   ),
                   child: DraggableScrollableSheet(
-                    initialChildSize: 0.35,
-                    minChildSize: 0.20,
-                    maxChildSize: 0.88,
+                    expand: true,
+                    initialChildSize: 0.4,
+                    minChildSize: 0.4,
+                    maxChildSize: 0.4,
                     builder: (_, controller) => ClipRRect(
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(16),
-                      ),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
                       child: Material(
                         color: Theme.of(context).colorScheme.surface,
                         child: RideForm(
                           mapController: _mapController,
-                          scrollController: controller,
+                          scrollController: ScrollController(),
                           currentLocation: _currentLocation,
                           pickupController: _pickupController,
                           dropoffController: _dropoffController,
@@ -1677,10 +1676,10 @@ class _RideFormState extends ConsumerState<RideForm> {
     return Material(
       elevation: 8,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      child: SingleChildScrollView(
-        controller: widget.scrollController,
+      child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Handlebar
             Container(
@@ -1899,6 +1898,7 @@ class _RideFormState extends ConsumerState<RideForm> {
           ],
         ),
       ),
+    
     );
   }
 }
