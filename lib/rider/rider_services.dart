@@ -1068,10 +1068,11 @@ class ShareTripService {
   Future<String> startSharing(String rideId) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw Exception('User not logged in');
-    final userId = user.uid;
-    final idToken = await user.getIdToken();
 
-    // Return cached link if already sharing
+    final idToken = await user.getIdToken(true); // ✅ force refresh
+    final userId = user.uid;
+
+    // Already sharing? Return cached link.
     if (_currentShareId != null && _locationUpdateTimer?.isActive == true) {
       return 'https://fem-drive.vercel.app/trip/$_currentShareId';
     }
@@ -1083,11 +1084,11 @@ class ShareTripService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $idToken',
         },
-        body: jsonEncode({'rideId': rideId, 'userId': userId}),
+        body: jsonEncode({'rideId': rideId}),
       );
 
       if (response.statusCode != 200) {
-        throw Exception('Failed: ${response.body}');
+        throw Exception('Failed to start sharing: ${response.body}');
       }
 
       final data = jsonDecode(response.body);
@@ -1122,22 +1123,26 @@ class ShareTripService {
     }
   }
 
+  /// 🛑 Stop sharing manually or after expiration
   Future<void> stopSharing(String userId) async {
     if (_currentShareId == null) return;
 
     final user = FirebaseAuth.instance.currentUser;
-    final idToken = await user?.getIdToken();
+    final idToken = await user?.getIdToken(true);
     final shareId = _currentShareId;
 
     try {
-      await http.post(
+      final response = await http.post(
         Uri.parse('$_apiBaseUrl/$shareId/stop'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $idToken',
         },
-        body: jsonEncode({'userId': userId}),
       );
+
+      if (response.statusCode != 200) {
+        _logger.w('Server stop response: ${response.body}');
+      }
 
       // Mark inactive in RTDB
       await FirebaseDatabase.instance.ref('trip_shares/$shareId').update({
@@ -1145,7 +1150,7 @@ class ShareTripService {
         'stoppedAt': ServerValue.timestamp,
       });
 
-      // Clean up Firestore reference
+      // Clean Firestore
       final rideSnap = await FirebaseFirestore.instance
           .collection('rides')
           .where('shareId', isEqualTo: shareId)
@@ -1165,7 +1170,7 @@ class ShareTripService {
     }
   }
 
-  /// Background-safe polling for rider live updates (5s interval)
+  /// Background-safe polling for rider live updates (every 5s)
   void _startLocationUpdates() {
     if (_currentShareId == null) return;
 
@@ -1180,9 +1185,8 @@ class ShareTripService {
         }
 
         final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-          ),
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.high),
         );
         final speed = position.speed * 3.6;
 

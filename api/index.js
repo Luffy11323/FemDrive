@@ -1077,29 +1077,26 @@ apiRouter.post('/housekeep/run', async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
-// Trip Share - Create
+/**
+ * 🚀 Create a live trip share session
+ * POST /api/trip/share
+ * Headers: Authorization: Bearer <Firebase ID Token>
+ * Body: { rideId }
+ */
 apiRouter.post('/trip/share', verifyFirebaseToken, async (req, res) => {
-  const { rideId, userId } = req.body;
-  if (!rideId || !userId) {
-    return res.status(400).json({ error: 'Missing rideId/userId' });
-  }
-  if (req.user.uid !== userId) {
-    return res.status(403).json({ error: 'User ID mismatch with token' });
+  const { rideId } = req.body;
+  const userId = req.user.uid; // ✅ trusted source
+
+  if (!rideId) {
+    return res.status(400).json({ error: 'rideId required' });
   }
 
   try {
     const shareId = Math.random().toString(36).substring(2, 15);
-
-    const rideRef = db.collection(AppPaths.ridesCollection).doc(rideId);
-    const rideSnap = await rideRef.get();
-    if (!rideSnap.exists) {
-      return res.status(404).json({ error: 'Ride not found' });
-    }
-
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).set({
       rideId,
       userId,
+      active: true,
       createdAt: admin.database.ServerValue.TIMESTAMP,
     });
 
@@ -1111,18 +1108,30 @@ apiRouter.post('/trip/share', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Trip Share - Update Location
+/**
+ * 📍 Update shared location (called automatically)
+ * POST /api/trip/:shareId/location
+ * Headers: Authorization: Bearer <Firebase ID Token>
+ * Body: { lat, lng, speed? }
+ */
 apiRouter.post('/trip/:shareId/location', verifyFirebaseToken, async (req, res) => {
   const { shareId } = req.params;
-  const { lat, lng, userId, speed } = req.body;
-  if (!shareId || !lat || !lng || !userId) {
-    return res.status(400).json({ error: 'Missing shareId/lat/lng/userId' });
+  const { lat, lng, speed } = req.body;
+  const userId = req.user.uid;
+
+  if (!shareId || lat == null || lng == null) {
+    return res.status(400).json({ error: 'Missing shareId/lat/lng' });
   }
 
   try {
     const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
-    if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
-      return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
+    if (!shareSnap.exists()) {
+      return res.status(404).json({ error: 'Share not found' });
+    }
+
+    const shareData = shareSnap.val();
+    if (shareData.userId !== userId) {
+      return res.status(403).json({ error: 'Unauthorized share access' });
     }
 
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).update({
@@ -1139,27 +1148,38 @@ apiRouter.post('/trip/:shareId/location', verifyFirebaseToken, async (req, res) 
   }
 });
 
-// Trip Share - Stop
+/**
+ * 🛑 Stop a trip share session
+ * POST /api/trip/:shareId/stop
+ * Headers: Authorization: Bearer <Firebase ID Token>
+ */
 apiRouter.post('/trip/:shareId/stop', verifyFirebaseToken, async (req, res) => {
   const { shareId } = req.params;
-  const { userId } = req.body;
-  if (!shareId || !userId) {
-    return res.status(400).json({ error: 'Missing shareId/userId' });
+  const userId = req.user.uid;
+
+  if (!shareId) {
+    return res.status(400).json({ error: 'Missing shareId' });
   }
 
   try {
     const shareSnap = await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).get();
-    if (!shareSnap.exists() || shareSnap.val().userId !== userId) {
-      return res.status(403).json({ error: 'Invalid or unauthorized shareId' });
+    if (!shareSnap.exists()) {
+      return res.status(404).json({ error: 'Share not found' });
+    }
+
+    const shareData = shareSnap.val();
+    if (shareData.userId !== userId) {
+      return res.status(403).json({ error: 'Unauthorized share stop' });
     }
 
     await rtdb.child(`${AppPaths.trip_shares}/${shareId}`).remove();
-    res.json({ ok: true });
+    res.json({ ok: true, stopped: true });
   } catch (e) {
     console.error('Stop trip share error:', e);
     res.status(500).json({ error: e.message });
   }
 });
+
 
 // Trip Share - Get (for viewing)
 apiRouter.get('/trip/:shareId', async (req, res) => {
